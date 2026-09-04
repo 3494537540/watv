@@ -1,0 +1,21 @@
+{
+  "tabs": [
+    { "id": "home", "label": "首页", "enabled": true },
+    { "id": "filter", "label": "筛选", "enabled": true },
+    { "id": "news", "label": "资讯", "enabled": true },
+    { "id": "profile", "label": "我的", "enabled": true }
+  ],
+  "nav": [
+    { "title": "短剧", "action": "short_drama" },
+    { "title": "体育", "action": "sports" },
+    { "title": "文章", "action": "art" }
+  ],
+  "sports_type_id": 48,
+  "sports_event_type_id": 84,
+  "qq_login": {
+    "enabled": false,
+    "app_id": "",
+    "app_key": "",
+    "universal_link": ""
+  }
+}

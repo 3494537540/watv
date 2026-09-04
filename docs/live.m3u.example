@@ -1,0 +1,5 @@
+#EXTM3U
+#EXTINF:-1 tvg-id="CCTV1" tvg-name="CCTV1" group-title="CCTV",CCTV-1 综合
+https://替换为真实可播地址/cctv1.m3u8
+#EXTINF:-1 tvg-id="CCTV5" tvg-name="CCTV5" group-title="CCTV",CCTV-5 体育
+https://替换为真实可播地址/cctv5.m3u8

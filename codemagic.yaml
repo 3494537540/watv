@@ -1,0 +1,62 @@
+# Codemagic — 哇TV 未签名 IPA（自己用签名工具重签）
+# Bundle ID: com.watv.app
+#
+# 不需要 Apple 开发者账号 / App Store Connect。
+# 产物：未签名 .ipa → 用爱思助手 / Sideloadly / 超级签 / 企业签工具重签安装。
+#
+# 接入：推到 Git → Codemagic 添加应用 → 跑 workflow：ios-ipa-unsigned
+
+workflows:
+  ios-ipa-unsigned:
+    name: iOS IPA (unsigned)
+    max_build_duration: 90
+    instance_type: mac_mini_m2
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+      vars:
+        APP_NAME: "哇TV"
+    scripts:
+      - name: Get Flutter packages
+        script: |
+          flutter pub get
+      - name: Install CocoaPods
+        script: |
+          find . -name "Podfile" -execdir pod install \;
+      - name: Build iOS release (no codesign)
+        script: |
+          flutter build ios --release --no-codesign \
+            --build-name=1.0.0 \
+            --build-number=${PROJECT_BUILD_NUMBER:-1}
+      - name: Pack unsigned IPA
+        script: |
+          APP_PATH=$(find build/ios/iphoneos -name "*.app" -type d | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: Runner.app not found"
+            find build/ios -type d -maxdepth 4
+            exit 1
+          fi
+          echo "Packing: $APP_PATH"
+          OUT_DIR="$CM_BUILD_DIR/build/ios/ipa"
+          mkdir -p "$OUT_DIR"
+          WORK=$(mktemp -d)
+          mkdir -p "$WORK/Payload"
+          cp -R "$APP_PATH" "$WORK/Payload/"
+          (
+            cd "$WORK"
+            zip -qr "$OUT_DIR/watv-unsigned.ipa" Payload
+          )
+          ls -lh "$OUT_DIR/watv-unsigned.ipa"
+          rm -rf "$WORK"
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - build/ios/iphoneos/*.app
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      email:
+        recipients:
+          - $CM_COMMIT_AUTHOR_EMAIL
+        notify:
+          success: true
+          failure: true

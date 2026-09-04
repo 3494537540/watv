@@ -1,0 +1,1173 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="description" content="哇TV — 影视点播，好看的影视一哇就来。" />
+  <meta name="theme-color" content="#1ECAD3" />
+  <title>哇TV — 官方网站</title>
+  <link rel="icon" type="image/png" href="assets/favicon.png" />
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700;900&family=ZCOOL+KuaiLe&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --brand: #1ecad3;
+      --brand-deep: #109aa2;
+      --ink: #14161a;
+      --muted: #5c6370;
+      --line: rgba(20, 22, 26, 0.09);
+      --paper: #f4f8f9;
+      --ease: cubic-bezier(0.22, 1, 0.36, 1);
+      --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+      --nav-h: 68px;
+      --mx: 0.5;
+      --my: 0.5;
+      --scroll: 0;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: "Noto Sans SC", system-ui, sans-serif;
+      color: var(--ink);
+      background: var(--paper);
+      line-height: 1.55;
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+    img { display: block; max-width: 100%; height: auto; }
+    a { color: inherit; text-decoration: none; }
+    button { font: inherit; }
+    .wrap { width: min(1140px, calc(100% - 40px)); margin-inline: auto; }
+
+    .bg {
+      position: fixed; inset: 0; z-index: -1; pointer-events: none;
+      background:
+        radial-gradient(ellipse 70% 50% at 80% 5%, rgba(30,202,211,.24), transparent 55%),
+        radial-gradient(ellipse 50% 40% at 10% 85%, rgba(30,202,211,.1), transparent 50%),
+        linear-gradient(180deg, #eaf7f8 0%, var(--paper) 40%, #fff 100%);
+      transform: translate3d(
+        calc((var(--mx) - 0.5) * -28px),
+        calc((var(--my) - 0.5) * -18px + var(--scroll) * -40px),
+        0
+      );
+      transition: transform .45s var(--ease-out);
+      will-change: transform;
+    }
+    .bg-orb {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(48px);
+      opacity: .55;
+      mix-blend-mode: multiply;
+      will-change: transform;
+    }
+    .bg-orb.a {
+      width: min(42vw, 420px); height: min(42vw, 420px);
+      top: 8%; right: 6%;
+      background: rgba(30, 202, 211, .35);
+      transform: translate3d(
+        calc((var(--mx) - 0.5) * 40px),
+        calc((var(--my) - 0.5) * 28px + var(--scroll) * 60px),
+        0
+      );
+      transition: transform .7s var(--ease-out);
+    }
+    .bg-orb.b {
+      width: min(36vw, 360px); height: min(36vw, 360px);
+      bottom: 12%; left: 4%;
+      background: rgba(16, 154, 162, .22);
+      transform: translate3d(
+        calc((var(--mx) - 0.5) * -50px),
+        calc((var(--my) - 0.5) * -36px + var(--scroll) * -80px),
+        0
+      );
+      transition: transform .85s var(--ease-out);
+    }
+
+    /* scroll progress */
+    .scroll-progress {
+      position: fixed; top: 0; left: 0; height: 2px; width: 0%;
+      z-index: 100; pointer-events: none;
+      background: linear-gradient(90deg, var(--brand-deep), var(--brand));
+      box-shadow: 0 0 12px rgba(30, 202, 211, .45);
+      transform-origin: left center;
+    }
+
+    /* scroll reveal */
+    .fx {
+      opacity: 0;
+      transform: translateY(36px);
+      filter: blur(4px);
+      transition:
+        opacity .85s var(--ease-out),
+        transform .85s var(--ease-out),
+        filter .85s var(--ease-out);
+      transition-delay: var(--d, 0ms);
+    }
+    .fx.in {
+      opacity: 1;
+      transform: translateY(0);
+      filter: blur(0);
+    }
+    .fx-left { transform: translateX(-28px) translateY(12px); }
+    .fx-left.in { transform: none; }
+    .fx-scale { transform: translateY(24px) scale(.94); }
+    .fx-scale.in { transform: none; }
+
+    .nav {
+      position: sticky; top: 0; z-index: 50; height: var(--nav-h);
+      display: flex; align-items: center;
+      backdrop-filter: blur(14px);
+      background: rgba(244,248,249,.75);
+      border-bottom: 1px solid transparent;
+      transition: background .25s var(--ease), border-color .25s var(--ease);
+    }
+    .nav.scrolled { background: rgba(255,255,255,.92); border-bottom-color: var(--line); }
+    .nav-inner {
+      width: min(1140px, calc(100% - 40px)); margin-inline: auto;
+      display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    }
+    .logo {
+      display: inline-flex; align-items: center; gap: 9px;
+      font-family: "ZCOOL KuaiLe", sans-serif;
+      font-size: 1.35rem; letter-spacing: .03em;
+    }
+    .logo img { width: 32px; height: 32px; border-radius: 9px; }
+    .nav-links {
+      display: flex; align-items: center; gap: 26px;
+      font-weight: 500; color: var(--muted); font-size: .94rem;
+    }
+    .nav-links a:hover { color: var(--brand-deep); }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+      min-height: 48px; padding: 0 20px; border-radius: 14px;
+      font-weight: 700; font-size: .95rem; border: 0; cursor: pointer;
+      transition: transform .22s var(--ease), background .22s var(--ease), box-shadow .22s var(--ease);
+    }
+    .btn:hover { transform: translateY(-2px) scale(1.02); }
+    .btn:active { transform: translateY(0) scale(.98); }
+    .btn-brand { background: var(--brand); color: #fff; box-shadow: 0 8px 24px rgba(30,202,211,.28); }
+    .btn-brand:hover { background: var(--brand-deep); }
+    .btn-dark { background: #15171c; color: #fff; }
+    .btn-dark:hover { background: #000; }
+    .btn .ver {
+      display: inline-flex; align-items: center;
+      padding: 2px 8px; border-radius: 999px;
+      font-size: .72rem; font-weight: 700; letter-spacing: .02em;
+      background: rgba(255,255,255,.22); color: inherit;
+    }
+    .btn-dark .ver { background: rgba(255,255,255,.14); }
+    .menu {
+      display: none; width: 40px; height: 40px; border-radius: 11px;
+      border: 1px solid var(--line); background: rgba(255,255,255,.7); cursor: pointer;
+      place-items: center;
+    }
+    .menu span, .menu span::before, .menu span::after {
+      display: block; width: 16px; height: 2px; background: var(--ink); position: relative;
+    }
+    .menu span::before, .menu span::after { content: ""; position: absolute; left: 0; }
+    .menu span::before { top: -5px; }
+    .menu span::after { top: 5px; }
+
+    .hero {
+      min-height: calc(100svh - var(--nav-h));
+      display: grid; align-items: center;
+      padding: 28px 0 64px;
+      position: relative;
+    }
+    .hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(280px, 460px);
+      gap: clamp(28px, 5vw, 64px);
+      align-items: center;
+    }
+    .hero-copy {
+      transform: translate3d(
+        0,
+        calc(var(--hero-p, 0) * 48px),
+        0
+      );
+      will-change: transform;
+    }
+    .hero-brand {
+      font-family: "ZCOOL KuaiLe", sans-serif;
+      font-size: clamp(3.2rem, 7.2vw, 5rem);
+      color: var(--brand); line-height: .95; letter-spacing: .02em;
+      margin-bottom: 14px;
+      text-shadow: 0 12px 40px rgba(30, 202, 211, .18);
+    }
+    .hero h1 {
+      font-size: clamp(1.4rem, 2.8vw, 1.95rem);
+      font-weight: 900; letter-spacing: -.02em; line-height: 1.3;
+      margin-bottom: 12px;
+    }
+    .hero .lead {
+      color: var(--muted); font-size: 1.04rem; max-width: 30rem; margin-bottom: 22px;
+    }
+    .cta { display: flex; flex-wrap: wrap; gap: 10px; }
+    .apple-ico, .android-ico { width: 18px; height: 18px; flex-shrink: 0; }
+
+    /* one-shot entrance — only when .is-ready; no opacity:0 by default */
+    .reveal .hero-brand,
+    .reveal .hero h1,
+    .reveal .hero .lead,
+    .reveal .cta,
+    .reveal .stack-wrap {
+      opacity: 0;
+      transform: translateY(14px);
+      animation: up .8s var(--ease) forwards;
+    }
+    .reveal .hero h1 { animation-delay: .1s; }
+    .reveal .hero .lead { animation-delay: .18s; }
+    .reveal .cta { animation-delay: .26s; }
+    .reveal .stack-wrap { animation-delay: .16s; transform: translateY(18px); animation-duration: .9s; }
+    @keyframes up { to { opacity: 1; transform: translateY(0); } }
+
+    .stack-wrap {
+      position: relative;
+      width: min(100%, 440px);
+      margin-inline: auto;
+      padding: 8px 28px 0;
+      transform: translate3d(
+        calc((var(--mx) - 0.5) * -12px),
+        calc(var(--hero-p, 0) * -28px + (var(--my) - 0.5) * 8px),
+        0
+      );
+      transition: transform .35s var(--ease-out);
+      will-change: transform;
+    }
+    .stack {
+      position: relative;
+      width: 100%;
+      height: calc(min(58vw, 268px) * 19.5 / 9 + 36px);
+      perspective: 1200px;
+      overflow: visible;
+      transform-style: preserve-3d;
+      transform: rotateX(calc((var(--my) - 0.5) * -6deg))
+                 rotateY(calc((var(--mx) - 0.5) * 8deg));
+      transition: transform .4s var(--ease-out);
+    }
+    .stack-card {
+      position: absolute;
+      left: 50%; top: 50%;
+      width: min(70%, 248px);
+      aspect-ratio: 9 / 19.5;
+      border-radius: 26px;
+      overflow: hidden;
+      background: #111;
+      border: 3px solid #1a1d22;
+      box-shadow: 0 18px 40px rgba(16, 40, 50, .2);
+      transform-origin: center center;
+      will-change: transform, opacity;
+      transition: transform .55s var(--ease), opacity .55s var(--ease), filter .55s var(--ease);
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .stack-card img {
+      width: 100%; height: 100%; object-fit: cover; object-position: top center;
+      pointer-events: none;
+    }
+    /* 前后错开，侧卡明显露边 */
+    .stack-card[data-pos="0"] {
+      z-index: 5; opacity: 1; filter: none;
+      transform: translate(-50%, -50%) translateX(0) rotate(0deg) scale(1);
+    }
+    .stack-card[data-pos="1"] {
+      z-index: 4; opacity: 1; filter: brightness(.97);
+      transform: translate(-50%, -50%) translateX(58px) rotate(9deg) scale(.9);
+    }
+    .stack-card[data-pos="2"] {
+      z-index: 3; opacity: 1; filter: brightness(.94);
+      transform: translate(-50%, -50%) translateX(-58px) rotate(-9deg) scale(.9);
+    }
+    .stack-card[data-pos="3"] {
+      z-index: 2; opacity: .92; filter: brightness(.9);
+      transform: translate(-50%, -50%) translateY(18px) scale(.82);
+    }
+    .stack-card[data-pos="hide"] {
+      z-index: 1; opacity: 0; pointer-events: none;
+      transform: translate(-50%, -50%) scale(.72);
+    }
+
+    .stack-meta {
+      position: relative;
+      z-index: 10;
+      margin-top: 22px;
+      text-align: center;
+    }
+    .stack-meta .step {
+      font-size: .78rem; font-weight: 700; letter-spacing: .12em;
+      color: var(--brand-deep); text-transform: uppercase; margin-bottom: 6px;
+    }
+    .stack-meta h3 {
+      font-size: 1.15rem; font-weight: 800; margin-bottom: 6px;
+      min-height: 1.4em;
+    }
+    .stack-meta p {
+      color: var(--muted); font-size: .92rem; min-height: 2.8em;
+      max-width: 22rem; margin-inline: auto;
+    }
+    .dots {
+      display: flex; justify-content: center; gap: 8px; margin-top: 14px;
+    }
+    .dots button {
+      width: 8px; height: 8px; border-radius: 99px; border: 0;
+      background: rgba(20,22,26,.18); cursor: pointer; padding: 0;
+      transition: width .25s var(--ease), background .25s var(--ease);
+    }
+    .dots button.on { width: 22px; background: var(--brand); }
+
+    /* advantages */
+    section.block { padding: clamp(56px, 9vw, 100px) 0; }
+    .sec-title {
+      font-size: clamp(1.55rem, 3vw, 2.15rem);
+      font-weight: 900; letter-spacing: -.02em; margin-bottom: 8px;
+    }
+    .sec-desc {
+      color: var(--muted); font-size: 1.02rem; max-width: 36rem;
+      margin-bottom: clamp(24px, 4vw, 40px);
+    }
+
+    .adv-list {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: clamp(16px, 3vw, 24px);
+      perspective: 900px;
+    }
+    .adv {
+      padding: 22px 22px 24px;
+      border-radius: 18px;
+      background: rgba(255,255,255,.72);
+      border: 1px solid var(--line);
+      transition:
+        border-color .25s var(--ease),
+        box-shadow .25s var(--ease),
+        transform .35s var(--ease-out),
+        background .25s var(--ease);
+      cursor: pointer;
+      transform-style: preserve-3d;
+      will-change: transform;
+    }
+    .adv:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 16px 36px rgba(16, 40, 50, .08);
+    }
+    .adv.on {
+      border-color: rgba(30,202,211,.45);
+      box-shadow: 0 12px 32px rgba(30,202,211,.12);
+      background: rgba(255,255,255,.92);
+    }
+    .adv .idx {
+      font-family: "ZCOOL KuaiLe", sans-serif;
+      color: var(--brand); font-size: 1.25rem; margin-bottom: 8px;
+    }
+    .adv h3 { font-size: 1.12rem; font-weight: 800; margin-bottom: 8px; }
+    .adv p { color: var(--muted); font-size: .95rem; }
+
+    /* vod stats */
+    .stats {
+      padding: clamp(40px, 7vw, 72px) 0;
+      border-top: 1px solid var(--line);
+    }
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: clamp(14px, 3vw, 28px);
+      max-width: 720px;
+      margin-inline: auto;
+    }
+    .stat-card {
+      text-align: center;
+      padding: clamp(22px, 4vw, 32px) 16px;
+      border-radius: 20px;
+      background: rgba(255,255,255,.78);
+      border: 1px solid var(--line);
+      transition: transform .35s var(--ease-out), box-shadow .35s var(--ease);
+    }
+    .stat-card:hover {
+      transform: translateY(-6px) scale(1.02);
+      box-shadow: 0 18px 40px rgba(30, 202, 211, .14);
+    }
+    .stat-num {
+      font-family: "ZCOOL KuaiLe", "Noto Sans SC", sans-serif;
+      font-size: clamp(2.2rem, 5vw, 3.2rem);
+      color: var(--brand);
+      line-height: 1.05;
+      letter-spacing: .02em;
+      font-variant-numeric: tabular-nums;
+    }
+    .stat-label {
+      margin-top: 8px;
+      font-size: .98rem;
+      font-weight: 700;
+      color: var(--ink);
+    }
+    .stat-hint {
+      margin-top: 4px;
+      font-size: .82rem;
+      color: var(--muted);
+    }
+
+    /* changelog */
+    .changelog {
+      background: rgba(255,255,255,.45);
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+    .log-list {
+      display: grid;
+      gap: 14px;
+      width: 100%;
+      max-width: 100%;
+      overflow: hidden;
+    }
+    .log-item {
+      padding: 18px 20px;
+      border-radius: 16px;
+      background: rgba(255,255,255,.8);
+      border: 1px solid var(--line);
+      max-width: 100%;
+      overflow: hidden;
+      box-sizing: border-box;
+      transition: transform .3s var(--ease-out), border-color .25s, box-shadow .3s;
+    }
+    .log-item:hover {
+      transform: translateX(4px);
+      border-color: rgba(30, 202, 211, .35);
+      box-shadow: 0 10px 28px rgba(16, 40, 50, .06);
+    }
+    .log-head {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+      margin-bottom: 10px;
+    }
+    .log-plat {
+      font-size: .78rem; font-weight: 800; letter-spacing: .04em;
+      padding: 3px 10px; border-radius: 999px;
+      background: rgba(30,202,211,.14); color: var(--brand-deep);
+    }
+    .log-plat.ios { background: rgba(20,22,26,.08); color: var(--ink); }
+    .log-ver { font-weight: 800; font-size: 1.02rem; }
+    .log-date { margin-left: auto; font-size: .82rem; color: var(--muted); }
+    .log-body {
+      color: var(--muted);
+      font-size: .95rem;
+      line-height: 1.65;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      max-width: 100%;
+    }
+    .log-dl {
+      display: inline-flex; margin-top: 10px; font-size: .88rem; font-weight: 700;
+      color: var(--brand-deep);
+    }
+    .log-dl:hover { text-decoration: underline; }
+    .log-empty {
+      padding: 28px 20px; text-align: center; color: var(--muted);
+      border-radius: 16px; border: 1px dashed var(--line); background: rgba(255,255,255,.55);
+    }
+    .log-loading { color: var(--muted); font-size: .95rem; }
+
+    .download {
+      text-align: center;
+      padding: clamp(64px, 11vw, 110px) 0;
+      background: radial-gradient(ellipse 60% 80% at 50% 100%, rgba(30,202,211,.15), transparent 60%);
+      position: relative;
+      overflow: hidden;
+    }
+    .download::before {
+      content: "";
+      position: absolute;
+      inset: -20% 20% auto;
+      height: 50%;
+      background: radial-gradient(ellipse at center, rgba(30,202,211,.2), transparent 70%);
+      transform: translateY(calc(var(--scroll) * -80px));
+      pointer-events: none;
+    }
+    .download h2 { font-size: clamp(1.5rem, 3vw, 2rem); font-weight: 900; margin-bottom: 10px; }
+    .download > .wrap > p { color: var(--muted); margin: 0 auto 26px; max-width: 28rem; }
+    .download .cta { justify-content: center; }
+    .store-note { margin-top: 14px; font-size: .85rem; color: var(--muted); }
+
+    footer {
+      border-top: 1px solid var(--line);
+      padding: 28px 0 40px;
+      color: var(--muted); font-size: .88rem;
+    }
+    .foot {
+      display: flex; flex-wrap: wrap; gap: 14px 24px;
+      justify-content: space-between; align-items: center;
+    }
+    .foot nav { display: flex; flex-wrap: wrap; gap: 14px 18px; }
+    .foot a:hover { color: var(--brand-deep); }
+
+    @media (max-width: 900px) {
+      .hero-grid, .adv-list { grid-template-columns: 1fr; }
+      .hero { min-height: auto; padding-bottom: 40px; }
+      /* 手机：文案在上、叠图在下，侧卡仍要露出来 */
+      .stack-wrap {
+        order: 0;
+        width: 100%;
+        max-width: 100%;
+        padding: 4px 8px 0;
+      }
+      .stack {
+        height: calc(min(52vw, 220px) * 19.5 / 9 + 28px);
+      }
+      .stack-card { width: min(52vw, 200px); }
+      .stack-card[data-pos="1"] {
+        transform: translate(-50%, -50%) translateX(42px) rotate(8deg) scale(.88);
+      }
+      .stack-card[data-pos="2"] {
+        transform: translate(-50%, -50%) translateX(-42px) rotate(-8deg) scale(.88);
+      }
+      .stack-card[data-pos="3"] {
+        transform: translate(-50%, -50%) translateY(14px) scale(.8);
+      }
+      .stack-meta { margin-top: 18px; }
+      .hero-copy { text-align: center; order: -1; }
+      .hero .lead { margin-inline: auto; }
+      .cta { justify-content: center; }
+      .nav-links { display: none; }
+      .nav-links.open {
+        display: flex; flex-direction: column; align-items: stretch; gap: 0;
+        position: absolute; top: var(--nav-h); left: 0; right: 0;
+        background: rgba(255,255,255,.97); border-bottom: 1px solid var(--line);
+        padding: 8px 20px 16px;
+      }
+      .nav-links.open a { padding: 13px 2px; border-bottom: 1px solid var(--line); }
+      .menu { display: grid; }
+      .nav-cta-desk { display: none; }
+      .log-date { margin-left: 0; width: 100%; }
+      .log-item { padding: 16px; }
+      .wrap { width: min(1140px, calc(100% - 28px)); }
+    }
+    @media (min-width: 901px) {
+      .menu { display: none !important; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * { animation: none !important; transition: none !important; }
+      .reveal .hero-brand,
+      .reveal .hero h1,
+      .reveal .hero .lead,
+      .reveal .cta,
+      .reveal .stack-wrap { opacity: 1; transform: none; }
+      .fx, .fx-left, .fx-scale { opacity: 1; transform: none; filter: none; }
+      .bg, .bg-orb, .hero-copy, .stack-wrap, .stack { transform: none !important; }
+    }
+    @media (max-width: 900px) {
+      .bg-orb { opacity: .35; }
+      .stack { transform: none; }
+      .stack-wrap { transform: none; transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="scroll-progress" id="scrollProgress" aria-hidden="true"></div>
+  <div class="bg" aria-hidden="true">
+    <div class="bg-orb a"></div>
+    <div class="bg-orb b"></div>
+  </div>
+
+  <header class="nav" id="nav">
+    <div class="nav-inner">
+      <a class="logo" href="#top">
+        <img src="assets/icon-plate.png" width="32" height="32" alt="" />
+        哇TV
+      </a>
+      <button class="menu" type="button" id="menuBtn" aria-label="菜单"><span></span></button>
+      <nav class="nav-links" id="navLinks">
+        <a href="#showcase">产品介绍</a>
+        <a href="#advantages">影视优点</a>
+        <a href="#stats">片库统计</a>
+        <a href="#changelog">更新日志</a>
+        <a href="#download">下载</a>
+        <a class="btn btn-brand nav-cta-desk" href="#download" style="min-height:40px;padding:0 16px;font-size:.88rem;">立即下载</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero" id="showcase">
+      <div class="wrap hero-grid">
+        <div class="hero-copy">
+          <p class="hero-brand">哇TV</p>
+          <h1>好看的影视，一哇就来</h1>
+          <p class="lead">从找片、详情到全屏播放，四步看清产品能力。右侧截图按顺序叠层轮播。</p>
+          <div class="cta">
+            <a class="btn btn-brand" href="#download">
+              <svg class="android-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.6 9.48l1.84-3.18c.16-.31.04-.69-.26-.85a.637.637 0 0 0-.83.22l-1.88 3.24a11.43 11.43 0 0 0-8.94 0L5.65 5.67a.643.643 0 0 0-.87-.2c-.28.18-.37.54-.2.83L6.4 9.48A10.78 10.78 0 0 0 1 18h22a10.78 10.78 0 0 0-5.4-8.52zM7 15.25a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5zm10 0a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5z"/></svg>
+              安卓安装
+            </a>
+            <a class="btn btn-dark" href="#download">
+              <svg class="apple-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+              iOS 安装
+            </a>
+          </div>
+        </div>
+
+        <div class="stack-wrap" id="stackWrap">
+          <div class="stack" id="stack" aria-roledescription="carousel" aria-label="软件介绍截图">
+            <div class="stack-card" data-index="0">
+              <img src="assets/slide-01.jpg" alt="首页 · 综艺频道" width="460" height="1024" />
+            </div>
+            <div class="stack-card" data-index="1">
+              <img src="assets/slide-02.jpg" alt="影片详情页" width="460" height="1024" />
+            </div>
+            <div class="stack-card" data-index="2">
+              <img src="assets/slide-03.jpg" alt="播放页" width="460" height="1024" />
+            </div>
+            <div class="stack-card" data-index="3">
+              <img src="assets/slide-04.jpg" alt="横屏全屏播放" width="460" height="1024" />
+            </div>
+          </div>
+          <div class="stack-meta">
+            <div class="step" id="slideStep">01 / 04</div>
+            <h3 id="slideTitle">海量分类，一眼找片</h3>
+            <p id="slideDesc">推荐 / 电影 / 电视剧 / 综艺 / 动漫 / 短剧分层清晰，热榜与筛选随手切。</p>
+            <div class="dots" id="dots" role="tablist" aria-label="切换截图"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="stats" id="stats" aria-label="影视统计">
+      <div class="wrap">
+        <h2 class="sec-title fx" style="text-align:center;">片库实时统计</h2>
+        <p class="sec-desc fx" style="text-align:center;margin-inline:auto;--d:80ms;">数据来自站内片库，打开页面自动刷新。</p>
+        <div class="stats-grid">
+          <div class="stat-card fx fx-scale" style="--d:120ms;">
+            <div class="stat-num" id="statTotal" data-target="0">—</div>
+            <div class="stat-label">影视总量</div>
+            <div class="stat-hint">片库收录条目</div>
+          </div>
+          <div class="stat-card fx fx-scale" style="--d:220ms;">
+            <div class="stat-num" id="statToday" data-target="0">—</div>
+            <div class="stat-label">今日更新</div>
+            <div class="stat-hint">近 24 小时新增 / 更新</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="block" id="advantages">
+      <div class="wrap">
+        <h2 class="sec-title fx">这个影视软件的优点</h2>
+        <p class="sec-desc fx" style="--d:80ms;">对应上面四张介绍图，每一屏解决一件事——找片快、信息全、播放顺、大屏沉浸。</p>
+        <div class="adv-list" id="advList">
+          <article class="adv on fx" data-i="0" style="--d:60ms;">
+            <div class="idx">01 · 首页</div>
+            <h3>分类齐全，刷片不迷路</h3>
+            <p>顶栏频道覆盖影视全品类，热榜入口醒目；本周热门 + 地区筛选，想看的综艺、电影一划就到。</p>
+          </article>
+          <article class="adv fx" data-i="1" style="--d:140ms;">
+            <div class="idx">02 · 详情</div>
+            <h3>信息完整，开播更安心</h3>
+            <p>海报、年份地区、类型标签、评分与想看状态一次看清；选集横滑点播，收藏一键收藏。</p>
+          </article>
+          <article class="adv fx" data-i="2" style="--d:220ms;">
+            <div class="idx">03 · 播放</div>
+            <h3>播放干净，功能刚好够用</h3>
+            <p>进度条、弹幕开关、投屏 / 小窗 / 设置齐备；同页选集与同类型推荐，追更不用跳来跳去。</p>
+          </article>
+          <article class="adv fx" data-i="3" style="--d:300ms;">
+            <div class="idx">04 · 全屏</div>
+            <h3>横屏沉浸，大屏也舒服</h3>
+            <p>全屏播放支持倍速、裁剪填充、选集与发弹幕；锁屏防误触，适合沙发横过来看。</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="block changelog" id="changelog">
+      <div class="wrap">
+        <h2 class="sec-title fx">更新日志</h2>
+        <p class="sec-desc fx" style="--d:80ms;">最新版本与改动说明，来自官方渠道自动同步。</p>
+        <div id="logList" class="log-list" aria-live="polite">
+          <p class="log-loading">正在加载更新日志…</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="download" id="download">
+      <div class="wrap fx fx-scale">
+        <h2>安卓 &amp; iOS 安装</h2>
+        <p>双端均可安装。安卓直接下 APK；iOS 通过 TestFlight / 企业签或商店链接安装。</p>
+        <div class="cta">
+          <a class="btn btn-brand" id="apkLink" href="#">
+            <svg class="android-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.6 9.48l1.84-3.18c.16-.31.04-.69-.26-.85a.637.637 0 0 0-.83.22l-1.88 3.24a11.43 11.43 0 0 0-8.94 0L5.65 5.67a.643.643 0 0 0-.87-.2c-.28.18-.37.54-.2.83L6.4 9.48A10.78 10.78 0 0 0 1 18h22a10.78 10.78 0 0 0-5.4-8.52zM7 15.25a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5zm10 0a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5z"/></svg>
+            <span>安卓安装包</span>
+            <span class="ver" id="apkVer" hidden></span>
+          </a>
+          <a class="btn btn-dark" id="iosLink" href="#">
+            <svg class="apple-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+            <span>iOS 安装</span>
+            <span class="ver" id="iosVer" hidden></span>
+          </a>
+        </div>
+        <p class="store-note">下载地址由官方渠道同步；若按钮暂不可用，请稍后再试。</p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap foot">
+      <p>© <span id="year"></span> 哇TV · 请遵守当地法律法规</p>
+      <nav>
+        <a href="#showcase">产品介绍</a>
+        <a href="#stats">片库统计</a>
+        <a href="#changelog">更新日志</a>
+        <a href="#download">下载</a>
+        <a href="#">用户协议</a>
+        <a href="#">隐私政策</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script>
+    document.getElementById("year").textContent = new Date().getFullYear();
+
+    const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const root = document.documentElement;
+    const progressEl = document.getElementById("scrollProgress");
+    const heroEl = document.querySelector(".hero");
+
+    /* —— mouse + scroll motion —— */
+    let mx = 0.5, my = 0.5, tx = 0.5, ty = 0.5;
+    let scrollP = 0, heroP = 0;
+    let ticking = false;
+
+    function applyMotionVars() {
+      root.style.setProperty("--mx", mx.toFixed(4));
+      root.style.setProperty("--my", my.toFixed(4));
+      root.style.setProperty("--scroll", scrollP.toFixed(4));
+      root.style.setProperty("--hero-p", heroP.toFixed(4));
+      if (progressEl) progressEl.style.width = (scrollP * 100).toFixed(2) + "%";
+    }
+
+    function computeScroll() {
+      const max = Math.max(1, document.documentElement.scrollHeight - innerHeight);
+      scrollP = Math.min(1, Math.max(0, scrollY / max));
+      if (heroEl) {
+        const h = heroEl.offsetHeight || 1;
+        heroP = Math.min(1, Math.max(0, scrollY / h));
+      } else {
+        heroP = 0;
+      }
+    }
+
+    function rafLoop() {
+      mx += (tx - mx) * 0.08;
+      my += (ty - my) * 0.08;
+      applyMotionVars();
+      ticking = false;
+      if (!reduceMotion && (Math.abs(tx - mx) > 0.001 || Math.abs(ty - my) > 0.001)) {
+        ticking = true;
+        requestAnimationFrame(rafLoop);
+      }
+    }
+
+    function requestMotion() {
+      if (reduceMotion || ticking) return;
+      ticking = true;
+      requestAnimationFrame(rafLoop);
+    }
+
+    if (!reduceMotion) {
+      addEventListener("pointermove", (e) => {
+        tx = e.clientX / Math.max(1, innerWidth);
+        ty = e.clientY / Math.max(1, innerHeight);
+        requestMotion();
+      }, { passive: true });
+
+      addEventListener("scroll", () => {
+        computeScroll();
+        applyMotionVars();
+      }, { passive: true });
+
+      computeScroll();
+      applyMotionVars();
+    }
+
+    /* —— scroll reveal —— */
+    function observeFx(nodes) {
+      if (reduceMotion) {
+        nodes.forEach((el) => el.classList.add("in"));
+        return;
+      }
+      const io = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((en) => {
+            if (en.isIntersecting) {
+              en.target.classList.add("in");
+              io.unobserve(en.target);
+            }
+          });
+        },
+        { threshold: 0.14, rootMargin: "0px 0px -6% 0px" }
+      );
+      nodes.forEach((el) => io.observe(el));
+    }
+    observeFx([...document.querySelectorAll(".fx")]);
+
+    /* 优点卡：鼠标倾斜 */
+    if (!reduceMotion) {
+      document.querySelectorAll(".adv").forEach((card) => {
+        card.addEventListener("pointermove", (e) => {
+          const r = card.getBoundingClientRect();
+          const px = (e.clientX - r.left) / r.width - 0.5;
+          const py = (e.clientY - r.top) / r.height - 0.5;
+          card.style.transform =
+            "translateY(-4px) rotateX(" + (-py * 6).toFixed(2) + "deg) rotateY(" + (px * 8).toFixed(2) + "deg)";
+        });
+        card.addEventListener("pointerleave", () => {
+          card.style.transform = "";
+        });
+      });
+    }
+
+    /* one-shot entrance animation (no perpetual opacity:0) */
+    requestAnimationFrame(() => {
+      document.documentElement.classList.add("reveal");
+      const clearReveal = () => document.documentElement.classList.remove("reveal");
+      setTimeout(clearReveal, 1200);
+    });
+
+    const slides = [
+      {
+        title: "海量分类，一眼找片",
+        desc: "推荐 / 电影 / 电视剧 / 综艺 / 动漫 / 短剧分层清晰，热榜与筛选随手切。"
+      },
+      {
+        title: "详情清楚，选集好点",
+        desc: "标签、评分、想看状态齐全；横滑选集，收藏与播放按钮就在手边。"
+      },
+      {
+        title: "播放顺滑，追更方便",
+        desc: "弹幕、投屏、小窗、同类型推荐都在播放页，不用来回跳。"
+      },
+      {
+        title: "横屏全屏，沉浸观影",
+        desc: "倍速、裁剪、选集与发弹幕一屏搞定，适合大屏横过来看。"
+      }
+    ];
+
+    const cards = [...document.querySelectorAll(".stack-card")];
+    const dots = document.getElementById("dots");
+    const titleEl = document.getElementById("slideTitle");
+    const descEl = document.getElementById("slideDesc");
+    const stepEl = document.getElementById("slideStep");
+    const advs = [...document.querySelectorAll(".adv")];
+    let active = 0;
+    let timer = null;
+    let resizing = false;
+    let resizeTimer = null;
+
+    slides.forEach((_, i) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.setAttribute("aria-label", "第 " + (i + 1) + " 张");
+      b.addEventListener("click", () => go(i, true));
+      dots.appendChild(b);
+    });
+
+    function layout() {
+      const n = cards.length;
+      cards.forEach((card, i) => {
+        let d = (i - active + n) % n;
+        card.dataset.pos = d <= 3 ? String(d) : "hide";
+      });
+      [...dots.children].forEach((d, i) => d.classList.toggle("on", i === active));
+      const s = slides[active];
+      stepEl.textContent = String(active + 1).padStart(2, "0") + " / 0" + n;
+      titleEl.textContent = s.title;
+      descEl.textContent = s.desc;
+      advs.forEach((a) => a.classList.toggle("on", Number(a.dataset.i) === active));
+    }
+
+    function go(i, user) {
+      active = (i + cards.length) % cards.length;
+      layout();
+      if (user && !resizing) restart();
+    }
+
+    function next() {
+      if (resizing) return;
+      go(active + 1);
+    }
+
+    function stop() {
+      clearInterval(timer);
+      timer = null;
+    }
+
+    function restart() {
+      stop();
+      if (resizing || document.hidden) return;
+      timer = setInterval(next, 3800);
+    }
+
+    cards.forEach((card) => {
+      card.addEventListener("click", () => go(Number(card.dataset.index) + 1, true));
+    });
+    advs.forEach((a) => {
+      a.addEventListener("click", () => go(Number(a.dataset.i), true));
+    });
+
+    const wrap = document.getElementById("stackWrap");
+    wrap.addEventListener("mouseenter", stop);
+    wrap.addEventListener("mouseleave", () => { if (!resizing) restart(); });
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) stop();
+      else if (!resizing) restart();
+    });
+
+    /* swipe */
+    let x0 = null;
+    wrap.addEventListener("touchstart", (e) => { x0 = e.touches[0].clientX; }, { passive: true });
+    wrap.addEventListener("touchend", (e) => {
+      if (x0 == null) return;
+      const dx = e.changedTouches[0].clientX - x0;
+      x0 = null;
+      if (Math.abs(dx) < 40) return;
+      go(active + (dx < 0 ? 1 : -1), true);
+    });
+
+    /* resize: pause timer, debounce restart — do NOT call layout() (CSS handles size) */
+    addEventListener("resize", () => {
+      resizing = true;
+      stop();
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        resizing = false;
+        if (!document.hidden) restart();
+      }, 220);
+    }, { passive: true });
+
+    layout();
+    restart();
+
+    /* 滚动联动截图 + 在叠图上滚轮切张 */
+    if (!reduceMotion) {
+      let lastScrollSlide = -1;
+      addEventListener("scroll", () => {
+        if (!heroEl || wrap.matches(":hover")) return;
+        if (scrollY <= 40 || scrollY >= heroEl.offsetHeight) return;
+        const idx = Math.min(3, Math.floor((scrollY / Math.max(1, heroEl.offsetHeight)) * 4));
+        if (idx !== lastScrollSlide && idx !== active) {
+          lastScrollSlide = idx;
+          go(idx);
+        }
+      }, { passive: true });
+
+      let wheelLock = 0;
+      wrap.addEventListener("wheel", (e) => {
+        if (Math.abs(e.deltaY) < 8) return;
+        const now = performance.now();
+        if (now - wheelLock < 420) return;
+        wheelLock = now;
+        e.preventDefault();
+        go(active + (e.deltaY > 0 ? 1 : -1), true);
+      }, { passive: false });
+    }
+
+    /* nav */
+    const nav = document.getElementById("nav");
+    const syncNav = () => nav.classList.toggle("scrolled", scrollY > 6);
+    syncNav();
+    addEventListener("scroll", syncNav, { passive: true });
+    const menuBtn = document.getElementById("menuBtn");
+    const navLinks = document.getElementById("navLinks");
+    menuBtn.addEventListener("click", () => navLinks.classList.toggle("open"));
+    navLinks.querySelectorAll("a").forEach((a) =>
+      a.addEventListener("click", () => navLinks.classList.remove("open"))
+    );
+
+    /* —— CMS: downloads + changelogs —— */
+    const apkLink = document.getElementById("apkLink");
+    const iosLink = document.getElementById("iosLink");
+    const apkVer = document.getElementById("apkVer");
+    const iosVer = document.getElementById("iosVer");
+    const logList = document.getElementById("logList");
+
+    function esc(s) {
+      return String(s == null ? "" : s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function platLabel(p) {
+      const v = String(p || "").toLowerCase();
+      if (v === "ios" || v === "iphone" || v === "ipad") return { text: "iOS", cls: "ios" };
+      return { text: "安卓", cls: "android" };
+    }
+
+    function formatDate(raw) {
+      if (raw == null || raw === "") return "";
+      let d;
+      if (typeof raw === "number" || /^\d{9,13}$/.test(String(raw))) {
+        const n = Number(raw);
+        d = new Date(n < 1e12 ? n * 1000 : n);
+      } else {
+        d = new Date(String(raw).replace(/-/g, "/"));
+      }
+      if (Number.isNaN(d.getTime())) return String(raw);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      return y + "-" + m + "-" + day;
+    }
+
+    function sortKey(raw) {
+      if (raw == null || raw === "") return 0;
+      if (typeof raw === "number" || /^\d{9,13}$/.test(String(raw))) {
+        const n = Number(raw);
+        return n < 1e12 ? n * 1000 : n;
+      }
+      const t = new Date(String(raw).replace(/-/g, "/")).getTime();
+      return Number.isNaN(t) ? 0 : t;
+    }
+
+    function setDownload(el, verEl, info) {
+      if (!info) return;
+      const url = info.download_url || info.url || info.apk_url || "";
+      if (url) el.href = url;
+      const ver = info.version || "";
+      if (ver) {
+        verEl.textContent = "v" + String(ver).replace(/^v/i, "");
+        verEl.hidden = false;
+      }
+    }
+
+    function renderLogs(list) {
+      if (!list || !list.length) {
+        logList.innerHTML =
+          '<p class="log-empty fx in">暂无更新日志，请在后台「应用更新」保存后自动出现</p>';
+        return;
+      }
+      const sorted = [...list].sort((a, b) => sortKey(b.created_at) - sortKey(a.created_at));
+      logList.innerHTML = sorted.map((item, i) => {
+        const plat = platLabel(item.platform);
+        const ver = item.version ? "v" + String(item.version).replace(/^v/i, "") : "";
+        const date = formatDate(item.created_at);
+        const body = esc(item.changelog || "").trim() || "暂无说明";
+        const url = item.download_url || item.apk_url || "";
+        const dl = url
+          ? '<a class="log-dl" href="' + esc(url) + '" target="_blank" rel="noopener">下载此版本</a>'
+          : "";
+        const delay = Math.min(i, 6) * 70;
+        return (
+          '<article class="log-item fx" style="--d:' + delay + 'ms">' +
+            '<div class="log-head">' +
+              '<span class="log-plat ' + plat.cls + '">' + esc(plat.text) + "</span>" +
+              (ver ? '<span class="log-ver">' + esc(ver) + "</span>" : "") +
+              (date ? '<span class="log-date">' + esc(date) + "</span>" : "") +
+            "</div>" +
+            '<div class="log-body">' + body.replace(/\n/g, "<br>") + "</div>" +
+            dl +
+          "</article>"
+        );
+      }).join("");
+      observeFx([...logList.querySelectorAll(".fx")]);
+    }
+
+    const PANEL = "https://154.12.29.28/maccms-tools/huihuo_panel.php";
+    const CMS_API = PANEL + "?api=website";
+
+    async function fetchJson(url) {
+      const r = await fetch(url, { credentials: "omit", cache: "no-store" });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    }
+
+    async function loadSiteData() {
+      try {
+        const json = await fetchJson(CMS_API);
+        if (json && json.code === 1 && json.data) {
+          const data = json.data;
+          setDownload(apkLink, apkVer, data.android);
+          setDownload(iosLink, iosVer, data.ios);
+          renderLogs(Array.isArray(data.changelogs) ? data.changelogs : []);
+          return;
+        }
+      } catch (_) { /* fall through */ }
+
+      // 兼容尚未上传新面板：分别拉双端 app_update
+      try {
+        const [a, i] = await Promise.all([
+          fetchJson(PANEL + "?api=app_update&platform=android").catch(() => null),
+          fetchJson(PANEL + "?api=app_update&platform=ios").catch(() => null),
+        ]);
+        const android = a && a.code === 1 ? a.data : null;
+        const ios = i && i.code === 1 ? i.data : null;
+        setDownload(apkLink, apkVer, android);
+        setDownload(iosLink, iosVer, ios);
+        const logs = [];
+        for (const row of [android, ios]) {
+          if (!row) continue;
+          logs.push({
+            platform: row.platform,
+            version: row.version,
+            version_code: row.version_code,
+            download_url: row.download_url || row.apk_url,
+            changelog: row.changelog,
+            created_at: row.updated_at,
+          });
+        }
+        renderLogs(logs);
+      } catch (_) {
+        renderLogs([]);
+      }
+    }
+
+    loadSiteData();
+
+    /* —— 影视统计：总量 + 今日更新（h=24） —— */
+    const VOD_PROXY = "https://154.12.29.28/maccms-tools/cms_cors_proxy.php?target=vod";
+    const statTotalEl = document.getElementById("statTotal");
+    const statTodayEl = document.getElementById("statToday");
+
+    function formatCount(n) {
+      const v = Math.max(0, Math.floor(Number(n) || 0));
+      return v.toLocaleString("zh-CN");
+    }
+
+    function animateCount(el, to, ms) {
+      const target = Math.max(0, Math.floor(Number(to) || 0));
+      el.dataset.target = String(target);
+      const start = performance.now();
+      const from = 0;
+      function frame(now) {
+        const t = Math.min(1, (now - start) / ms);
+        const eased = 1 - Math.pow(1 - t, 3);
+        el.textContent = formatCount(from + (target - from) * eased);
+        if (t < 1) requestAnimationFrame(frame);
+        else el.textContent = formatCount(target);
+      }
+      requestAnimationFrame(frame);
+    }
+
+    async function loadVodStats() {
+      try {
+        const [all, today] = await Promise.all([
+          fetchJson(VOD_PROXY + "&ac=list&pg=1&pagesize=1"),
+          fetchJson(VOD_PROXY + "&ac=list&pg=1&pagesize=1&h=24"),
+        ]);
+        const total = Number(all && all.total) || 0;
+        const day = Number(today && today.total) || 0;
+        animateCount(statTotalEl, total, 1100);
+        animateCount(statTodayEl, day, 900);
+      } catch (_) {
+        statTotalEl.textContent = "—";
+        statTodayEl.textContent = "—";
+      }
+    }
+
+    loadVodStats();
+  </script>
+</body>
+</html>
