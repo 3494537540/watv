@@ -1,0 +1,68 @@
+# 未签名 IPA — 自己用签名工具重签
+# 用法：GitHub → Actions → iOS unsigned IPA → Run workflow
+
+name: iOS unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "lib/**"
+      - "ios/**"
+      - "pubspec.yaml"
+      - "pubspec.lock"
+      - ".github/workflows/ios-unsigned-ipa.yml"
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      - name: CocoaPods
+        run: |
+          cd ios
+          pod install
+
+      - name: Build iOS (no codesign)
+        run: |
+          flutter build ios --release --no-codesign \
+            --build-name=1.0.0 \
+            --build-number=${{ github.run_number }}
+
+      - name: Pack unsigned IPA
+        run: |
+          APP_PATH=$(find build/ios/iphoneos -name "*.app" -type d | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "Runner.app not found"
+            find build/ios -maxdepth 4 -type d
+            exit 1
+          fi
+          echo "Packing: $APP_PATH"
+          mkdir -p build/ios/ipa
+          WORK=$(mktemp -d)
+          mkdir -p "$WORK/Payload"
+          cp -R "$APP_PATH" "$WORK/Payload/"
+          (cd "$WORK" && zip -qr "$GITHUB_WORKSPACE/build/ios/ipa/watv-unsigned.ipa" Payload)
+          ls -lh build/ios/ipa/watv-unsigned.ipa
+          rm -rf "$WORK"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: watv-unsigned-ipa
+          path: build/ios/ipa/watv-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
