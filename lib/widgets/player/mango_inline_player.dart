@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
@@ -23,6 +24,7 @@ import '../../services/app_permission.dart';
 import '../../services/danmaku_remote_api.dart';
 import '../../state/cms_auth_controller.dart';
 import '../dialogx/dialogx.dart';
+import '../cast_sheet.dart';
 import 'mango_player_chrome.dart';
 import 'player_chrome_menus.dart';
 import 'player_danmaku_layer.dart';
@@ -53,6 +55,7 @@ class MangoInlinePlayer extends StatefulWidget {
     this.sourceNames = const [],
     this.sourceIndex = 0,
     this.onSourceSelect,
+    this.sourceProbeUrls = const [],
     this.onRequestSourceFailover,
     this.onPrepareRetry,
     this.showEpisodesInMenu = false,
@@ -63,6 +66,7 @@ class MangoInlinePlayer extends StatefulWidget {
     this.onCast,
     this.enableDanmaku = true,
     this.onPip,
+    this.posterUrl,
   });
 
   final String url;
@@ -81,6 +85,8 @@ class MangoInlinePlayer extends StatefulWidget {
   final List<String> sourceNames;
   final int sourceIndex;
   final ValueChanged<int>? onSourceSelect;
+  /// 与 sourceNames 对应的探测地址（测速）
+  final List<String> sourceProbeUrls;
   /// 当前线路失败时请求父级切源；返回 true 表示已切换，播放器等待新 url
   final Future<bool> Function()? onRequestSourceFailover;
   /// 用户点「重试」前，父级可清空失败线路记录并回到最优源
@@ -98,6 +104,8 @@ class MangoInlinePlayer extends StatefulWidget {
   /// 短剧/直播等场景关闭弹幕
   final bool enableDanmaku;
   final VoidCallback? onPip;
+  /// 未就绪时垫在画面下的封面
+  final String? posterUrl;
 
   @override
   State<MangoInlinePlayer> createState() => MangoInlinePlayerState();
@@ -132,10 +140,22 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
   double _holdRateBackup = 1.0;
   bool _holdBoost = false;
   bool _showSideSettings = false;
+  bool _showCastSide = false;
+  String _sideSettingsPage = 'home';
   int _sleepMinutes = 0;
   Timer? _sleepTimer;
   final _videoShotKey = GlobalKey();
   final _stallLoading = ValueNotifier<bool>(false);
+  bool _lastStallFlag = false;
+
+  /// HLS 多清晰度
+  List<VodHlsVariant> _qualityVariants = const [];
+  VodHlsVariant? _currentVariant;
+  VodQualityTier _qualityPrefer = VodQualityStore.cached;
+  String? _activePlayUrl;
+  int _stallDropHits = 0;
+  DateTime? _stallDropWindow;
+  bool _qualityBusy = false;
 
   /// 横向滑动调进度
   bool _scrubbing = false;
@@ -149,6 +169,56 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
   Duration get position =>
       _controller?.value.position ??
       Duration(milliseconds: widget.startPositionMs);
+
+  String get _sourceChromeLabel {
+    if (widget.sourceNames.isEmpty) return '线路';
+    final i = widget.sourceIndex.clamp(0, widget.sourceNames.length - 1);
+    final raw = widget.sourceNames[i].trim();
+    if (raw.isEmpty) return '线路${i + 1}';
+    // 底栏空间有限，过长截断
+    if (raw.length <= 6) return raw;
+    return '${raw.substring(0, 5)}…';
+  }
+
+  Future<void> _pickSource([BuildContext? anchor]) async {
+    if (widget.sourceNames.length <= 1 || widget.onSourceSelect == null) {
+      DialogX.showWarning('当前影片只有一条播放线路');
+      return;
+    }
+    if (_preferSidePopups) {
+      _openSideSettings(page: 'sources');
+      return;
+    }
+    final ctx = anchor ?? context;
+    if (!ctx.mounted) return;
+    final picked = await showChromeSourceMenu(
+      ctx,
+      names: widget.sourceNames,
+      selected: widget.sourceIndex,
+      probeUrls: widget.sourceProbeUrls,
+    );
+    if (picked == null || !mounted) return;
+    if (picked == widget.sourceIndex) return;
+    widget.onSourceSelect!(picked);
+    _onInteract();
+  }
+
+  Future<void> _markSkipAtCurrent({required bool intro}) async {
+    final c = _controller;
+    if (c == null || !c.value.isInitialized) return;
+    final pos = c.value.position.inSeconds.clamp(0, 600);
+    final dur = c.value.duration.inSeconds;
+    PlayerSkipPrefs next;
+    if (intro) {
+      next = _skipPrefs.copyWith(enabled: true, introSeconds: pos);
+      DialogX.showSuccess('已设片头结束于 ${pos}s（进度条绿标）');
+    } else {
+      final remain = dur > 0 ? (dur - pos).clamp(0, 600) : 90;
+      next = _skipPrefs.copyWith(enabled: true, outroSeconds: remain);
+      DialogX.showSuccess('已设片尾开始（距片尾 ${remain}s，进度条橙标）');
+    }
+    await _saveSkipPrefs(next);
+  }
 
   Future<void> pause() async {
     await _controller?.pause();
@@ -164,12 +234,13 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
 
   /// 进入画中画前收起控件，小窗只留画面
   void hideChrome() {
-    if (!_showChrome && !_showSideSettings) return;
+    if (!_showChrome && !_showSideSettings && !_showCastSide) return;
     _hideTimer?.cancel();
     if (!mounted) return;
     setState(() {
       _showChrome = false;
       _showSideSettings = false;
+      _showCastSide = false;
     });
   }
 
@@ -191,7 +262,10 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     hideChrome();
     DialogX.dismiss();
     final rect = playerScreenRect();
-    await PlayerPip.enter(sourceRect: rect);
+    await PlayerPip.enter(
+      sourceRect: rect,
+      controller: _controller,
+    );
     // 进窗后再播，避免和系统动画抢同一帧
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -325,16 +399,20 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     }
   }
 
-  /// 横屏全屏：右侧滑出；竖屏/内嵌：底部白卡片（避免播放器高度不够整页溢出）
-  Future<void> openSettings() async {
+  void _openSideSettings({String page = 'home'}) {
     if (!mounted) return;
-    final size = MediaQuery.sizeOf(context);
-    final landscape = size.width > size.height;
-    if (widget.immersiveTop && landscape) {
-      setState(() {
-        _showSideSettings = true;
-        _showChrome = false;
-      });
+    setState(() {
+      _sideSettingsPage = page;
+      _showSideSettings = true;
+      _showChrome = false;
+    });
+  }
+
+  /// 沉浸播放：一律右侧滑出（点遮罩关闭）；内嵌矮窗才用底部 sheet
+  Future<void> openSettings({String page = 'home'}) async {
+    if (!mounted) return;
+    if (widget.immersiveTop) {
+      _openSideSettings(page: page);
       return;
     }
     await showModalBottomSheet<void>(
@@ -342,17 +420,20 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
       isScrollControlled: true,
       backgroundColor: Colors.white,
       barrierColor: const Color(0x99000000),
+      isDismissible: true,
+      enableDrag: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (ctx) {
         final sh = MediaQuery.sizeOf(ctx).height;
-        // 小窗高度不够时不能 clamp(380, 560)
-        final sheetH = (sh * 0.62).clamp(120.0, sh < 560 ? sh : 560.0);
+        final sheetH = (sh * 0.72).clamp(160.0, sh < 560 ? sh : 560.0);
         return SizedBox(
           height: sheetH,
           child: PlayerSideSettingsPanel(
             asBottomSheet: true,
+            flatMode: true,
+            initialPage: page,
             onClose: () {
               if (Navigator.of(ctx).canPop()) {
                 Navigator.of(ctx).pop();
@@ -395,26 +476,67 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
       onSendDanmaku: () => unawaited(_sendDanmaku()),
       onScreenshot: () => unawaited(_takeScreenshot()),
       onOpenEpisodes: () => unawaited(_openEpisodes()),
-      onOpenSources: () {},
-      onCast: () => widget.onCast?.call(),
+      onOpenSources: () => unawaited(_pickSource()),
+      onCast: openCast,
       onPip: () {
         unawaited(enterPictureInPicture());
       },
       hasEpisodes:
           widget.episodes.length > 1 && widget.onEpisodeSelect != null,
-      hasSources: false,
+      hasSources:
+          widget.sourceNames.length > 1 && widget.onSourceSelect != null,
       hasCast: widget.onCast != null,
       hasNext: widget.showNextEpisode,
       onNextEpisode: widget.onNextEpisode,
       onReportError: () => unawaited(_reportPlayError()),
       enableDanmaku: widget.enableDanmaku,
+      qualityPrefer: _qualityPrefer,
+      qualityVariants: _qualityVariants,
+      currentQuality: _currentVariant,
+      onQualityPrefer: (t) => unawaited(_applyQualityPrefer(t)),
+      onQualityVariant: (v) => unawaited(_switchToVariant(v, prefer: v.tier)),
+      positionSec: position.inSeconds,
+      durationSec: _controller?.value.duration.inSeconds ?? 0,
+      sourceNames: widget.sourceNames,
+      sourceIndex: widget.sourceIndex,
+      sourceProbeUrls: widget.sourceProbeUrls,
+      onSourceSelect: widget.onSourceSelect,
     );
   }
 
   void _closeSideSettings() {
     if (!_showSideSettings) return;
-    setState(() => _showSideSettings = false);
+    setState(() {
+      _showSideSettings = false;
+      _sideSettingsPage = 'home';
+    });
     _onInteract();
+  }
+
+  void _closeCastSide() {
+    if (!_showCastSide) return;
+    setState(() => _showCastSide = false);
+    _onInteract();
+  }
+
+  void _openCastSide() {
+    if (!mounted) return;
+    setState(() {
+      _showCastSide = true;
+      _showSideSettings = false;
+      _showChrome = false;
+    });
+  }
+
+  void openCast() {
+    // 横屏全屏用侧栏；竖屏小窗用底部投屏面板，避免未全屏看不到入口
+    final wide =
+        MediaQuery.sizeOf(context).width > MediaQuery.sizeOf(context).height;
+    if (widget.immersiveTop && wide) {
+      _openCastSide();
+      return;
+    }
+    widget.onCast?.call();
   }
 
   Future<void> _reportPlayError() async {
@@ -535,7 +657,17 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     _onInteract();
   }
 
+  bool get _preferSidePopups {
+    if (!widget.immersiveTop || !mounted) return false;
+    final size = MediaQuery.sizeOf(context);
+    return size.width > size.height;
+  }
+
   Future<void> _pickPlaybackSpeed([BuildContext? anchor]) async {
+    if (_preferSidePopups) {
+      _openSideSettings(page: 'speed');
+      return;
+    }
     final ctx = anchor ?? context;
     if (!ctx.mounted) return;
     final picked = await showChromeSpeedMenu(ctx, current: _playbackRate);
@@ -554,6 +686,10 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
   }
 
   Future<void> _pickAspect([BuildContext? anchor]) async {
+    if (_preferSidePopups) {
+      _openSideSettings(page: 'aspect');
+      return;
+    }
     final ctx = anchor ?? context;
     if (!ctx.mounted) return;
     final picked = await showChromeAspectMenu(
@@ -565,7 +701,136 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     _onInteract();
   }
 
+  Future<void> _pickQuality([BuildContext? anchor]) async {
+    if (_preferSidePopups) {
+      _openSideSettings(page: 'quality');
+      return;
+    }
+    final ctx = anchor ?? context;
+    if (!ctx.mounted) return;
+    final picked = await showChromeQualityMenu(
+      ctx,
+      prefer: _qualityPrefer,
+      variants: _qualityVariants,
+      current: _currentVariant,
+      sourceNames: widget.sourceNames,
+      sourceIndex: widget.sourceIndex,
+    );
+    if (picked == null || !mounted) return;
+    if (picked is String && picked.startsWith('_src:')) {
+      final i = int.tryParse(picked.substring(5));
+      if (i != null && widget.onSourceSelect != null) {
+        widget.onSourceSelect!(i);
+      } else if (i != null) {
+        DialogX.showWarning('请从详情页切换播放线路');
+      }
+      _onInteract();
+      return;
+    }
+    if (picked == '_sole') {
+      if (widget.sourceNames.length > 1) {
+        DialogX.showWarning('当前线路仅单一清晰度，请换播放线路');
+      } else {
+        DialogX.showWarning('当前片源无多清晰度可选');
+      }
+      _onInteract();
+      return;
+    }
+    if (picked is VodQualityTier) {
+      await _applyQualityPrefer(picked);
+    } else if (picked is VodHlsVariant) {
+      await _switchToVariant(picked, prefer: picked.tier);
+    }
+    _onInteract();
+  }
+
+  Future<void> _applyQualityPrefer(VodQualityTier tier) async {
+    await VodQualityStore.save(tier);
+    if (!mounted) return;
+    setState(() => _qualityPrefer = tier);
+    if (_qualityVariants.length < 2) {
+      DialogX.showWarning(
+        widget.sourceNames.length > 1
+            ? '当前线路无多清晰度，请换播放线路试试'
+            : '当前片源无多清晰度可选',
+      );
+      return;
+    }
+    final v = VodPlayback.pickVariant(_qualityVariants, tier);
+    if (v != null) await _switchToVariant(v, prefer: tier);
+  }
+
+  Future<void> _switchToVariant(
+    VodHlsVariant variant, {
+    VodQualityTier? prefer,
+  }) async {
+    if (_qualityBusy) return;
+    if (_currentVariant?.url == variant.url &&
+        _activePlayUrl == variant.url) {
+      if (prefer != null) {
+        await VodQualityStore.save(prefer);
+        if (mounted) setState(() => _qualityPrefer = prefer);
+      }
+      DialogX.showSuccess('已是 ${variant.shortLabel}');
+      return;
+    }
+    final resume = positionMs;
+    final wasPlaying = _controller?.value.isPlaying ?? true;
+    if (prefer != null) {
+      await VodQualityStore.save(prefer);
+    }
+    if (!mounted) return;
+    setState(() {
+      _qualityPrefer = prefer ?? variant.tier;
+      _currentVariant = variant;
+      _stallDropHits = 0;
+    });
+    await _init(
+      forceUrl: variant.url,
+      resumeMs: resume,
+      autoPlay: wasPlaying,
+    );
+    if (mounted && !_failed) {
+      DialogX.showSuccess('已切换到 ${variant.shortLabel}');
+    }
+  }
+
+  /// 卡顿过多时自动降一档；单档线路则尝试换线
+  Future<void> _maybeAutoDropQuality() async {
+    final now = DateTime.now();
+    if (_stallDropWindow == null ||
+        now.difference(_stallDropWindow!).inSeconds > 60) {
+      _stallDropWindow = now;
+      _stallDropHits = 0;
+    }
+    _stallDropHits++;
+    if (_stallDropHits < 2) return;
+
+    if (_qualityBusy) return;
+
+    if (_qualityVariants.length >= 2) {
+      final cur = _currentVariant;
+      if (cur == null) return;
+      final lower = VodPlayback.lowerThan(_qualityVariants, cur);
+      if (lower == null) return;
+      _stallDropHits = 0;
+      DialogX.showWarning('网络不稳，已切换到 ${lower.shortLabel}');
+      await _switchToVariant(lower, prefer: VodQualityTier.auto);
+      return;
+    }
+
+    // 单档：仅在开启「自动切换线路」时换线
+    if (_playerSettings.autoSourceFailover &&
+        widget.sourceNames.length > 1 &&
+        widget.onRequestSourceFailover != null) {
+      _stallDropHits = 0;
+      await _trySourceFailover('播放卡顿，切换线路');
+    }
+  }
+
   Future<bool> _trySourceFailover(String reason) async {
+    // 默认关闭自动切线，需在设置中开启
+    if (!_playerSettings.autoSourceFailover) return false;
     if (_failoverBusy) return false;
     final cb = widget.onRequestSourceFailover;
     if (cb == null) return false;
@@ -730,13 +995,15 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
 
     List<DanmakuItem> remote = const [];
     try {
-      remote = await _danmakuApi.fetch(
-        vodId: id,
-        episode: ep,
-        playUrl: widget.url,
-        title: title,
-        episodeLabel: widget.danmakuEpisodeLabel,
-      );
+      remote = await _danmakuApi
+          .fetch(
+            vodId: id,
+            episode: ep,
+            playUrl: widget.url,
+            title: title,
+            episodeLabel: widget.danmakuEpisodeLabel,
+          )
+          .timeout(const Duration(seconds: 10), onTimeout: () => const []);
     } catch (e, st) {
       debugPrint('[danmaku] fetch error: $e\n$st');
     }
@@ -817,8 +1084,20 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     unawaited(PlayerDanmakuPrefs.load().then((p) {
       if (mounted) setState(() => _danmakuPrefs = p);
     }));
+    unawaited(VodQualityStore.load().then((q) {
+      if (mounted) setState(() => _qualityPrefer = q);
+    }));
+    _stallLoading.addListener(_onStallLoadingFlag);
     unawaited(_loadDanmaku());
     _init();
+  }
+
+  void _onStallLoadingFlag() {
+    final stalled = _stallLoading.value;
+    if (stalled && !_lastStallFlag) {
+      unawaited(_maybeAutoDropQuality());
+    }
+    _lastStallFlag = stalled;
   }
 
   @override
@@ -856,11 +1135,15 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     return null;
   }
 
-  Future<void> _init() async {
+  Future<void> _init({
+    String? forceUrl,
+    int? resumeMs,
+    bool autoPlay = true,
+  }) async {
     final token = ++_initToken;
     await _disposeController(keepWakelock: false);
     final url = widget.url.trim();
-    if (url.isEmpty) {
+    if (url.isEmpty && (forceUrl == null || forceUrl.trim().isEmpty)) {
       if (!mounted || token != _initToken) return;
       await _onPlayFailed('播放地址为空');
       return;
@@ -872,29 +1155,63 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
         _failed = false;
         _showChrome = true;
         _outroHandled = false;
+        _qualityBusy = forceUrl != null;
       });
       _bufferSpeedTracker.reset();
       _bufferSpeedTracker.setLoading(true);
     }
 
     try {
-      final uri = Uri.parse(url);
+      String playUrl;
+      if (forceUrl != null && forceUrl.trim().isNotEmpty) {
+        playUrl = forceUrl.trim();
+      } else {
+        final prefer = await VodQualityStore.load();
+        if (!mounted || token != _initToken) return;
+        _qualityPrefer = prefer;
+        final resolved = await VodPlayback.resolveStream(url, prefer: prefer);
+        if (!mounted || token != _initToken) return;
+        playUrl = resolved.playUrl;
+        _qualityVariants = resolved.variants;
+        _currentVariant = resolved.selected;
+        if (_currentVariant == null && resolved.variants.isNotEmpty) {
+          _currentVariant = VodPlayback.pickVariant(resolved.variants, prefer);
+        }
+      }
+      _activePlayUrl = playUrl;
+      if (!mounted || token != _initToken) return;
+      final uri = Uri.parse(playUrl);
       final isFile = uri.scheme == 'file' ||
-          (!url.contains('://') &&
-              (url.startsWith('/') || RegExp(r'^[A-Za-z]:[\\/]').hasMatch(url)));
+          (!playUrl.contains('://') &&
+              (playUrl.startsWith('/') ||
+                  RegExp(r'^[A-Za-z]:[\\/]').hasMatch(playUrl)));
       final VideoPlayerController c;
+      final opts = VideoPlayerOptions(
+        mixWithOthers: false,
+        // 更大回退缓冲：拖进度 / 小幅回看更少重新加载
+        backBufferDurationMs: 90000,
+        // iOS 画中画需要 AVPlayerLayer（PlatformView）
+        allowBackgroundPlayback: true,
+      );
+      // iOS：PlatformView 才能挂 AVPictureInPictureController
+      final viewType = (!kIsWeb &&
+              defaultTargetPlatform == TargetPlatform.iOS)
+          ? VideoViewType.platformView
+          : VideoViewType.textureView;
       if (isFile) {
-        final path = uri.scheme == 'file' ? uri.toFilePath() : url;
+        final path = uri.scheme == 'file' ? uri.toFilePath() : playUrl;
         c = VideoPlayerController.file(
           File(path),
-          videoPlayerOptions: VideoPlayerOptions(mixWithOthers: false),
+          videoPlayerOptions: opts,
+          viewType: viewType,
         );
       } else {
         c = VideoPlayerController.networkUrl(
           uri,
           httpHeaders: VodPlayback.httpHeaders,
-          formatHint: _formatHintFor(url),
-          videoPlayerOptions: VideoPlayerOptions(mixWithOthers: false),
+          formatHint: _formatHintFor(playUrl),
+          videoPlayerOptions: opts,
+          viewType: viewType,
         );
       }
       _controller = c;
@@ -909,15 +1226,19 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
         return;
       }
 
-      final start = widget.startPositionMs;
+      final start = resumeMs ?? widget.startPositionMs;
       final total = c.value.duration.inMilliseconds;
-      if (start > 3000 && total > 0 && start < total - 8000) {
+      if (start > 1500 && total > 0 && start < total - 2000) {
         await c.seekTo(Duration(milliseconds: start));
       }
-      await _applySkipIntro(c);
+      if (resumeMs == null) {
+        await _applySkipIntro(c);
+      }
       await c.setPlaybackSpeed(_playbackRate);
       await c.setLooping(_playerSettings.loopSingle);
-      await c.play();
+      if (autoPlay) {
+        await c.play();
+      }
       if (_playerSettings.keepScreenOn) {
         await PlaybackWakelock.acquire();
       }
@@ -942,10 +1263,29 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
       _stopInitSpeedTracking();
       c.removeListener(_onInitControllerTick);
       c.addListener(_onPlaybackStatus);
-      setState(() => _ready = true);
+      setState(() {
+        _ready = true;
+        _qualityBusy = false;
+        // 单路媒体流：用真实分辨率补一条清晰度标签
+        if (_qualityVariants.isEmpty && c.value.size.height > 0) {
+          final sz = c.value.size;
+          final synthetic = VodHlsVariant(
+            url: playUrl,
+            bandwidth: 0,
+            width: sz.width.round(),
+            height: sz.height.round(),
+          );
+          _qualityVariants = [synthetic];
+          _currentVariant = synthetic;
+        } else if (_currentVariant == null &&
+            _qualityVariants.length == 1) {
+          _currentVariant = _qualityVariants.first;
+        }
+      });
       _scheduleHideChrome();
     } catch (e) {
       if (!mounted || token != _initToken) return;
+      _qualityBusy = false;
       await _onPlayFailed(e.toString());
     }
   }
@@ -998,6 +1338,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
   @override
   void dispose() {
     PlayerPip.inPip.removeListener(_onPipFlag);
+    _stallLoading.removeListener(_onStallLoadingFlag);
     _PlaybackSession.detach(this);
     PlayerPip.setOnEntered(null);
     unawaited(forceStop());
@@ -1037,7 +1378,12 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     // 小窗模式只留画面，不叠控件，避免卡死
     final inPip = PlayerPip.isInPip;
     final showChrome = _showChrome && !inPip;
-    final showSide = _showSideSettings && !inPip;
+    final showSide = (_showSideSettings || _showCastSide) && !inPip;
+    // 锁屏：右侧垂直居中（横屏全屏同样右侧）
+    final vp = MediaQuery.viewPaddingOf(context);
+    final landscape =
+        MediaQuery.sizeOf(context).width > MediaQuery.sizeOf(context).height;
+    final lockRight = (landscape ? vp.right : 0.0) + 12.0;
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -1073,6 +1419,18 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
             child: Stack(
               fit: StackFit.expand,
               children: [
+                if (!_ready &&
+                    !_failed &&
+                    (widget.posterUrl?.trim().isNotEmpty ?? false))
+                  Positioned.fill(
+                    child: Image.network(
+                      widget.posterUrl!.trim(),
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                      errorBuilder: (_, _, _) =>
+                          const ColoredBox(color: Colors.black),
+                    ),
+                  ),
                 if (_ready && c != null && c.value.isInitialized)
                   Positioned.fill(
                     child: RepaintBoundary(
@@ -1180,42 +1538,6 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                       ],
                     ),
                   ),
-                // 仅未就绪时全屏加载；播放中卡顿用轻量转圈，避免黑屏盖住画面
-                if (!_failed && !_ready)
-                  Positioned.fill(
-                    child: IgnorePointer(
-                      child: ColoredBox(
-                        color: const Color(0x66000000),
-                        child: Center(
-                          child: PlayerLoadingHud(
-                            tracker: _playerSettings.showNetSpeed
-                                ? _bufferSpeedTracker
-                                : null,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                if (!_failed && _ready)
-                  Positioned.fill(
-                    child: IgnorePointer(
-                      child: ValueListenableBuilder<bool>(
-                        valueListenable: _stallLoading,
-                        builder: (_, stalled, _) {
-                          if (!stalled) return const SizedBox.shrink();
-                          return Center(
-                            child: PlayerLoadingHud(
-                              compact: true,
-                              showSpeed: _playerSettings.showNetSpeed,
-                              tracker: _playerSettings.showNetSpeed
-                                  ? _bufferSpeedTracker
-                                  : null,
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                  ),
                 if (_holdBoost)
                   IgnorePointer(
                     child: Align(
@@ -1248,31 +1570,33 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                   ),
                 if (c != null && !_failed && _locked)
                   Positioned(
-                    left: 8,
+                    right: lockRight,
                     top: 0,
                     bottom: 0,
                     child: Center(
                       child: PlayerCircleButton(
-                        icon: CupertinoIcons.lock_fill,
+                        icon: Icons.lock_rounded,
                         onTap: _toggleLock,
+                        iconSize: 22,
                       ),
                     ),
                   ),
                 if (c != null && !_failed && !_locked) ...[
                   Positioned(
-                    left: 8,
+                    right: lockRight,
                     top: 0,
                     bottom: 0,
-                    child: Center(
-                      child: IgnorePointer(
-                        ignoring: !showChrome,
-                        child: AnimatedOpacity(
-                          opacity: showChrome ? 1 : 0,
-                          duration: const Duration(milliseconds: 220),
-                          curve: Curves.easeOutCubic,
+                    child: IgnorePointer(
+                      ignoring: !showChrome,
+                      child: AnimatedOpacity(
+                        opacity: showChrome ? 1 : 0,
+                        duration: const Duration(milliseconds: 220),
+                        curve: Curves.easeOutCubic,
+                        child: Center(
                           child: PlayerCircleButton(
-                            icon: CupertinoIcons.lock_open,
+                            icon: Icons.lock_open_rounded,
                             onTap: _toggleLock,
+                            iconSize: 22,
                           ),
                         ),
                       ),
@@ -1343,14 +1667,49 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                                     widget.onEpisodeSelect != null
                                 ? (anchor) => unawaited(_openEpisodes(anchor))
                                 : null,
+                            onSources: widget.sourceNames.length > 1 &&
+                                    widget.onSourceSelect != null
+                                ? (anchor) => unawaited(_pickSource(anchor))
+                                : null,
                             onAspect: (anchor) => unawaited(_pickAspect(anchor)),
                             onSpeed: (anchor) =>
                                 unawaited(_pickPlaybackSpeed(anchor)),
+                            onQuality: (anchor) =>
+                                unawaited(_pickQuality(anchor)),
                             aspectLabel: _playerSettings.aspect.label,
                             speedLabel: VodPlayback.rateLabel(_playbackRate),
+                            qualityLabel: _currentVariant?.shortLabel ??
+                                _qualityPrefer.label,
+                            sourceLabel: _sourceChromeLabel,
                             denseLandscape: widget.immersiveTop &&
                                 MediaQuery.sizeOf(context).width >
                                     MediaQuery.sizeOf(context).height,
+                            introMs: _skipPrefs.enabled
+                                ? _skipPrefs.introSeconds * 1000
+                                : 0,
+                            outroMs: _skipPrefs.enabled
+                                ? _skipPrefs.outroSeconds * 1000
+                                : 0,
+                            onMarkIntro: () => unawaited(_markSkipAtCurrent(intro: true)),
+                            onMarkOutro: () =>
+                                unawaited(_markSkipAtCurrent(intro: false)),
+                            onSkip: () => _openSideSettings(page: 'skip'),
+                            skipEnabled: _skipPrefs.enabled,
+                            // 仅全屏/横屏显示设置与投屏
+                            onSettings: widget.immersiveTop &&
+                                    MediaQuery.sizeOf(context).width >
+                                        MediaQuery.sizeOf(context).height
+                                ? () => _openSideSettings()
+                                : null,
+                            onCast: widget.onCast != null &&
+                                    widget.immersiveTop &&
+                                    MediaQuery.sizeOf(context).width >
+                                        MediaQuery.sizeOf(context).height
+                                ? () {
+                                    openCast();
+                                    _onInteract();
+                                  }
+                                : null,
                           ),
                         ),
                       ),
@@ -1412,34 +1771,110 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                       ),
                     ),
                   ),
+                // 加载置顶正中：盖在顶栏/底栏之上，视觉落在画面正中央
+                if (!_failed && !_ready)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: ColoredBox(
+                        color: const Color(0x66000000),
+                        child: Center(
+                          child: PlayerLoadingHud(
+                            tracker: _playerSettings.showNetSpeed
+                                ? _bufferSpeedTracker
+                                : null,
+                          ),
+                        ),
+                      ),
+                    ),
+                  )
+                else if (!_failed && _ready)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: ValueListenableBuilder<bool>(
+                        valueListenable: _stallLoading,
+                        builder: (_, stalled, _) {
+                          if (!stalled) return const SizedBox.shrink();
+                          return Center(
+                            child: PlayerLoadingHud(
+                              compact: true,
+                              showSpeed: _playerSettings.showNetSpeed,
+                              tracker: _playerSettings.showNetSpeed
+                                  ? _bufferSpeedTracker
+                                  : null,
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
                 if (showSide)
                   Positioned.fill(
                     child: Stack(
+                      fit: StackFit.expand,
                       children: [
-                        GestureDetector(
-                          onTap: _closeSideSettings,
-                          behavior: HitTestBehavior.opaque,
-                          child: const ColoredBox(color: Color(0x66000000)),
+                        ModalBarrier(
+                          dismissible: true,
+                          color: const Color(0x66000000),
+                          onDismiss: () {
+                            _closeSideSettings();
+                            _closeCastSide();
+                          },
+                        ),
+                        Positioned.fill(
+                          child: GestureDetector(
+                            onTap: () {
+                              _closeSideSettings();
+                              _closeCastSide();
+                            },
+                            behavior: HitTestBehavior.translucent,
+                            child: const SizedBox.expand(),
+                          ),
                         ),
                         Align(
                           alignment: Alignment.centerRight,
-                          child: SizedBox(
-                            width: () {
-                              final w = MediaQuery.sizeOf(context).width;
-                              final prefer = w * 0.42;
-                              final lo = prefer < 280 ? 0.0 : 280.0;
-                              final hi = w < 400 ? w : 400.0;
-                              return prefer.clamp(lo, hi < lo ? lo : hi);
-                            }(),
-                            height: double.infinity,
-                            child: Material(
-                              elevation: 8,
-                              color: Colors.white,
-                              child: SafeArea(
-                                left: false,
-                                child: PlayerSideSettingsPanel(
-                                  onClose: _closeSideSettings,
-                                  host: _settingsHost(),
+                          child: GestureDetector(
+                            onTap: () {},
+                            child: SizedBox(
+                              width: () {
+                                final w = MediaQuery.sizeOf(context).width;
+                                final prefer = w * (_showCastSide ? 0.38 : 0.42);
+                                final lo = prefer < 260 ? 0.0 : 260.0;
+                                final hi = w < 400 ? w : 380.0;
+                                return prefer.clamp(lo, hi < lo ? lo : hi);
+                              }(),
+                              height: double.infinity,
+                              child: Material(
+                                elevation: 8,
+                                color: const Color(0xFFF5F6F8),
+                                child: SafeArea(
+                                  left: false,
+                                  child: _showCastSide
+                                      ? ColoredBox(
+                                          color: Colors.white,
+                                          child: CastPanel(
+                                            mediaUrl: widget.url,
+                                            title: widget.danmakuTitle.isEmpty
+                                                ? '正在播放'
+                                                : widget.danmakuTitle,
+                                            asSide: true,
+                                            onClose: _closeCastSide,
+                                            onCastStarted: () {
+                                              unawaited(pause());
+                                            },
+                                            onCastStopped: () {
+                                              unawaited(play());
+                                            },
+                                          ),
+                                        )
+                                      : PlayerSideSettingsPanel(
+                                          key: ValueKey(
+                                            'side-$_sideSettingsPage',
+                                          ),
+                                          flatMode: true,
+                                          initialPage: _sideSettingsPage,
+                                          onClose: _closeSideSettings,
+                                          host: _settingsHost(),
+                                        ),
                                 ),
                               ),
                             ),
@@ -1572,14 +2007,8 @@ class _StableVideoSurface extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (!controller.value.isInitialized) return const SizedBox.shrink();
-    final landscape =
-        MediaQuery.sizeOf(context).width > MediaQuery.sizeOf(context).height;
-    // 全屏横屏强制铺满，避免挖孔旁/上下黑边
-    final effectiveAspect = immersiveTop && landscape
-        ? (aspect == PlayerAspectMode.fill
-            ? PlayerAspectMode.fill
-            : PlayerAspectMode.cover)
-        : aspect;
+    // 尊重用户比例设置；不再横屏强制 cover，避免 1080 被放大裁切发糊
+    final effectiveAspect = aspect;
     final rawRatio =
         controller.value.aspectRatio == 0 ? 16 / 9 : controller.value.aspectRatio;
     final forcedRatio = switch (effectiveAspect) {
@@ -1588,6 +2017,7 @@ class _StableVideoSurface extends StatelessWidget {
       _ => rawRatio,
     };
     final boxFit = switch (effectiveAspect) {
+      // 裁剪填充：铺满 + 贴底，优先保住硬字幕；底部再留一点安全边
       PlayerAspectMode.cover => BoxFit.cover,
       PlayerAspectMode.fill => BoxFit.fill,
       PlayerAspectMode.fit ||
@@ -1609,24 +2039,45 @@ class _StableVideoSurface extends StatelessWidget {
       );
     }
 
-    // 固定逻辑分辨率再 FittedBox，旋转时减少中间花屏
-    final logicalW = forcedRatio >= 1 ? 1600.0 : 900.0;
-    final logicalH = logicalW / forcedRatio;
-    final fitted = ClipRect(
-      child: FittedBox(
-        fit: boxFit,
-        alignment: Alignment.center,
-        clipBehavior: Clip.hardEdge,
-        child: SizedBox(
-          width: logicalW,
-          height: logicalH,
-          child: player,
+    // 用真实分辨率铺面，避免固定 1600 逻辑画布被放大后发糊
+    final sz = controller.value.size;
+    final logicalW = sz.width > 1 ? sz.width : (forcedRatio >= 1 ? 1920.0 : 1080.0);
+    final logicalH = sz.height > 1 ? sz.height : (logicalW / forcedRatio);
+
+    Widget fittedFor(BoxFit fit, Alignment align) {
+      return ClipRect(
+        child: FittedBox(
+          fit: fit,
+          alignment: align,
+          clipBehavior: Clip.hardEdge,
+          child: SizedBox(
+            width: logicalW,
+            height: logicalH,
+            child: player,
+          ),
         ),
-      ),
+      );
+    }
+
+    if (effectiveAspect == PlayerAspectMode.cover) {
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          // 硬字幕常贴片源底边；留出安全边避免贴齐屏幕被裁切
+          final guard = (constraints.maxHeight * 0.05).clamp(10.0, 36.0);
+          return Padding(
+            padding: EdgeInsets.only(bottom: guard),
+            child: fittedFor(BoxFit.cover, Alignment.bottomCenter),
+          );
+        },
+      );
+    }
+
+    final fitted = fittedFor(
+      boxFit,
+      Alignment.center,
     );
 
     if (immersiveTop ||
-        effectiveAspect == PlayerAspectMode.cover ||
         effectiveAspect == PlayerAspectMode.fill ||
         effectiveAspect == PlayerAspectMode.ratio16x9 ||
         effectiveAspect == PlayerAspectMode.ratio4x3) {
@@ -1688,11 +2139,23 @@ class _ThrottledChrome extends StatefulWidget {
     this.onDanmakuSend,
     this.onNextEpisode,
     this.onEpisodes,
+    this.onSources,
     this.onAspect,
     this.onSpeed,
+    this.onQuality,
     this.aspectLabel = '适应',
     this.speedLabel = '倍速',
+    this.qualityLabel = '清晰度',
+    this.sourceLabel = '线路',
     this.denseLandscape = false,
+    this.introMs = 0,
+    this.outroMs = 0,
+    this.onMarkIntro,
+    this.onMarkOutro,
+    this.onSkip,
+    this.skipEnabled = false,
+    this.onSettings,
+    this.onCast,
   });
 
   final VideoPlayerController controller;
@@ -1711,11 +2174,23 @@ class _ThrottledChrome extends StatefulWidget {
   final VoidCallback? onDanmakuSend;
   final VoidCallback? onNextEpisode;
   final void Function(BuildContext anchor)? onEpisodes;
+  final void Function(BuildContext anchor)? onSources;
   final void Function(BuildContext anchor)? onAspect;
   final void Function(BuildContext anchor)? onSpeed;
+  final void Function(BuildContext anchor)? onQuality;
   final String aspectLabel;
   final String speedLabel;
+  final String qualityLabel;
+  final String sourceLabel;
   final bool denseLandscape;
+  final int introMs;
+  final int outroMs;
+  final VoidCallback? onMarkIntro;
+  final VoidCallback? onMarkOutro;
+  final VoidCallback? onSkip;
+  final bool skipEnabled;
+  final VoidCallback? onSettings;
+  final VoidCallback? onCast;
 
   @override
   State<_ThrottledChrome> createState() => _ThrottledChromeState();
@@ -1732,18 +2207,39 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
   DateTime? _stallSince;
   Size? _lastMqSize;
   DateTime? _layoutQuietUntil;
+  /// 拖动/seek 目标：进度条与时间先锁在这里，等解码追上再放开
+  Duration? _uiSeekPos;
 
-  static const _stallNeedMs = 1100;
+  static const _stallNeedMs = 2200;
 
   bool get _inLayoutQuiet {
     final until = _layoutQuietUntil;
     return until != null && DateTime.now().isBefore(until);
   }
 
+  void _clearStallFlags() {
+    _stallSince = null;
+    _stallTimer?.cancel();
+    _stallTimer = null;
+    if (_showBufferSpinner || _seekLoading) {
+      _showBufferSpinner = false;
+      _seekLoading = false;
+    }
+  }
+
   bool get _showLoadingHud {
     if (!widget.ready) return true;
     if (_inLayoutQuiet) return false;
     if (_draggingProgress) return false;
+    final v = widget.controller.value;
+    // 已在播且画面在走：绝不挡画面（Exo 常误报 isBuffering）
+    if (v.isPlaying) {
+      final pos = v.position.inMilliseconds;
+      if (!v.isBuffering) return false;
+      if (_lastPosMs >= 0 && pos > _lastPosMs) return false;
+      // 仅真正卡住才转圈
+      return _showBufferSpinner;
+    }
     if (_seekLoading) return true;
     if (_showBufferSpinner) return true;
     return false;
@@ -1769,10 +2265,11 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
   void initState() {
     super.initState();
     widget.controller.addListener(_onController);
-    _uiTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+    _uiTimer = Timer.periodic(const Duration(milliseconds: 250), (_) {
       if (!mounted) return;
       final v = widget.controller.value;
       _evaluateStall(v);
+      _maybeReleaseSeekLock(v);
       widget.speedTracker.setLoading(_showLoadingHud);
       widget.speedTracker.tick(v.buffered, isBuffering: _showBufferSpinner);
       _notifyLoading(_showLoadingHud);
@@ -1830,26 +2327,32 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
     }
 
     final posMs = v.position.inMilliseconds;
-    final advanced = _lastPosMs >= 0 && (posMs - _lastPosMs) >= 120;
-    if (advanced || (v.isPlaying && !v.isBuffering)) {
+    // 任意进度前进都算在播，清加载（阈值从 120ms 降到 1ms）
+    final moved = _lastPosMs >= 0 && posMs > _lastPosMs;
+
+    if (v.isPlaying && (moved || !v.isBuffering)) {
       _lastPosMs = posMs;
-      _stallSince = null;
-      _stallTimer?.cancel();
-      _stallTimer = null;
-      if (_showBufferSpinner || _seekLoading) {
-        _showBufferSpinner = false;
-        _seekLoading = false;
+      _clearStallFlags();
+      return;
+    }
+
+    // 播放中但进度本 tick 未动：先记时间，别立刻转圈
+    if (v.isPlaying) {
+      _stallSince ??= DateTime.now();
+      final waited = DateTime.now().difference(_stallSince!).inMilliseconds;
+      if (waited < _stallNeedMs) {
+        if (_lastPosMs < 0) _lastPosMs = posMs;
+        return;
       }
+      // 长时间无进度才显示缓冲
+      if (!_showBufferSpinner) _showBufferSpinner = true;
       return;
     }
 
     _lastPosMs = posMs;
-    final maybeStuck = v.isBuffering || (!v.isPlaying && _seekLoading);
+    final maybeStuck = v.isBuffering || _seekLoading;
     if (!maybeStuck) {
-      _stallSince = null;
-      _stallTimer?.cancel();
-      _stallTimer = null;
-      if (_showBufferSpinner) _showBufferSpinner = false;
+      _clearStallFlags();
       return;
     }
 
@@ -1866,19 +2369,44 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
     _notifyLoading(_showLoadingHud);
   }
 
+  void _maybeReleaseSeekLock(VideoPlayerValue v) {
+    final lock = _uiSeekPos;
+    if (lock == null || _draggingProgress) return;
+    final diff = (v.position.inMilliseconds - lock.inMilliseconds).abs();
+    // 解码位置已贴近目标，或已在播
+    if (diff <= 900 ||
+        (v.isPlaying && diff <= 2500) ||
+        (v.isPlaying && !v.isBuffering)) {
+      _uiSeekPos = null;
+      if (_seekLoading) {
+        _seekLoading = false;
+        _showBufferSpinner = false;
+        widget.speedTracker.setLoading(false);
+      }
+    }
+  }
+
   void _onSeekStart() {
     setState(() {
       _draggingProgress = true;
       _seekLoading = false;
       _showBufferSpinner = false;
+      _uiSeekPos = widget.controller.value.position;
     });
     widget.speedTracker.setLoading(false);
     _notifyLoading(false);
     widget.onInteract();
   }
 
-  void _onSeekEnd() {
+  void _onSeekPreview(Duration d) {
+    if (!_draggingProgress) return;
+    setState(() => _uiSeekPos = d);
+  }
+
+  Future<void> _commitSeek(Duration d) async {
+    final c = widget.controller;
     setState(() {
+      _uiSeekPos = d;
       _draggingProgress = false;
       _seekLoading = true;
       _stallSince = DateTime.now();
@@ -1886,18 +2414,35 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
     widget.onInteract();
     widget.speedTracker.setLoading(true);
     widget.speedTracker.resetMetrics();
-    widget.speedTracker.tick(
-      widget.controller.value.buffered,
-      isBuffering: true,
-    );
-    // 拖到哪松手就播；部分机型 seek 后会停住，多次补 play
-    unawaited(_resumeAfterSeek());
+    widget.speedTracker.tick(c.value.buffered, isBuffering: true);
     _notifyLoading(true);
+    try {
+      await c.seekTo(d);
+      await c.play();
+    } catch (_) {}
+    unawaited(_resumeAfterSeek());
     _stallTimer?.cancel();
-    _stallTimer = Timer(const Duration(milliseconds: 900), () {
+    _stallTimer = Timer(const Duration(milliseconds: 1200), () {
       if (!mounted) return;
-      final v = widget.controller.value;
-      if (!v.isPlaying || v.isBuffering) {
+      final v = c.value;
+      _maybeReleaseSeekLock(v);
+      if (v.isPlaying &&
+          (v.position.inMilliseconds > 0 || !v.isBuffering)) {
+        setState(() {
+          _seekLoading = false;
+          _showBufferSpinner = false;
+          final lock = _uiSeekPos;
+          if (lock != null) {
+            final diff =
+                (v.position.inMilliseconds - lock.inMilliseconds).abs();
+            if (diff <= 900) _uiSeekPos = null;
+          }
+        });
+        widget.speedTracker.setLoading(false);
+        _notifyLoading(false);
+        return;
+      }
+      if (!v.isPlaying) {
         setState(() => _showBufferSpinner = true);
         _notifyLoading(true);
         unawaited(_resumeAfterSeek());
@@ -1905,11 +2450,24 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
         setState(() {
           _seekLoading = false;
           _showBufferSpinner = false;
+          final lock = _uiSeekPos;
+          if (lock != null) {
+            final diff =
+                (v.position.inMilliseconds - lock.inMilliseconds).abs();
+            if (diff <= 900) _uiSeekPos = null;
+          }
         });
         widget.speedTracker.setLoading(false);
         _notifyLoading(false);
       }
     });
+  }
+
+  void _onSeekEnd() {
+    // seek 已在 onSeek(commit) 里完成；此处仅作兜底
+    if (_draggingProgress) {
+      setState(() => _draggingProgress = false);
+    }
   }
 
   Future<void> _resumeAfterSeek() async {
@@ -1937,9 +2495,10 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
   @override
   Widget build(BuildContext context) {
     final c = widget.controller;
+    final displayPos = _uiSeekPos ?? c.value.position;
     return MangoPlayerChrome(
       playing: c.value.isPlaying,
-      position: c.value.position,
+      position: displayPos,
       duration: c.value.duration,
       buffering: !widget.ready || _showBufferSpinner,
       showLoadingHud: false,
@@ -1963,13 +2522,11 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
               widget.onInteract();
             },
       onSeek: (d) {
-        c.seekTo(d);
-        widget.onInteract();
+        unawaited(_commitSeek(d));
       },
+      onSeekPreview: _onSeekPreview,
       onSeekStart: _onSeekStart,
-      onSeekEnd: () {
-        _onSeekEnd();
-      },
+      onSeekEnd: _onSeekEnd,
       onPlayPause: () {
         if (c.value.isPlaying) {
           c.pause();
@@ -1981,11 +2538,23 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
       onFullscreen: widget.onFullscreen,
       onNextEpisode: widget.onNextEpisode,
       onEpisodes: widget.onEpisodes,
+      onSources: widget.onSources,
       onAspect: widget.onAspect,
       onSpeed: widget.onSpeed,
+      onQuality: widget.onQuality,
       aspectLabel: widget.aspectLabel,
       speedLabel: widget.speedLabel,
+      qualityLabel: widget.qualityLabel,
+      sourceLabel: widget.sourceLabel,
       denseLandscape: widget.denseLandscape,
+      introMs: widget.introMs,
+      outroMs: widget.outroMs,
+      onMarkIntro: widget.onMarkIntro,
+      onMarkOutro: widget.onMarkOutro,
+      onSkip: widget.onSkip,
+      skipEnabled: widget.skipEnabled,
+      onSettings: widget.onSettings,
+      onCast: widget.onCast,
     );
   }
 }

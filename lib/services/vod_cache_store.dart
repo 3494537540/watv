@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../player/vod_playback.dart';
+import 'local_notification_service.dart';
 
 enum VodCacheStatus { idle, queued, downloading, paused, done, failed }
 
@@ -689,6 +690,13 @@ class VodCacheStore {
       );
       _upsert(item);
       await _persist();
+      unawaited(
+        LocalNotificationService.showDownloadDone(
+          cacheId: item.id,
+          title: item.title,
+          episodeLabel: item.episodeLabel,
+        ),
+      );
       return item;
     } on _CacheCancelled {
       final paused = _pauseInsteadOfFail;
@@ -906,7 +914,10 @@ class VodCacheStore {
     }
     if (variants.isEmpty) return null;
     variants.sort((a, b) => a.bw.compareTo(b.bw));
-    // 优先 ~720P：0.8M–2.5M；否则取中位档
+    // 优先 ~1080P：1.5M–5M；否则取较高中位档，避免缓存回放太糊
+    for (final v in variants.reversed) {
+      if (v.bw >= 1500000 && v.bw <= 5000000) return v.url;
+    }
     for (final v in variants) {
       if (v.bw >= 800000 && v.bw <= 2500000) return v.url;
     }

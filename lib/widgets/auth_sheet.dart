@@ -17,7 +17,7 @@ Future<bool> showAuthSheet(
       : LoginPageMode.login;
   final result = await Navigator.of(context).push<bool>(
     AppPageRoute<bool>(
-      fullscreenDialog: true,
+      // 勿用 fullscreenDialog：会禁用 iOS 左侧边缘侧滑返回
       builder: (_) => LoginPage(initialMode: mode),
     ),
   );

@@ -53,3 +53,10 @@ app.*.map.json
 /android/.gradle/
 /android/build/
 /android/local.properties
+
+# iOS OTA / signing secrets (never commit)
+/website/install/watv.ipa
+/tool/ios-sign/
+*.p12
+*.mobileprovision
+*.esigncert

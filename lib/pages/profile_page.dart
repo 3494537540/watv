@@ -15,7 +15,6 @@ import '../services/cms_message_store.dart';
 import '../services/local_play_store.dart';
 import '../services/maccms_api.dart';
 import '../services/maccms_user_api.dart';
-import '../services/vod_cache_store.dart';
 import '../state/cms_auth_controller.dart';
 import '../state/theme_controller.dart';
 import '../theme/app_colors.dart';
@@ -27,6 +26,7 @@ import '../widgets/figma_loading.dart';
 import '../widgets/movie_poster_mosaic.dart';
 import 'cms_favs_page.dart';
 import 'cms_messages_page.dart';
+import 'membership_shop_page.dart';
 import 'movie_detail_page.dart';
 import 'settings_page.dart';
 import 'vod_cache_list_page.dart';
@@ -42,7 +42,6 @@ class ProfilePage extends StatefulWidget {
 }
 
 class _ProfilePageState extends State<ProfilePage> {
-  final _scaffoldKey = GlobalKey<ScaffoldState>();
   bool _loading = true;
   bool _refreshing = false;
   List<CmsUlogItem> _plays = const [];
@@ -50,9 +49,6 @@ class _ProfilePageState extends State<ProfilePage> {
   List<String> _favDecorCovers = const [];
   String? _listError;
   int _tab = 0;
-  int _downloadingCount = 0;
-  StreamSubscription<List<VodCacheItem>>? _cacheSub;
-  late final int _bgSeed = DateTime.now().millisecondsSinceEpoch % 90000;
 
   @override
   void initState() {
@@ -67,32 +63,17 @@ class _ProfilePageState extends State<ProfilePage> {
         if (mounted) setState(() {});
       }));
     });
-    unawaited(_bindCacheBadge());
   }
 
   @override
   void dispose() {
     CmsAuthController.instance.removeListener(_onAuth);
     CmsMessageStore.instance.removeListener(_onMessages);
-    _cacheSub?.cancel();
     super.dispose();
   }
 
   void _onMessages() {
     if (mounted) setState(() {});
-  }
-
-  Future<void> _bindCacheBadge() async {
-    await VodCacheStore.instance.ensureLoaded();
-    if (!mounted) return;
-    setState(() => _downloadingCount = VodCacheStore.instance.activeCount);
-    _cacheSub = VodCacheStore.instance.stream.listen((_) {
-      if (!mounted) return;
-      final n = VodCacheStore.instance.activeCount;
-      if (n != _downloadingCount) {
-        setState(() => _downloadingCount = n);
-      }
-    });
   }
 
   void _onAuth() {
@@ -103,10 +84,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
   Future<void> _refreshAll() async {
     if (_refreshing) return;
-    setState(() {
-      _refreshing = true;
-      if (_plays.isEmpty) _loading = true;
-    });
+    setState(() => _refreshing = true);
     try {
       unawaited(
         CmsMessageStore.instance
@@ -122,12 +100,7 @@ class _ProfilePageState extends State<ProfilePage> {
       }
       await _loadLists(showSkeleton: false);
     } finally {
-      if (mounted) {
-        setState(() {
-          _refreshing = false;
-          _loading = false;
-        });
-      }
+      if (mounted) setState(() => _refreshing = false);
     }
   }
 
@@ -447,12 +420,6 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
-  Future<void> _ensureLogin() async {
-    if (CmsAuthController.instance.isLoggedIn) return;
-    await showAuthSheet(context);
-  }
-
-  /// 仅更换头像（后台能力也只支持头像）
   Future<void> _changeAvatar() async {
     if (!CmsAuthController.instance.isLoggedIn) {
       await showAuthSheet(context);
@@ -508,8 +475,6 @@ class _ProfilePageState extends State<ProfilePage> {
     final top = MediaQuery.paddingOf(context).top;
     final auth = CmsAuthController.instance;
     final bodyBg = AppPalette.page(context);
-    final bandH = MediaQuery.sizeOf(context).height * 0.38;
-    final bgUrl = _freshLandscapeUrl(_bgSeed);
 
     return ListenableBuilder(
       listenable: Listenable.merge([auth, ThemeController.instance]),
@@ -519,298 +484,342 @@ class _ProfilePageState extends State<ProfilePage> {
         final dark = ThemeController.instance.isDark;
 
         return Scaffold(
-          key: _scaffoldKey,
           backgroundColor: bodyBg,
-          drawer: _ProfileDrawer(
-            loggedIn: loggedIn,
-            userName: loggedIn ? (user?.displayName ?? '会员') : '游客',
-            darkMode: dark,
-            onSettings: () {
-              Navigator.of(context).pop();
-              _openSettings();
-            },
-            onMessages: () {
-              Navigator.of(context).pop();
-              Navigator.of(context)
-                  .push(
-                AppPageRoute<void>(
-                  builder: (_) => const CmsMessagesPage(),
-                ),
-              )
-                  .then((_) {
-                if (mounted) setState(() {});
-              });
-            },
-            onHistory: () {
-              Navigator.of(context).pop();
-              _push(const WatchHistoryPage());
-            },
-            onFavs: () async {
-              Navigator.of(context).pop();
-              await _ensureLogin();
-              if (!mounted) return;
-              if (!CmsAuthController.instance.isLoggedIn) return;
-              _push(const CmsFavsPage());
-            },
-            onCache: () async {
-              Navigator.of(context).pop();
-              await Navigator.of(context).push(
-                AppPageRoute<void>(
-                  builder: (_) => const VodCacheListPage(),
-                ),
-              );
-              if (!mounted) return;
-              setState(
-                () => _downloadingCount = VodCacheStore.instance.activeCount,
-              );
-            },
-            onToggleTheme: () {
-              Navigator.of(context).pop();
-              _toggleTheme();
-            },
-            onLogin: () {
-              Navigator.of(context).pop();
-              showAuthSheet(context);
-            },
-          ),
           body: ColoredBox(
-          color: bodyBg,
-          child: Stack(
-            children: [
-              // 固定清新风景：底部 Shader 淡出，无硬切灰带
-              Positioned(
-                left: 0,
-                right: 0,
-                top: 0,
-                height: bandH + 28,
-                child: IgnorePointer(
-                  child: _FixedLandscape(url: bgUrl, dark: dark),
+            color: bodyBg,
+            child: AppPullRefresh(
+              color: AppColors.brand,
+              edgeOffset: top,
+              onRefresh: _refreshAll,
+              child: CustomScrollView(
+                physics: const BouncingScrollPhysics(
+                  parent: AlwaysScrollableScrollPhysics(),
                 ),
-              ),
-              AppPullRefresh(
-                color: AppColors.brand,
-                edgeOffset: top,
-                onRefresh: _refreshAll,
-                child: CustomScrollView(
-                  physics: const BouncingScrollPhysics(
-                    parent: AlwaysScrollableScrollPhysics(),
-                  ),
-                  slivers: [
-                    SliverToBoxAdapter(
-                      child: _HeroBand(
-                        topInset: top,
-                        bandH: bandH,
-                        loggedIn: loggedIn,
-                        user: user,
-                        playCount: _plays.length,
-                        refreshing: _refreshing,
-                        darkMode: dark,
-                        onLogin: () => showAuthSheet(context),
-                        onToggleTheme: _toggleTheme,
-                        onOpenMenu: () {
-                          HapticFeedback.selectionClick();
-                          _scaffoldKey.currentState?.openDrawer();
-                        },
-                        onSettings: _openSettings,
-                        onMessages: () {
-                          HapticFeedback.selectionClick();
-                          Navigator.of(context)
-                              .push(
-                            AppPageRoute<void>(
-                              builder: (_) => const CmsMessagesPage(),
-                            ),
-                          )
-                              .then((_) {
-                            if (mounted) setState(() {});
-                          });
-                        },
-                        messageBadge: CmsMessageStore.instance.unreadCount,
-                        onEditAvatar: () => unawaited(_changeAvatar()),
-                        privilegeCard: _PrivilegeCard(
-                          downloadBadge: _downloadingCount,
-                          onFavs: () async {
-                            await _ensureLogin();
-                            if (!mounted) return;
-                            if (!CmsAuthController.instance.isLoggedIn) {
-                              return;
-                            }
-                            _push(const CmsFavsPage());
-                          },
-                          onHistory: () => _push(const WatchHistoryPage()),
-                          onCache: () async {
-                            await Navigator.of(context).push(
-                              AppPageRoute<void>(
-                                builder: (_) => const VodCacheListPage(),
-                              ),
-                            );
-                            if (!mounted) return;
-                            setState(
-                              () => _downloadingCount =
-                                  VodCacheStore.instance.activeCount,
-                            );
-                          },
-                        ),
-                      ),
+                slivers: [
+                  SliverToBoxAdapter(
+                    child: _HeroBand(
+                      topInset: top,
+                      loggedIn: loggedIn,
+                      user: user,
+                      darkMode: dark,
+                      flagDays: loggedIn ? (user?.points ?? 0) : 0,
+                      onLogin: () => showAuthSheet(context),
+                      onToggleTheme: _toggleTheme,
+                      onSettings: _openSettings,
+                      onMessages: () {
+                        HapticFeedback.selectionClick();
+                        Navigator.of(context)
+                            .push(
+                          AppPageRoute<void>(
+                            builder: (_) => const CmsMessagesPage(),
+                          ),
+                        )
+                            .then((_) {
+                          if (mounted) setState(() {});
+                        });
+                      },
+                      messageBadge: CmsMessageStore.instance.unreadCount,
+                      onEditAvatar: () => unawaited(_changeAvatar()),
+                      onFavs: () async {
+                        if (!CmsAuthController.instance.isLoggedIn) {
+                          await showAuthSheet(context);
+                          if (!CmsAuthController.instance.isLoggedIn) return;
+                        }
+                        if (!mounted) return;
+                        _push(const CmsFavsPage());
+                      },
+                      onCache: () {
+                        HapticFeedback.selectionClick();
+                        _push(const VodCacheListPage());
+                      },
+                      onVip: () {
+                        HapticFeedback.selectionClick();
+                        _push(const MembershipShopPage());
+                      },
                     ),
-                    SliverToBoxAdapter(
-                      child: ColoredBox(
-                        color: bodyBg,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            if (_listError != null)
-                              Padding(
-                                padding:
-                                    const EdgeInsets.fromLTRB(20, 0, 20, 8),
-                                child: Text(
-                                  _listError!,
-                                  style: const TextStyle(
-                                    fontFamily: 'AppSans',
-                                    fontSize: 13,
-                                    color: AppColors.danger,
-                                  ),
-                                ),
-                              ),
+                  ),
+                  SliverToBoxAdapter(
+                    child: ColoredBox(
+                      color: bodyBg,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (_listError != null)
                             Padding(
                               padding:
-                                  const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                              child: _Tabs(
-                                index: _tab,
-                                historyCount: _plays.length,
-                                favCount: _favs.length,
-                                onChanged: (i) =>
-                                    setState(() => _tab = i),
+                                  const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                              child: Text(
+                                _listError!,
+                                style: const TextStyle(
+                                  fontFamily: 'AppSans',
+                                  fontSize: 13,
+                                  color: AppColors.danger,
+                                ),
                               ),
                             ),
-                            if (_loading && _plays.isEmpty && _tab == 0)
-                              const Padding(
-                                padding: EdgeInsets.fromLTRB(16, 12, 16, 0),
-                                child: _HistorySkeleton(),
-                              )
-                            else if (_tab == 0 && _plays.isEmpty)
-                              const Padding(
-                                padding: EdgeInsets.fromLTRB(16, 36, 16, 0),
-                                child: Center(
-                                  child: Text(
-                                    '暂无播放记录',
-                                    style: TextStyle(
-                                      fontFamily: 'AppSans',
-                                      fontSize: 14,
-                                      color: AppColors.textHint,
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(14, 4, 14, 0),
+                            child: _ProfileListCard(
+                              child: Column(
+                                crossAxisAlignment:
+                                    CrossAxisAlignment.stretch,
+                                children: [
+                                  Padding(
+                                    padding: const EdgeInsets.fromLTRB(
+                                      12,
+                                      10,
+                                      12,
+                                      0,
+                                    ),
+                                    child: _Tabs(
+                                      index: _tab,
+                                      historyCount: _plays.length,
+                                      favCount: _favs.length,
+                                      onChanged: (i) =>
+                                          setState(() => _tab = i),
+                                      onAllHistory: () =>
+                                          _push(const WatchHistoryPage()),
                                     ),
                                   ),
-                                ),
-                              )
-                            else if (_tab == 0)
-                              SizedBox(
-                                height: 268,
-                                child: _PlayTimeline(
-                                  items: _plays,
-                                  onOpen: _openVod,
-                                ),
-                              )
-                            else if (_tab == 1)
-                              _ProfileFavCarousel(
-                                items: _favs,
-                                decorCovers: _favDecorCovers,
-                                loggedIn: loggedIn,
-                                onLogin: () => showAuthSheet(context),
-                                onBrowse: () async {
-                                  await Navigator.of(context).push(
-                                    AppPageRoute<void>(
-                                      builder: (_) => const CmsFavsPage(),
-                                    ),
-                                  );
-                                  if (mounted) {
-                                    unawaited(
-                                      _loadLists(showSkeleton: false),
-                                    );
-                                  }
-                                },
-                              )
-                            else
-                              const SizedBox.shrink(),
-                            const SizedBox(height: 140),
-                          ],
-                        ),
+                                  if (_loading &&
+                                      _plays.isEmpty &&
+                                      _tab == 0)
+                                    const Padding(
+                                      padding: EdgeInsets.fromLTRB(
+                                        12,
+                                        12,
+                                        12,
+                                        12,
+                                      ),
+                                      child: _HistorySkeleton(),
+                                    )
+                                  else if (_tab == 0 && _plays.isEmpty)
+                                    Padding(
+                                      padding: const EdgeInsets.fromLTRB(
+                                        16,
+                                        36,
+                                        16,
+                                        28,
+                                      ),
+                                      child: Center(
+                                        child: Text(
+                                          '暂无播放记录',
+                                          style: TextStyle(
+                                            fontFamily: 'AppSans',
+                                            fontSize: 14,
+                                            color: AppPalette.textHint(
+                                              context,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    )
+                                  else if (_tab == 0)
+                                    SizedBox(
+                                      height: 268,
+                                      child: _PlayTimeline(
+                                        items: _plays,
+                                        onOpen: _openVod,
+                                      ),
+                                    )
+                                  else if (_tab == 1)
+                                    _ProfileFavCarousel(
+                                      items: _favs,
+                                      decorCovers: _favDecorCovers,
+                                      loggedIn: loggedIn,
+                                      onLogin: () => showAuthSheet(context),
+                                      onBrowse: () async {
+                                        await Navigator.of(context).push(
+                                          AppPageRoute<void>(
+                                            builder: (_) =>
+                                                const CmsFavsPage(),
+                                          ),
+                                        );
+                                        if (mounted) {
+                                          unawaited(
+                                            _loadLists(showSkeleton: false),
+                                          );
+                                        }
+                                      },
+                                      onOpen: _openVod,
+                                    )
+                                  else
+                                    const SizedBox.shrink(),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 140),
+                        ],
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
-        ),
         );
       },
     );
   }
 }
 
-String _freshLandscapeUrl(int seed) {
-  const urls = <String>[
-    'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?auto=format&fit=crop&w=1400&q=85',
-    'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?auto=format&fit=crop&w=1400&q=85',
-    'https://images.unsplash.com/photo-1469474968028-56623f02e42e?auto=format&fit=crop&w=1400&q=85',
-    'https://images.unsplash.com/photo-1470071459604-3b5ec3a7fe05?auto=format&fit=crop&w=1400&q=85',
-  ];
-  return urls[seed.abs() % urls.length];
-}
 
-/// 固定风景：清晰图 + 暗蒙层保白字 + 底部淡出（无模糊硬边）
-class _FixedLandscape extends StatelessWidget {
-  const _FixedLandscape({required this.url, required this.dark});
+class _HeroBand extends StatelessWidget {
+  const _HeroBand({
+    required this.topInset,
+    required this.loggedIn,
+    required this.user,
+    required this.darkMode,
+    required this.flagDays,
+    required this.onLogin,
+    required this.onToggleTheme,
+    required this.onSettings,
+    required this.onMessages,
+    required this.messageBadge,
+    required this.onEditAvatar,
+    required this.onFavs,
+    required this.onCache,
+    required this.onVip,
+  });
 
-  final String url;
-  final bool dark;
+  final double topInset;
+  final bool loggedIn;
+  final CmsUser? user;
+  final bool darkMode;
+  final int flagDays;
+  final VoidCallback onLogin;
+  final VoidCallback onToggleTheme;
+  final VoidCallback onSettings;
+  final VoidCallback onMessages;
+  final int messageBadge;
+  final VoidCallback onEditAvatar;
+  final VoidCallback onFavs;
+  final VoidCallback onCache;
+  final VoidCallback onVip;
 
   @override
   Widget build(BuildContext context) {
-    return ShaderMask(
-      blendMode: BlendMode.dstIn,
-      shaderCallback: (bounds) {
-        return const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            Colors.white,
-            Colors.white,
-            Color(0xB3FFFFFF),
-            Color(0x00FFFFFF),
-          ],
-          stops: [0.0, 0.58, 0.8, 1.0],
-        ).createShader(bounds);
-      },
-      child: Stack(
-        fit: StackFit.expand,
+    final u = user;
+    final name = loggedIn ? (u?.displayName ?? '会员') : '未登录';
+    final accent = AppColors.brand;
+    final ink = AppPalette.text(context);
+    final hint = AppPalette.textHint(context);
+    final cardBg = AppPalette.isDark(context)
+        ? const Color(0xFF2A2A2C)
+        : const Color(0xFFF3F4F6);
+    final subtitle = loggedIn
+        ? '在哇TV Flag 打卡第$flagDays天'
+        : '登录后开启打卡与会员权益';
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(16, topInset + 4, 12, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          ColoredBox(
-            color: dark ? const Color(0xFF1A2420) : const Color(0xFF2E4A3E),
-          ),
-          Image.network(
-            url,
-            fit: BoxFit.cover,
-            alignment: const Alignment(0, -0.2),
-            filterQuality: FilterQuality.medium,
-            errorBuilder: (_, _, _) => ColoredBox(
-              color: dark ? const Color(0xFF24352C) : const Color(0xFF3D6B55),
-            ),
-          ),
-          const DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Color(0xA6000000),
-                  Color(0x66000000),
-                  Color(0x40000000),
-                  Color(0x1A000000),
-                  Color(0x00000000),
-                ],
-                stops: [0.0, 0.3, 0.52, 0.74, 1.0],
+          Row(
+            children: [
+              const Spacer(),
+              _ProfileBellButton(
+                badge: messageBadge,
+                onPressed: onMessages,
               ),
-            ),
+              _ThemeToggleButton(
+                dark: darkMode,
+                onPressed: onToggleTheme,
+                lightOnDark: false,
+              ),
+              IconButton(
+                onPressed: onSettings,
+                icon: Icon(
+                  CupertinoIcons.gear_alt_fill,
+                  size: 22,
+                  color: ink,
+                ),
+              ),
+            ],
+          ),
+          // 图一：顶栏图标与昵称/头像之间多留间距
+          const SizedBox(height: 22),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    GestureDetector(
+                      onTap: loggedIn ? null : onLogin,
+                      child: Text(
+                        name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontFamily: 'AppSans',
+                          fontSize: 26,
+                          fontWeight: FontWeight.w900,
+                          color: ink,
+                          height: 1.15,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      subtitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily: 'AppSans',
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: hint,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              GestureDetector(
+                onTap: loggedIn ? onEditAvatar : onLogin,
+                child: SizedBox(
+                  width: 68,
+                  height: 68,
+                  child: ClipOval(child: _profileAvatar(u?.avatarUrl)),
+                ),
+              ),
+              const SizedBox(width: 4),
+            ],
+          ),
+          const SizedBox(height: 18),
+          Row(
+            children: [
+              Expanded(
+                child: _QuickEntryCard(
+                  label: '我的收藏',
+                  background: cardBg,
+                  icon: CupertinoIcons.heart_fill,
+                  accent: accent,
+                  onTap: onFavs,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: _QuickEntryCard(
+                  label: '我的缓存',
+                  background: cardBg,
+                  icon: CupertinoIcons.arrow_down_circle_fill,
+                  accent: accent,
+                  onTap: onCache,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _VipEntryCard(
+            background: cardBg,
+            accent: accent,
+            expireText: _vipExpireLabel(loggedIn, u),
+            onTap: onVip,
           ),
         ],
       ),
@@ -818,390 +827,189 @@ class _FixedLandscape extends StatelessWidget {
   }
 }
 
-class _HeroBand extends StatelessWidget {
-  const _HeroBand({
-    required this.topInset,
-    required this.bandH,
-    required this.loggedIn,
-    required this.user,
-    required this.playCount,
-    required this.refreshing,
-    required this.darkMode,
-    required this.onLogin,
-    required this.onToggleTheme,
-    required this.onOpenMenu,
-    required this.onSettings,
-    required this.onMessages,
-    required this.messageBadge,
-    required this.privilegeCard,
-    required this.onEditAvatar,
+String _vipExpireLabel(bool loggedIn, CmsUser? user) {
+  if (!loggedIn) return '点击开通';
+  final raw = (user?.endTime ?? '').trim();
+  final group = (user?.groupName ?? '').trim();
+  final looksVip = group.contains('VIP') ||
+      group.contains('vip') ||
+      (group.contains('会员') && !group.contains('游客'));
+
+  if (raw.isEmpty || raw == '0' || raw == '0000-00-00') {
+    // 有会员组但无到期字段 → 多为永久；否则就是未开通
+    return looksVip ? '永久会员' : '未开通';
+  }
+
+  final ts = int.tryParse(raw);
+  if (ts != null && ts > 1000000000) {
+    final sec = ts > 9999999999 ? ts ~/ 1000 : ts;
+    // 常见「永久」占位：远未来或 0 已排除
+    if (sec >= 4102444800) return '永久会员'; // >= 2100-01-01
+    final dt = DateTime.fromMillisecondsSinceEpoch(sec * 1000);
+    final now = DateTime.now();
+    if (dt.isBefore(now)) return '已过期';
+    return '至 ${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+  }
+
+  final m = RegExp(r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})').firstMatch(raw);
+  if (m != null) {
+    final y = int.parse(m.group(1)!);
+    final mo = int.parse(m.group(2)!);
+    final d = int.parse(m.group(3)!);
+    if (y >= 2099) return '永久会员';
+    final dt = DateTime(y, mo, d);
+    if (dt.isBefore(DateTime.now())) return '已过期';
+    return '至 ${y.toString().padLeft(4, '0')}-${mo.toString().padLeft(2, '0')}-${d.toString().padLeft(2, '0')}';
+  }
+
+  if (raw.contains('永久')) return '永久会员';
+  return looksVip ? raw : '未开通';
+}
+
+class _QuickEntryCard extends StatelessWidget {
+  const _QuickEntryCard({
+    required this.label,
+    required this.background,
+    required this.icon,
+    required this.accent,
+    required this.onTap,
   });
 
-  final double topInset;
-  final double bandH;
-  final bool loggedIn;
-  final CmsUser? user;
-  final int playCount;
-  final bool refreshing;
-  final bool darkMode;
-  final VoidCallback onLogin;
-  final VoidCallback onToggleTheme;
-  final VoidCallback onOpenMenu;
-  final VoidCallback onSettings;
-  final VoidCallback onMessages;
-  final int messageBadge;
-  final Widget privilegeCard;
-  final VoidCallback onEditAvatar;
-
-  static const _textShadow = [
-    Shadow(color: Color(0xE6000000), blurRadius: 12, offset: Offset(0, 2)),
-    Shadow(color: Color(0x80000000), blurRadius: 4, offset: Offset(0, 1)),
-  ];
+  final String label;
+  final Color background;
+  final IconData icon;
+  final Color accent;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final u = user;
-    final name = loggedIn ? (u?.displayName ?? '会员') : '未登录';
-    final group =
-        loggedIn && (u?.groupName ?? '').isNotEmpty ? u!.groupName : '游客';
-    final points = loggedIn ? '${u?.points ?? 0}' : '0';
-    final extend = loggedIn ? '${u?.extend ?? 0}' : '0';
+    final ink = AppPalette.text(context);
+    return Material(
+      color: background,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: () {
+          HapticFeedback.selectionClick();
+          onTap();
+        },
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 18, 14, 18),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontFamily: 'AppSans',
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: ink,
+                  ),
+                ),
+              ),
+              Icon(icon, size: 30, color: accent),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
 
-    // 资料区略矮于风景，白卡落在柔化过渡带上
-    const cardLift = 42.0;
+class _VipEntryCard extends StatelessWidget {
+  const _VipEntryCard({
+    required this.background,
+    required this.accent,
+    required this.expireText,
+    required this.onTap,
+  });
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        SizedBox(
-          height: bandH - cardLift,
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(14, topInset + 4, 10, 10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
+  final Color background;
+  final Color accent;
+  final String expireText;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final ink = AppPalette.text(context);
+    final hint = AppPalette.textHint(context);
+    return Material(
+      color: background,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: () {
+          HapticFeedback.selectionClick();
+          onTap();
+        },
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 18, 16, 18),
+          child: Row(
+            children: [
+              Text.rich(
+                TextSpan(
                   children: [
-                    IconButton(
-                      onPressed: onOpenMenu,
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(
-                        minWidth: 40,
-                        minHeight: 40,
-                      ),
-                      tooltip: '菜单',
-                      icon: const Icon(
-                        Icons.menu_rounded,
-                        size: 28,
-                        color: Colors.white,
-                        shadows: _textShadow,
+                    TextSpan(
+                      text: '我的',
+                      style: TextStyle(
+                        fontFamily: 'AppSans',
+                        fontSize: 17,
+                        fontWeight: FontWeight.w800,
+                        color: ink,
                       ),
                     ),
-                    const Spacer(),
-                    if (refreshing)
-                      const Padding(
-                        padding: EdgeInsets.only(right: 4),
-                        child: CupertinoActivityIndicator(
-                          radius: 8,
-                          color: Colors.white,
-                        ),
-                      ),
-                    IconButton(
-                      onPressed: onMessages,
-                      tooltip: '消息',
-                      icon: Badge(
-                        isLabelVisible: messageBadge > 0,
-                        label: Text(
-                          messageBadge > 99 ? '99+' : '$messageBadge',
-                          style: const TextStyle(fontSize: 9),
-                        ),
-                        child: const Icon(
-                          CupertinoIcons.bell_fill,
-                          size: 24,
-                          color: Colors.white,
-                          shadows: _textShadow,
-                        ),
-                      ),
-                    ),
-                    _ThemeToggleButton(
-                      dark: darkMode,
-                      onPressed: onToggleTheme,
-                      lightOnDark: true,
-                    ),
-                    IconButton(
-                      onPressed: onSettings,
-                      icon: const Icon(
-                        CupertinoIcons.gear_alt_fill,
-                        size: 24,
-                        color: Colors.white,
-                        shadows: _textShadow,
+                    TextSpan(
+                      text: ' VIP',
+                      style: TextStyle(
+                        fontFamily: 'ZCOOLKuaiLe',
+                        fontSize: 20,
+                        fontWeight: FontWeight.w400,
+                        color: accent,
+                        letterSpacing: 0.5,
+                        height: 1,
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 28),
-                Expanded(
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontFamily: 'AppSans',
-                                fontSize: 28,
-                                fontWeight: FontWeight.w900,
-                                color: Colors.white,
-                                height: 1.1,
-                                shadows: _textShadow,
-                              ),
-                            ),
-                            SizedBox(height: 10),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 5,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.94),
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    CupertinoIcons.star_fill,
-                                    size: 12,
-                                    color: AppColors.ember,
-                                  ),
-                                  SizedBox(width: 4),
-                                  Text(
-                                    group,
-                                    style: TextStyle(
-                                      fontFamily: 'AppSans',
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w800,
-                                      color: AppColors.ember,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const Spacer(),
-                            Row(
-                              children: [
-                                _Stat(value: points, label: '积分'),
-                                const SizedBox(width: 18),
-                                _Stat(value: extend, label: '推广'),
-                                const SizedBox(width: 18),
-                                _Stat(value: '$playCount', label: '历史'),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Column(
-                        children: [
-                          GestureDetector(
-                            onTap: loggedIn ? onEditAvatar : onLogin,
-                            child: Stack(
-                              clipBehavior: Clip.none,
-                              children: [
-                                Container(
-                                  width: 72,
-                                  height: 72,
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    border: Border.all(
-                                      color: Colors.white,
-                                      width: 2.5,
-                                    ),
-                                    boxShadow: const [
-                                      BoxShadow(
-                                        color: Color(0x66000000),
-                                        blurRadius: 12,
-                                        offset: Offset(0, 4),
-                                      ),
-                                    ],
-                                  ),
-                                  child: ClipOval(
-                                    child: _profileAvatar(u?.avatarUrl),
-                                  ),
-                                ),
-                                if (loggedIn)
-                                  Positioned(
-                                    right: -1,
-                                    bottom: -1,
-                                    child: Container(
-                                      width: 26,
-                                      height: 26,
-                                      decoration: BoxDecoration(
-                                        color: AppColors.brand,
-                                        shape: BoxShape.circle,
-                                        border: Border.all(
-                                          color: Colors.white,
-                                          width: 2,
-                                        ),
-                                        boxShadow: const [
-                                          BoxShadow(
-                                            color: Color(0x55000000),
-                                            blurRadius: 6,
-                                            offset: Offset(0, 2),
-                                          ),
-                                        ],
-                                      ),
-                                      alignment: Alignment.center,
-                                      child: Icon(
-                                        CupertinoIcons.camera_fill,
-                                        size: 13,
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          ),
-                          SizedBox(height: 8),
-                          if (!loggedIn)
-                            GestureDetector(
-                              onTap: onLogin,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 6,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: AppColors.ember,
-                                  borderRadius: BorderRadius.circular(14),
-                                ),
-                                child: const Text(
-                                  '立即登录',
-                                  style: TextStyle(
-                                    fontFamily: 'AppSans',
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w800,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                              ),
-                            )
-                          else
-                            GestureDetector(
-                              onTap: onEditAvatar,
-                              child: const Text(
-                                '更换头像',
-                                style: TextStyle(
-                                  fontFamily: 'AppSans',
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w800,
-                                  color: Colors.white,
-                                  shadows: _textShadow,
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ],
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  expireText,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.right,
+                  style: TextStyle(
+                    fontFamily: 'AppSans',
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: hint,
                   ),
                 ),
-              ],
-            ),
+              ),
+              const SizedBox(width: 10),
+              Icon(CupertinoIcons.ticket_fill, size: 28, color: accent),
+            ],
           ),
         ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(14, 0, 14, 18),
-          child: privilegeCard,
-        ),
-      ],
+      ),
     );
   }
 }
 
-class _Stat extends StatelessWidget {
-  const _Stat({required this.value, required this.label});
-  final String value;
-  final String label;
-
-  static const _shadow = [
-    Shadow(color: Color(0x99000000), blurRadius: 6, offset: Offset(0, 1)),
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.baseline,
-      textBaseline: TextBaseline.alphabetic,
-      children: [
-        Text(
-          value,
-          style: const TextStyle(
-            fontFamily: 'AppSans',
-            fontSize: 18,
-            fontWeight: FontWeight.w900,
-            color: Colors.white,
-            shadows: _shadow,
-          ),
-        ),
-        const SizedBox(width: 3),
-        Text(
-          label,
-          style: const TextStyle(
-            fontFamily: 'AppSans',
-            fontSize: 13,
-            fontWeight: FontWeight.w700,
-            color: Colors.white,
-            shadows: _shadow,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-/// 矮卡片：收藏 / 缓存 / 历史
-class _PrivilegeCard extends StatelessWidget {
-  const _PrivilegeCard({
-    required this.onFavs,
-    required this.onHistory,
-    required this.onCache,
-    this.downloadBadge = 0,
-  });
-
-  final VoidCallback onFavs;
-  final VoidCallback onHistory;
-  final VoidCallback onCache;
-  final int downloadBadge;
-
-  static const _iconColor = Color(0xFF1A1A1A);
+/// 播放历史 / 收藏列表外层卡片
+class _ProfileListCard extends StatelessWidget {
+  const _ProfileListCard({required this.child});
+  final Widget child;
 
   @override
   Widget build(BuildContext context) {
     final dark = AppPalette.isDark(context);
-    final card = dark ? const Color(0xFF2A2A2C) : Colors.white;
-    final labelColor = dark ? const Color(0xFFF5F5F5) : const Color(0xFF1A1A1A);
-    final iconColor = dark ? const Color(0xFFF2F2F2) : _iconColor;
-
-    final items = <({IconData icon, String label, VoidCallback tap, int badge})>[
-      (icon: CupertinoIcons.heart_fill, label: '收藏', tap: onFavs, badge: 0),
-      (
-        icon: CupertinoIcons.arrow_down_circle_fill,
-        label: '缓存',
-        tap: onCache,
-        badge: downloadBadge,
-      ),
-      (icon: CupertinoIcons.clock_fill, label: '历史', tap: onHistory, badge: 0),
-    ];
-
     return Container(
       decoration: BoxDecoration(
-        color: card,
-        borderRadius: BorderRadius.circular(14),
+        color: dark ? const Color(0xFF2A2A2C) : Colors.white,
+        borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
             color: dark ? const Color(0x33000000) : const Color(0x0F000000),
@@ -1210,77 +1018,125 @@ class _PrivilegeCard extends StatelessWidget {
           ),
         ],
       ),
-      padding: const EdgeInsets.fromLTRB(6, 14, 6, 12),
-      child: Row(
+      clipBehavior: Clip.antiAlias,
+      child: child,
+    );
+  }
+}
+
+/// 未读时左右摇铃；暗色角标用品牌青，亮色用红
+class _ProfileBellButton extends StatefulWidget {
+  const _ProfileBellButton({
+    required this.badge,
+    required this.onPressed,
+  });
+
+  final int badge;
+  final VoidCallback onPressed;
+
+  @override
+  State<_ProfileBellButton> createState() => _ProfileBellButtonState();
+}
+
+class _ProfileBellButtonState extends State<_ProfileBellButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ring;
+
+  bool get _shouldRing => widget.badge > 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _ring = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2400),
+    );
+    _syncRing();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ProfileBellButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.badge != widget.badge) _syncRing();
+  }
+
+  void _syncRing() {
+    if (_shouldRing) {
+      if (!_ring.isAnimating) _ring.repeat();
+    } else {
+      _ring
+        ..stop()
+        ..value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _ring.dispose();
+    super.dispose();
+  }
+
+  double _ringAngle(double t) {
+    if (t > 0.42) return 0;
+    final local = t / 0.42;
+    final swings = local * math.pi * 5;
+    final amp = (1.0 - local) * 0.32;
+    return math.sin(swings) * amp;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = ThemeController.instance.isDark;
+    final badgeBg = dark ? AppColors.brand : const Color(0xFFFF3B30);
+    final iconColor = AppPalette.text(context);
+
+    return IconButton(
+      onPressed: widget.onPressed,
+      tooltip: '消息',
+      icon: Stack(
+        clipBehavior: Clip.none,
         children: [
-          for (final e in items)
-            Expanded(
-              child: GestureDetector(
-                onTap: () {
-                  HapticFeedback.selectionClick();
-                  e.tap();
-                },
-                behavior: HitTestBehavior.opaque,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    SizedBox(
-                      height: 40,
-                      child: Stack(
-                        clipBehavior: Clip.none,
-                        alignment: Alignment.center,
-                        children: [
-                          Icon(e.icon, size: 30, color: iconColor),
-                          if (e.badge > 0)
-                            Positioned(
-                              right: -10,
-                              top: 0,
-                              child: Container(
-                                constraints: const BoxConstraints(
-                                  minWidth: 16,
-                                  minHeight: 16,
-                                ),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 4,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFFF3B30),
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(
-                                    color: card,
-                                    width: 1.5,
-                                  ),
-                                ),
-                                alignment: Alignment.center,
-                                child: Text(
-                                  e.badge > 99 ? '99+' : '${e.badge}',
-                                  style: const TextStyle(
-                                    fontFamily: 'AppSans',
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w800,
-                                    color: Colors.white,
-                                    height: 1,
-                                  ),
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      e.label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontFamily: 'AppSans',
-                        fontSize: 13,
-                        fontWeight: FontWeight.w800,
-                        color: labelColor,
-                        decoration: TextDecoration.none,
-                      ),
-                    ),
-                  ],
+          AnimatedBuilder(
+            animation: _ring,
+            builder: (context, child) {
+              return Transform.rotate(
+                angle: _ringAngle(_ring.value),
+                alignment: const Alignment(0, -0.6),
+                child: child,
+              );
+            },
+            child: Icon(
+              CupertinoIcons.bell_fill,
+              size: 24,
+              color: iconColor,
+            ),
+          ),
+          if (widget.badge > 0)
+            Positioned(
+              right: -4,
+              top: -3,
+              child: Container(
+                constraints: const BoxConstraints(minWidth: 16),
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                decoration: BoxDecoration(
+                  color: badgeBg,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: AppPalette.page(context),
+                    width: 1.2,
+                  ),
+                ),
+                child: Text(
+                  widget.badge > 99 ? '99+' : '${widget.badge}',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontFamily: 'AppSans',
+                    fontSize: 9,
+                    fontWeight: FontWeight.w800,
+                    color: Colors.white,
+                    height: 1.1,
+                    decoration: TextDecoration.none,
+                  ),
                 ),
               ),
             ),
@@ -1320,12 +1176,14 @@ class _Tabs extends StatelessWidget {
     required this.historyCount,
     required this.favCount,
     required this.onChanged,
+    this.onAllHistory,
   });
 
   final int index;
   final int historyCount;
   final int favCount;
   final ValueChanged<int> onChanged;
+  final VoidCallback? onAllHistory;
 
   @override
   Widget build(BuildContext context) {
@@ -1339,10 +1197,13 @@ class _Tabs extends StatelessWidget {
         behavior: HitTestBehavior.opaque,
         child: Padding(
           padding: const EdgeInsets.only(right: 20, top: 2, bottom: 8),
-          child: Column(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   Text(
                     label,
@@ -1355,28 +1216,31 @@ class _Tabs extends StatelessWidget {
                           : AppPalette.textHint(context),
                     ),
                   ),
-                  if (count > 0) ...[
-                    SizedBox(width: 4),
-                    Text(
-                      '$count',
-                      style: TextStyle(
-                        fontFamily: 'AppSans',
-                        fontSize: 12,
-                        color: AppPalette.textHint(context),
-                      ),
+                  const SizedBox(height: 6),
+                  Container(
+                    width: 20,
+                    height: 3,
+                    decoration: BoxDecoration(
+                      color: on ? AppColors.ember : Colors.transparent,
+                      borderRadius: BorderRadius.circular(2),
                     ),
-                  ],
+                  ),
                 ],
               ),
-              SizedBox(height: 6),
-              Container(
-                width: 20,
-                height: 3,
-                decoration: BoxDecoration(
-                  color: on ? AppColors.ember : Colors.transparent,
-                  borderRadius: BorderRadius.circular(2),
+              if (count > 0) ...[
+                const SizedBox(width: 4),
+                Padding(
+                  padding: EdgeInsets.only(top: on ? 4 : 3),
+                  child: Text(
+                    '$count',
+                    style: TextStyle(
+                      fontFamily: 'AppSans',
+                      fontSize: 12,
+                      color: AppPalette.textHint(context),
+                    ),
+                  ),
                 ),
-              ),
+              ],
             ],
           ),
         ),
@@ -1387,6 +1251,37 @@ class _Tabs extends StatelessWidget {
       children: [
         item('播放历史', 0, historyCount),
         item('收藏', 1, favCount),
+        const Spacer(),
+        if (index == 0 && onAllHistory != null)
+          GestureDetector(
+            onTap: () {
+              HapticFeedback.selectionClick();
+              onAllHistory!();
+            },
+            behavior: HitTestBehavior.opaque,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 2, bottom: 8, left: 8),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '全部历史',
+                    style: TextStyle(
+                      fontFamily: 'AppSans',
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppPalette.textHint(context),
+                    ),
+                  ),
+                  Icon(
+                    CupertinoIcons.chevron_right,
+                    size: 14,
+                    color: AppPalette.textHint(context),
+                  ),
+                ],
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -1845,122 +1740,7 @@ class _AvatarPh extends StatelessWidget {
   }
 }
 
-class _ProfileDrawer extends StatelessWidget {
-  const _ProfileDrawer({
-    required this.loggedIn,
-    required this.userName,
-    required this.darkMode,
-    required this.onSettings,
-    required this.onMessages,
-    required this.onHistory,
-    required this.onFavs,
-    required this.onCache,
-    required this.onToggleTheme,
-    required this.onLogin,
-  });
-
-  final bool loggedIn;
-  final String userName;
-  final bool darkMode;
-  final VoidCallback onSettings;
-  final VoidCallback onMessages;
-  final VoidCallback onHistory;
-  final VoidCallback onFavs;
-  final VoidCallback onCache;
-  final VoidCallback onToggleTheme;
-  final VoidCallback onLogin;
-
-  static const _gray = Color(0xFF8E8E93);
-
-  @override
-  Widget build(BuildContext context) {
-    final top = MediaQuery.paddingOf(context).top;
-    return Drawer(
-      backgroundColor: Colors.white,
-      width: 280,
-      child: ListView(
-        padding: EdgeInsets.fromLTRB(8, top + 12, 8, 24),
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  userName,
-                  textAlign: TextAlign.left,
-                  style: const TextStyle(
-                    fontFamily: 'AppSans',
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                    color: Color(0xFF333333),
-                  ),
-                ),
-                SizedBox(height: 4),
-                Text(
-                  loggedIn ? '已登录' : '点击下方登录',
-                  style: const TextStyle(
-                    fontFamily: 'AppSans',
-                    fontSize: 13,
-                    color: _gray,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          _drawerTile(CupertinoIcons.gear_alt, '设置', onSettings),
-          _drawerTile(CupertinoIcons.bell, '消息', onMessages),
-          _drawerTile(CupertinoIcons.time, '播放历史', onHistory),
-          _drawerTile(CupertinoIcons.heart, '我的收藏', onFavs),
-          _drawerTile(CupertinoIcons.arrow_down_circle, '缓存', onCache),
-          ListTile(
-            leading: Icon(CupertinoIcons.moon, color: _gray, size: 22),
-            title: Text(
-              '深色模式',
-              style: TextStyle(
-                fontFamily: 'AppSans',
-                fontSize: 15,
-                color: _gray,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            trailing: CupertinoSwitch(
-              value: darkMode,
-              activeTrackColor: AppColors.brand,
-              onChanged: (_) => onToggleTheme(),
-            ),
-            onTap: onToggleTheme,
-          ),
-          const Divider(height: 24),
-          _drawerTile(
-            loggedIn ? CupertinoIcons.person : CupertinoIcons.person_add,
-            loggedIn ? '账号设置' : '登录 / 注册',
-            loggedIn ? onSettings : onLogin,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _drawerTile(IconData icon, String label, VoidCallback onTap) {
-    return ListTile(
-      leading: Icon(icon, color: _gray, size: 22),
-      title: Text(
-        label,
-        textAlign: TextAlign.left,
-        style: const TextStyle(
-          fontFamily: 'AppSans',
-          fontSize: 15,
-          color: _gray,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-      onTap: onTap,
-    );
-  }
-}
-
-/// 我的页 · 收藏 Tab：只展示叠放海报轮播
+/// 我的页 · 收藏 Tab：叠放海报（1/2/3 按量，多则轮播）
 class _ProfileFavCarousel extends StatelessWidget {
   const _ProfileFavCarousel({
     required this.items,
@@ -1968,6 +1748,7 @@ class _ProfileFavCarousel extends StatelessWidget {
     required this.loggedIn,
     required this.onLogin,
     required this.onBrowse,
+    required this.onOpen,
   });
 
   final List<CmsUlogItem> items;
@@ -1975,24 +1756,43 @@ class _ProfileFavCarousel extends StatelessWidget {
   final bool loggedIn;
   final VoidCallback onLogin;
   final VoidCallback onBrowse;
+  final ValueChanged<CmsUlogItem> onOpen;
 
   @override
   Widget build(BuildContext context) {
-    final covers = [
+    final stackItems = [
       for (final e in items)
-        if (e.pic.trim().isNotEmpty) e.pic.trim(),
+        FavStackItem(
+          id: e.vodId,
+          name: e.name,
+          pic: e.pic,
+        ),
     ];
     final empty = items.isEmpty;
-    final pages = favCarouselPages(covers.isNotEmpty ? covers : decorCovers);
 
     return FavCollectionCarousel(
-      pages: pages,
+      items: stackItems,
+      decorCovers: decorCovers,
+      onOpen: empty
+          ? null
+          : (it) {
+              for (final e in items) {
+                if (e.vodId == it.id) {
+                  onOpen(e);
+                  return;
+                }
+              }
+            },
       title: empty
           ? (loggedIn ? '从收藏开始' : '登录后开启收藏')
           : '我的收藏',
       subtitle: empty
-          ? '左右滑动切换海报，把喜欢的影视收进来'
-          : '左右滑动切换，点下方查看全部',
+          ? '把喜欢的影视收进来，随时继续追'
+          : (items.length == 1
+              ? '点击海报直接播放'
+              : items.length <= 3
+                  ? '点中间播放 · 点侧卡展开'
+                  : '左右滑动换页 · 点中间播放 · 点侧卡展开'),
       ctaLabel: !loggedIn
           ? '去登录'
           : (empty ? '去发现好片' : '查看全部收藏'),
@@ -2004,7 +1804,7 @@ class _ProfileFavCarousel extends StatelessWidget {
                   Navigator.of(context).popUntil((r) => r.isFirst);
                 }
               : onBrowse),
-      height: empty ? 360 : 320,
+      height: empty ? 360 : 340,
       compact: false,
     );
   }

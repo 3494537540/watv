@@ -25,6 +25,7 @@ import 'movie_detail_page.dart';
 import 'movie_search_page.dart';
 import 'redeem_page.dart';
 import 'vertical_short_feed_page.dart';
+import 'vod_filter_page.dart';
 import 'watch_history_page.dart';
 import '../widgets/app_page_route.dart';
 
@@ -77,13 +78,14 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   List<Movie> _heroMovies = const [];
   List<Movie> _hotMovies = const [];
   List<Movie> _genreMovies = const [];
-  bool _bannerLoading = true;
   bool _genreLoading = true;
   /// false=列表 true=宫格
   bool _hotGridMode = true;
   String? _bannerError;
   int _inboxBadge = 0;
   List<String> _hotHints = const [];
+  /// 列表点播：在首页预拉详情时的片源 id
+  String? _openingMovieId;
 
   /// Tab → 热门缓存；Tab+filter → 类型列表缓存
   final Map<int, List<Movie>> _hotByTab = {};
@@ -120,7 +122,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
-  /// 先读磁盘缓存秒开，再后台刷新
+  /// 先读磁盘缓存秒开，再后台刷新（列表骨架，不弹窗）
   Future<void> _bootstrapFast() async {
     unawaited(_loadContinueWatch());
     unawaited(_refreshInboxBadge());
@@ -134,7 +136,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _heroMovies = cached.take(6).toList();
         _genreMovies = cached.take(18).toList();
         _hotHints = [for (final m in cached.take(12)) m.title];
-        _bannerLoading = false;
         _genreLoading = false;
         _bannerError = null;
       });
@@ -258,10 +259,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   void _onHomeScroll() {
     if (!mounted) return;
-    // 拉长过渡距离 + 缓动，避免顶栏生硬跳白
-    final raw = ((_scroll.offset - 8) / 160).clamp(0.0, 1.0);
-    final next = Curves.easeOutCubic.transform(raw);
-    if ((next - _chromeLight).abs() < 0.008) return;
+    // 更长过渡 + 缓动，顶栏沉浸→白底更顺滑
+    final raw = ((_scroll.offset - 4) / 220).clamp(0.0, 1.0);
+    final next = Curves.easeInOutCubic.transform(raw);
+    if ((next - _chromeLight).abs() < 0.006) return;
     _safeSetState(() => _chromeLight = next);
   }
 
@@ -320,7 +321,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _hotMovies = cached;
         _heroMovies = cached.take(6).toList();
         _bannerPage = 0;
-        _bannerLoading = false;
         _bannerError = cached.isEmpty ? '暂无热门数据' : null;
         _selectedFilter = ApiConfig.macCmsQuickFiltersFor(tab).first;
       });
@@ -333,10 +333,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final hasWarm = _hotMovies.isNotEmpty || _heroMovies.isNotEmpty;
     if (!hasWarm) {
       setState(() {
-        _bannerLoading = true;
         _bannerError = null;
         _selectedFilter = ApiConfig.macCmsQuickFiltersFor(tab).first;
         _genreMovies = const [];
+        _genreLoading = true;
       });
     } else {
       setState(() {
@@ -355,7 +355,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _heroMovies = list.take(6).toList();
         _hotHints = [for (final m in list.take(12)) m.title];
         _bannerPage = 0;
-        _bannerLoading = false;
         _bannerError = list.isEmpty ? '暂无热门数据' : null;
       });
       _precacheCovers(list.take(8));
@@ -364,11 +363,9 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (!mounted || seq != _hotLoadSeq) return;
       if (_tabIndex != tabIndex) return;
       if (hasWarm) {
-        setState(() => _bannerLoading = false);
         return;
       }
       setState(() {
-        _bannerLoading = false;
         _bannerError = '$e';
         _heroMovies = [
           for (var i = 0; i < 3; i++) MovieMock.bannerMovie(i),
@@ -439,11 +436,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _safeSetState(() {
       _tabIndex = i;
       _selectedFilter = ApiConfig.macCmsQuickFiltersFor(_tabs[i]).first;
+      // 只刷列表骨架，保留轮播避免中间空一块；不弹窗加载
+      _genreLoading = true;
+      _genreMovies = const [];
+      _bannerError = null;
     });
     // 等本帧 build 结束再拉数据，避免「短剧」等 Tab 切页时 setState during build
     await Future<void>.delayed(Duration.zero);
     if (!mounted || _tabIndex != i) return;
-    await _loadHotContent();
+    await _loadHotContent(force: true);
   }
 
   Future<void> _onFilterChanged(MacCmsGenreTag tag) async {
@@ -494,7 +495,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
-  void _openDetail(BuildContext context, Movie movie) {
+  Future<void> _openDetail(BuildContext context, Movie movie) async {
     if (_isShortDramaTab) {
       final list = _displayMovies.isNotEmpty ? _displayMovies : _hotMovies;
       final idx = list.indexWhere((m) => m.id == movie.id);
@@ -511,11 +512,33 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       );
       return;
     }
-    Navigator.of(context).push(
-      AppPageRoute<void>(
-        builder: (_) => MovieDetailPage(movie: movie),
-      ),
-    );
+    if (_openingMovieId != null) return;
+    HapticFeedback.selectionClick();
+    setState(() => _openingMovieId = movie.id);
+
+    Movie ready = movie;
+    try {
+      final id = movie.id.trim();
+      final hasPlay = movie.playSources.isNotEmpty ||
+          movie.playEpisodes.isNotEmpty ||
+          movie.playUrlAt(0) != null;
+      if (!hasPlay && id.isNotEmpty && !id.startsWith('m')) {
+        ready = await _cms.fetchDetail(id);
+      }
+      if (!mounted) return;
+      await Navigator.of(this.context).push(
+        AppPageRoute<void>(
+          builder: (_) => MovieDetailPage(movie: ready, forceWatch: true),
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(this.context).showSnackBar(
+        const SnackBar(content: Text('加载失败，请稍后重试')),
+      );
+    } finally {
+      if (mounted) setState(() => _openingMovieId = null);
+    }
   }
 
   void _openSearch(BuildContext context) {
@@ -523,6 +546,15 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     Navigator.of(context).push(
       AppPageRoute<void>(
         builder: (_) => const MovieSearchPage(),
+      ),
+    );
+  }
+
+  void _openFilterPage() {
+    HapticFeedback.selectionClick();
+    Navigator.of(context).push(
+      AppPageRoute<void>(
+        builder: (_) => const VodFilterPage(),
       ),
     );
   }
@@ -647,7 +679,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final stickyH = HomeImmersiveHeader.stickyChromeHeight(context);
-    final headerH = HomeImmersiveHeader.heightOf(context);
     final light = _chromeLight > 0.72;
 
     return AnnotatedRegion<SystemUiOverlayStyle>(
@@ -662,30 +693,23 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         systemNavigationBarContrastEnforced: false,
       ),
       child: ColoredBox(
-        color: const Color(0xFFF5F6F8),
+        color: AppPalette.page(context),
         child: Stack(
           children: [
-            // 轮播钉住：下滑不露灰底空区，白底内容盖上去
+            // 固定海报：下滑时图不动，白底盖上来；暗底避免透白
             Positioned(
               left: 0,
               right: 0,
               top: 0,
-              height: headerH,
-              child: HomePinnedBannerLayer(
-                movies: _heroMovies,
-                page: _bannerPage,
-              ),
-            ),
-            if (_bannerLoading && _heroMovies.isEmpty)
-              Positioned(
-                left: 0,
-                right: 0,
-                top: 0,
-                height: headerH,
-                child: const IgnorePointer(
-                  child: HomeBannerMetaballLoading(),
+              height: HomeImmersiveHeader.heightOf(context),
+              child: ColoredBox(
+                color: const Color(0xFF1C1C1E),
+                child: HomePinnedBannerLayer(
+                  movies: _heroMovies,
+                  page: _bannerPage,
                 ),
               ),
+            ),
             AppPullRefresh(
               color: AppColors.brand,
               edgeOffset: stickyH,
@@ -743,7 +767,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     ),
                   SliverToBoxAdapter(
                     child: ColoredBox(
-                      color: Colors.white,
+                      color: AppPalette.page(context),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
@@ -771,7 +795,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                           if (_genreLoading)
                             const TourTarget(
                               id: 'tour_feed',
-                              child: HomeListSkeleton(),
+                              child: HomeListSkeleton(showMetaball: false),
                             )
                           else if (_displayMovies.isEmpty)
                             const TourTarget(
@@ -793,7 +817,6 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                             Stack(
                               children: [
                                 _buildMovieGrid(_displayMovies),
-                                // 只高亮列表顶部一块，避免整页挖孔过大
                                 const Positioned(
                                   left: 14,
                                   right: 14,
@@ -827,6 +850,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 lightProgress: _chromeLight,
                 onTabChanged: _onTabChanged,
                 onSearchTap: () => _openSearch(context),
+                onFilterTap: _openFilterPage,
                 onRankTap: _openRank,
                 onHistoryTap: _openHistory,
                 onInboxTap: _openInbox,
@@ -840,6 +864,35 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 bottomInset: 128,
                 onTap: () => unawaited(_openContinueWatch()),
                 onDismissed: () => unawaited(_dismissContinueWatch()),
+              ),
+            if (_openingMovieId != null)
+              Positioned.fill(
+                child: AbsorbPointer(
+                  child: ColoredBox(
+                    color: const Color(0x33000000),
+                    child: Center(
+                      child: Container(
+                        width: 72,
+                        height: 72,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(16),
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Color(0x22000000),
+                              blurRadius: 16,
+                              offset: Offset(0, 6),
+                            ),
+                          ],
+                        ),
+                        child: CupertinoActivityIndicator(
+                          color: AppColors.brand,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               ),
           ],
         ),
@@ -859,7 +912,7 @@ class _SectionAllPage extends StatelessWidget {
     final top = MediaQuery.paddingOf(context).top;
 
     return ColoredBox(
-      color: AppColors.white,
+      color: AppPalette.page(context),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [

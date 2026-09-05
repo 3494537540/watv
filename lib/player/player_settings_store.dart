@@ -29,7 +29,7 @@ extension PlayerAspectModeX on PlayerAspectMode {
 /// 播放器综合偏好（全局）
 class PlayerSettingsPrefs {
   const PlayerSettingsPrefs({
-    this.aspect = PlayerAspectMode.cover,
+    this.aspect = PlayerAspectMode.fit,
     this.holdBoostEnabled = true,
     this.holdBoostRate = 2.0,
     this.autoPlayNext = true,
@@ -41,6 +41,7 @@ class PlayerSettingsPrefs {
     this.keepScreenOn = true,
     this.doubleTapSeek = true,
     this.chromeAutoHideSec = 4,
+    this.autoSourceFailover = false,
   });
 
   final PlayerAspectMode aspect;
@@ -55,6 +56,8 @@ class PlayerSettingsPrefs {
   final bool keepScreenOn;
   final bool doubleTapSeek;
   final int chromeAutoHideSec;
+  /// 卡顿/失败时自动切换播放线路（默认关）
+  final bool autoSourceFailover;
 
   PlayerSettingsPrefs copyWith({
     PlayerAspectMode? aspect,
@@ -69,6 +72,7 @@ class PlayerSettingsPrefs {
     bool? keepScreenOn,
     bool? doubleTapSeek,
     int? chromeAutoHideSec,
+    bool? autoSourceFailover,
   }) {
     return PlayerSettingsPrefs(
       aspect: aspect ?? this.aspect,
@@ -83,6 +87,7 @@ class PlayerSettingsPrefs {
       keepScreenOn: keepScreenOn ?? this.keepScreenOn,
       doubleTapSeek: doubleTapSeek ?? this.doubleTapSeek,
       chromeAutoHideSec: chromeAutoHideSec ?? this.chromeAutoHideSec,
+      autoSourceFailover: autoSourceFailover ?? this.autoSourceFailover,
     );
   }
 
@@ -99,13 +104,14 @@ class PlayerSettingsPrefs {
         'keep_on': keepScreenOn,
         'double_tap': doubleTapSeek,
         'chrome_hide': chromeAutoHideSec,
+        'auto_source': autoSourceFailover,
       };
 
   factory PlayerSettingsPrefs.fromJson(Map<String, dynamic> json) {
-    final aspectName = '${json['aspect'] ?? 'cover'}';
+    final aspectName = '${json['aspect'] ?? 'fit'}';
     final aspect = PlayerAspectMode.values.firstWhere(
       (e) => e.name == aspectName,
-      orElse: () => PlayerAspectMode.cover,
+      orElse: () => PlayerAspectMode.fit,
     );
     return PlayerSettingsPrefs(
       aspect: aspect,
@@ -122,6 +128,7 @@ class PlayerSettingsPrefs {
       doubleTapSeek: json['double_tap'] != false,
       chromeAutoHideSec:
           ((json['chrome_hide'] as num?)?.toInt() ?? 4).clamp(2, 12),
+      autoSourceFailover: json['auto_source'] == true,
     );
   }
 }

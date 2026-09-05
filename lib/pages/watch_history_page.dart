@@ -8,6 +8,7 @@ import '../services/local_play_store.dart';
 import '../services/maccms_api.dart';
 import '../services/maccms_user_api.dart';
 import '../state/cms_auth_controller.dart';
+import '../theme/app_colors.dart';
 import '../widgets/app_pull_refresh.dart';
 import '../widgets/cms_cover_image.dart';
 import '../widgets/dialogx/dialogx.dart';
@@ -29,7 +30,6 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
   static const _chipOff = Color(0xFFF4F4F4);
   static const _ink = Color(0xFF18191C);
   static const _muted = Color(0xFF9499A0);
-  static const _page = Color(0xFFFFFFFF);
 
   static const _cats = [
     '全部',
@@ -314,7 +314,7 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
     final groups = _grouped(filtered);
 
     return Scaffold(
-      backgroundColor: _page,
+      backgroundColor: AppPalette.page(context),
       body: SafeArea(
         bottom: false,
         child: Column(
@@ -503,9 +503,9 @@ class _WatchHistoryPageState extends State<WatchHistoryPage> {
         16,
         10 + MediaQuery.paddingOf(context).bottom,
       ),
-      decoration: const BoxDecoration(
-        color: _page,
-        border: Border(top: BorderSide(color: Color(0xFFEEEEEE))),
+      decoration: BoxDecoration(
+        color: AppPalette.page(context),
+        border: Border(top: BorderSide(color: AppPalette.line(context))),
       ),
       child: Row(
         children: [

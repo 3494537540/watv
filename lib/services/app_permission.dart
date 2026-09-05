@@ -215,6 +215,11 @@ abstract final class AppPermission {
       case AppPermissionKind.camera:
         return [Permission.camera];
       case AppPermissionKind.notifications:
+        // Android 13+ 才需要运行时 POST_NOTIFICATIONS；更低版本安装即有通知能力
+        if (Platform.isAndroid) {
+          final sdk = await _androidSdk();
+          if (sdk > 0 && sdk < 33) return const [];
+        }
         return [Permission.notification];
       case AppPermissionKind.installPackages:
         if (Platform.isAndroid) return [Permission.requestInstallPackages];

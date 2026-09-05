@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -97,6 +99,98 @@ Future<PlayerAspectMode?> showChromeAspectMenu(
           value: m,
           label: m.label,
           selected: m == current,
+        ),
+    ],
+  );
+}
+
+/// 清晰度：锚点小菜单（有多档才列档位；单档提示换线路）
+Future<Object?> showChromeQualityMenu(
+  BuildContext anchor, {
+  required VodQualityTier prefer,
+  required List<VodHlsVariant> variants,
+  VodHlsVariant? current,
+  List<String> sourceNames = const [],
+  int sourceIndex = 0,
+}) {
+  HapticFeedback.selectionClick();
+  final items = <PopupMenuEntry<Object>>[];
+  final multi = variants.length > 1;
+
+  if (multi) {
+    items.add(
+      _item<Object>(
+        value: VodQualityTier.auto,
+        label: VodQualityTier.auto.label,
+        selected: prefer == VodQualityTier.auto,
+      ),
+    );
+    for (final v in [...variants].reversed) {
+      items.add(
+        _item<Object>(
+          value: v,
+          label: v.label,
+          selected: current?.url == v.url && prefer != VodQualityTier.auto,
+        ),
+      );
+    }
+  } else {
+    final sole = current ?? (variants.isNotEmpty ? variants.first : null);
+    final label = sole?.shortLabel ?? '原画';
+    items.add(
+      _item<Object>(
+        value: '_sole',
+        label: '$label（当前线路）',
+        selected: true,
+      ),
+    );
+    if (sourceNames.length > 1) {
+      items.add(const PopupMenuDivider(height: 8));
+      for (var i = 0; i < sourceNames.length; i++) {
+        final name = sourceNames[i].trim().isEmpty ? '线路${i + 1}' : sourceNames[i];
+        items.add(
+          _item<Object>(
+            value: '_src:$i',
+            label: name,
+            selected: i == sourceIndex,
+          ),
+        );
+      }
+    }
+  }
+
+  return showMenu<Object>(
+    context: anchor,
+    position: _anchorRect(anchor),
+    color: _menuBg,
+    elevation: 8,
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+    items: items,
+  );
+}
+
+/// 线路：锚点小菜单（与倍速/清晰度同风格）
+Future<int?> showChromeSourceMenu(
+  BuildContext anchor, {
+  required List<String> names,
+  required int selected,
+  List<String> probeUrls = const [],
+}) {
+  HapticFeedback.selectionClick();
+  if (names.isEmpty) return Future.value(null);
+  // probeUrls 留给侧栏测速页；此处保持秒开
+  return showMenu<int>(
+    context: anchor,
+    position: _anchorRect(anchor),
+    color: _menuBg,
+    elevation: 8,
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+    items: [
+      for (var i = 0; i < names.length; i++)
+        _item<int>(
+          value: i,
+          label: names[i].trim().isEmpty ? '线路${i + 1}' : names[i].trim(),
+          selected: i == selected,
         ),
     ],
   );

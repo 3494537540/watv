@@ -12,6 +12,7 @@ import '../services/maccms_api.dart';
 import '../services/vod_cache_store.dart';
 import '../widgets/cms_cover_image.dart';
 import '../widgets/dialogx/dialogx.dart';
+import '../widgets/ios_edge_back.dart';
 import '../widgets/player/mango_inline_player.dart';
 import '../widgets/player/mango_player_chrome.dart';
 import 'vod_download_page.dart';
@@ -610,11 +611,8 @@ class _CachedLocalPlayerPageState extends State<_CachedLocalPlayerPage> {
     final top = MediaQuery.paddingOf(context).top;
     final e = _cur;
 
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _exit();
-      },
+    return InterceptPopScope(
+      onIntercept: _exit,
       child: Scaffold(
         backgroundColor: Colors.black,
         body: MangoInlinePlayer(

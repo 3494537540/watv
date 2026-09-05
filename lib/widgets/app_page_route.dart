@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 import '../state/theme_controller.dart';
 
 /// 按设置切换的页面路由（替代 CupertinoPageRoute）
+///
+/// 在 Cupertino 过渡下走官方 [CupertinoRouteTransitionMixin.buildPageTransitions]，
+/// 以恢复 iOS 左侧边缘侧滑返回。
 class AppPageRoute<T> extends PageRouteBuilder<T> {
   AppPageRoute({
     required WidgetBuilder builder,
@@ -18,17 +21,46 @@ class AppPageRoute<T> extends PageRouteBuilder<T> {
           reverseTransitionDuration: ThemeController.instance.transitionDuration,
           pageBuilder: (context, animation, secondaryAnimation) =>
               builder(context),
-          transitionsBuilder: (context, animation, secondaryAnimation, child) {
-            return _buildTransition(
-              animation: animation,
-              secondaryAnimation: secondaryAnimation,
-              child: child,
-              fullscreenDialog: fullscreenDialog,
-            );
-          },
+          // 实际过渡在 [buildTransitions]；此处占位即可
+          transitionsBuilder: (context, animation, secondaryAnimation, child) =>
+              child,
         );
 
-  static Widget _buildTransition({
+  /// 与 [CupertinoPageRoute] 对齐，保证 iOS 左缘侧滑可用
+  @override
+  bool get popGestureEnabled {
+    if (fullscreenDialog) return false;
+    if (isFirst) return false;
+    if (animation?.status != AnimationStatus.completed) return false;
+    if (secondaryAnimation?.status != AnimationStatus.dismissed) return false;
+    if (navigator?.userGestureInProgress ?? false) return false;
+    // 有 PopScope(canPop:false) 时系统手势会被禁；页面侧用 IosEdgeBack 补
+    if (popDisposition == RoutePopDisposition.doNotPop) return false;
+    return ThemeController.instance.pageTransition ==
+            AppPageTransition.cupertino &&
+        ThemeController.instance.motionEnabled;
+  }
+
+  @override
+  Widget buildTransitions(
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    return _buildTransition(
+      route: this,
+      context: context,
+      animation: animation,
+      secondaryAnimation: secondaryAnimation,
+      child: child,
+      fullscreenDialog: fullscreenDialog,
+    );
+  }
+
+  static Widget _buildTransition<T>({
+    required PageRoute<T> route,
+    required BuildContext context,
     required Animation<double> animation,
     required Animation<double> secondaryAnimation,
     required Widget child,
@@ -50,11 +82,13 @@ class AppPageRoute<T> extends PageRouteBuilder<T> {
       case AppPageTransition.none:
         return child;
       case AppPageTransition.cupertino:
-        return CupertinoPageTransition(
-          primaryRouteAnimation: animation,
-          secondaryRouteAnimation: secondaryAnimation,
-          linearTransition: false,
-          child: child,
+        // 含 _CupertinoBackGestureDetector，侧滑返回与系统一致
+        return CupertinoRouteTransitionMixin.buildPageTransitions<T>(
+          route,
+          context,
+          animation,
+          secondaryAnimation,
+          child,
         );
       case AppPageTransition.fade:
         return FadeTransition(opacity: curved, child: child);
@@ -104,6 +138,8 @@ class AppPageTransitionsBuilder extends PageTransitionsBuilder {
     Widget child,
   ) {
     return AppPageRoute._buildTransition(
+      route: route,
+      context: context,
       animation: animation,
       secondaryAnimation: secondaryAnimation,
       child: child,

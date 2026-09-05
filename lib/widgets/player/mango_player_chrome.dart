@@ -10,7 +10,7 @@ import 'player_sys_status.dart';
 /// 播放器强调色：品牌青
 Color get _playerAccent => AppColors.brand;
 
-/// 圆形半透明按钮（返回 / 投屏 / 锁屏等）
+/// 播放器图标按钮：纯图标，无圆底、无描边
 class PlayerCircleButton extends StatelessWidget {
   const PlayerCircleButton({
     super.key,
@@ -27,22 +27,27 @@ class PlayerCircleButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        HapticFeedback.selectionClick();
-        onTap();
-      },
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        width: size,
-        height: size,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: const Color(0x66000000),
-          shape: BoxShape.circle,
-          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+    return Focus(
+      canRequestFocus: false,
+      descendantsAreFocusable: false,
+      child: GestureDetector(
+        onTap: () {
+          HapticFeedback.selectionClick();
+          onTap();
+        },
+        behavior: HitTestBehavior.opaque,
+        child: SizedBox(
+          width: size,
+          height: size,
+          child: Icon(
+            icon,
+            color: Colors.white,
+            size: iconSize,
+            shadows: const [
+              Shadow(color: Color(0xCC000000), blurRadius: 6),
+            ],
+          ),
         ),
-        child: Icon(icon, color: Colors.white, size: iconSize),
       ),
     );
   }
@@ -61,22 +66,27 @@ class PlayerCenterSeekButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        HapticFeedback.selectionClick();
-        onTap();
-      },
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        width: 52,
-        height: 52,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: const Color(0x55000000),
-          shape: BoxShape.circle,
-          border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+    return Focus(
+      canRequestFocus: false,
+      descendantsAreFocusable: false,
+      child: GestureDetector(
+        onTap: () {
+          HapticFeedback.selectionClick();
+          onTap();
+        },
+        behavior: HitTestBehavior.opaque,
+        child: SizedBox(
+          width: 52,
+          height: 52,
+          child: Icon(
+            icon,
+            color: Colors.white,
+            size: 28,
+            shadows: const [
+              Shadow(color: Color(0xCC000000), blurRadius: 8),
+            ],
+          ),
         ),
-        child: Icon(icon, color: Colors.white, size: 28),
       ),
     );
   }
@@ -154,27 +164,27 @@ class MangoWatchTopBar extends StatelessWidget {
     final actions = <Widget>[
       if (onSeekForward != null)
         PlayerCircleButton(
-          icon: CupertinoIcons.goforward_10,
+          icon: Icons.forward_10_rounded,
           onTap: onSeekForward!,
-          iconSize: 18,
+          iconSize: 22,
         ),
       if (onCast != null)
         PlayerCircleButton(
-          icon: CupertinoIcons.tv,
+          icon: Icons.cast_rounded,
           onTap: onCast!,
-          iconSize: 18,
+          iconSize: 20,
         ),
       if (onPip != null)
         PlayerCircleButton(
-          icon: Icons.picture_in_picture_alt_rounded,
+          icon: Icons.picture_in_picture_rounded,
           onTap: onPip!,
-          iconSize: 18,
+          iconSize: 22,
         ),
       if (onSettings != null)
         PlayerCircleButton(
-          icon: CupertinoIcons.gear,
+          icon: Icons.settings_rounded,
           onTap: onSettings!,
-          iconSize: 18,
+          iconSize: 21,
         ),
     ];
 
@@ -189,8 +199,9 @@ class MangoWatchTopBar extends StatelessWidget {
       child: Row(
         children: [
           PlayerCircleButton(
-            icon: CupertinoIcons.chevron_left,
+            icon: Icons.chevron_left_rounded,
             onTap: onBack,
+            iconSize: 26,
           ),
           const SizedBox(width: 8),
           Expanded(
@@ -286,6 +297,7 @@ class MangoPlayerChrome extends StatelessWidget {
     required this.onFullscreen,
     this.onSeekStart,
     this.onSeekEnd,
+    this.onSeekPreview,
     this.showLoadingHud = false,
     this.loadingSpeedLabel = '— KB/s',
     this.onBack,
@@ -297,11 +309,23 @@ class MangoPlayerChrome extends StatelessWidget {
     this.onDanmakuSend,
     this.onNextEpisode,
     this.onEpisodes,
+    this.onSources,
     this.onAspect,
     this.onSpeed,
+    this.onQuality,
     this.aspectLabel = '适应',
     this.speedLabel = '倍速',
+    this.qualityLabel = '清晰度',
+    this.sourceLabel = '线路',
     this.denseLandscape = false,
+    this.introMs = 0,
+    this.outroMs = 0,
+    this.onMarkIntro,
+    this.onMarkOutro,
+    this.onSkip,
+    this.skipEnabled = false,
+    this.onSettings,
+    this.onCast,
   });
 
   final bool playing;
@@ -313,6 +337,8 @@ class MangoPlayerChrome extends StatelessWidget {
   final VoidCallback onFullscreen;
   final VoidCallback? onSeekStart;
   final VoidCallback? onSeekEnd;
+  /// 拖动预览（仅更新 UI，不 seek）
+  final ValueChanged<Duration>? onSeekPreview;
   final bool showLoadingHud;
   final String loadingSpeedLabel;
   final VoidCallback? onBack;
@@ -325,11 +351,23 @@ class MangoPlayerChrome extends StatelessWidget {
   final VoidCallback? onNextEpisode;
   /// 传入按钮 context，便于弹出锚点小菜单
   final void Function(BuildContext anchor)? onEpisodes;
+  final void Function(BuildContext anchor)? onSources;
   final void Function(BuildContext anchor)? onAspect;
   final void Function(BuildContext anchor)? onSpeed;
+  final void Function(BuildContext anchor)? onQuality;
   final String aspectLabel;
   final String speedLabel;
+  final String qualityLabel;
+  final String sourceLabel;
   final bool denseLandscape;
+  final int introMs;
+  final int outroMs;
+  final VoidCallback? onMarkIntro;
+  final VoidCallback? onMarkOutro;
+  final VoidCallback? onSkip;
+  final bool skipEnabled;
+  final VoidCallback? onSettings;
+  final VoidCallback? onCast;
 
   String _fmt(Duration d) {
     final h = d.inHours;
@@ -419,7 +457,20 @@ class MangoPlayerChrome extends StatelessWidget {
         const SizedBox(width: 4),
         Text(_fmt(position), style: _timeStyle),
         const SizedBox(width: 10),
-        Expanded(child: _ProgressSlider(progress: progress, totalMs: totalMs, onSeek: onSeek, onSeekStart: onSeekStart, onSeekEnd: onSeekEnd)),
+        Expanded(
+          child: _ProgressSlider(
+            progress: progress,
+            totalMs: totalMs,
+            onSeek: onSeek,
+            onSeekPreview: onSeekPreview,
+            onSeekStart: onSeekStart,
+            onSeekEnd: onSeekEnd,
+            introMs: introMs,
+            outroMs: outroMs,
+            onMarkIntro: onMarkIntro,
+            onMarkOutro: onMarkOutro,
+          ),
+        ),
         const SizedBox(width: 10),
         Text(
           _fmt(duration),
@@ -427,6 +478,19 @@ class MangoPlayerChrome extends StatelessWidget {
         ),
         if (showDanmakuToggle && onDanmakuToggle != null)
           _DanmakuToggleButton(enabled: danmakuEnabled, onTap: onDanmakuToggle!),
+        if (onSources != null)
+          Builder(
+            builder: (ctx) => _ChromeTextButton(
+              label: sourceLabel,
+              onTap: () => onSources!(ctx),
+            ),
+          ),
+        if (onCast != null)
+          _ChromeIconButton(
+            icon: Icons.cast_rounded,
+            onTap: onCast!,
+            size: 20,
+          ),
         _ChromeIconButton(
           icon: Icons.stay_current_landscape,
           onTap: onFullscreen,
@@ -456,9 +520,14 @@ class MangoPlayerChrome extends StatelessWidget {
             progress: progress,
             totalMs: totalMs,
             onSeek: onSeek,
+            onSeekPreview: onSeekPreview,
             onSeekStart: onSeekStart,
             onSeekEnd: onSeekEnd,
             accent: true,
+            introMs: introMs,
+            outroMs: outroMs,
+            onMarkIntro: onMarkIntro,
+            onMarkOutro: onMarkOutro,
           ),
         ),
         SizedBox(
@@ -469,9 +538,16 @@ class MangoPlayerChrome extends StatelessWidget {
               if (onNextEpisode != null) ...[
                 const SizedBox(width: 2),
                 _ChromeIconButton(
-                  icon: CupertinoIcons.forward_end_alt_fill,
+                  icon: Icons.skip_next_rounded,
                   onTap: onNextEpisode!,
-                  size: 22,
+                  size: 24,
+                ),
+              ],
+              if (onSkip != null) ...[
+                const SizedBox(width: 2),
+                _ChromeTextButton(
+                  label: skipEnabled ? '跳过·开' : '跳过',
+                  onTap: onSkip!,
                 ),
               ],
               if (showDanmakuToggle && onDanmakuToggle != null) ...[
@@ -502,11 +578,25 @@ class MangoPlayerChrome extends StatelessWidget {
                     onTap: () => onEpisodes!(ctx),
                   ),
                 ),
+              if (onSources != null)
+                Builder(
+                  builder: (ctx) => _ChromeTextButton(
+                    label: sourceLabel,
+                    onTap: () => onSources!(ctx),
+                  ),
+                ),
               if (onAspect != null)
                 Builder(
                   builder: (ctx) => _ChromeTextButton(
                     label: aspectLabel,
                     onTap: () => onAspect!(ctx),
+                  ),
+                ),
+              if (onQuality != null)
+                Builder(
+                  builder: (ctx) => _ChromeTextButton(
+                    label: qualityLabel,
+                    onTap: () => onQuality!(ctx),
                   ),
                 ),
               if (onSpeed != null)
@@ -515,6 +605,18 @@ class MangoPlayerChrome extends StatelessWidget {
                     label: speedLabel,
                     onTap: () => onSpeed!(ctx),
                   ),
+                ),
+              if (onCast != null)
+                _ChromeIconButton(
+                  icon: Icons.cast_rounded,
+                  onTap: onCast!,
+                  size: 20,
+                ),
+              if (onSettings != null)
+                _ChromeIconButton(
+                  icon: Icons.settings_rounded,
+                  onTap: onSettings!,
+                  size: 20,
                 ),
               _FullscreenExitButton(onTap: onFullscreen),
             ],
@@ -525,52 +627,159 @@ class MangoPlayerChrome extends StatelessWidget {
   }
 }
 
-class _ProgressSlider extends StatelessWidget {
+/// 进度条：拖动跟手；长按可定位片头/片尾。
+class _ProgressSlider extends StatefulWidget {
   const _ProgressSlider({
     required this.progress,
     required this.totalMs,
     required this.onSeek,
+    this.onSeekPreview,
     this.onSeekStart,
     this.onSeekEnd,
     this.accent = false,
+    this.introMs = 0,
+    this.outroMs = 0,
+    this.onMarkIntro,
+    this.onMarkOutro,
   });
 
   final double progress;
   final int totalMs;
   final ValueChanged<Duration> onSeek;
+  final ValueChanged<Duration>? onSeekPreview;
   final VoidCallback? onSeekStart;
   final VoidCallback? onSeekEnd;
   final bool accent;
+  final int introMs;
+  final int outroMs;
+  final VoidCallback? onMarkIntro;
+  final VoidCallback? onMarkOutro;
+
+  @override
+  State<_ProgressSlider> createState() => _ProgressSliderState();
+}
+
+class _ProgressSliderState extends State<_ProgressSlider> {
+  double? _drag;
+
+  Future<void> _onLongPress() async {
+    if (widget.onMarkIntro == null && widget.onMarkOutro == null) return;
+    HapticFeedback.mediumImpact();
+    final box = context.findRenderObject() as RenderBox?;
+    final overlay =
+        Navigator.of(context).overlay?.context.findRenderObject() as RenderBox?;
+    RelativeRect pos = const RelativeRect.fromLTRB(40, 200, 40, 200);
+    if (box != null && overlay != null) {
+      final topLeft = box.localToGlobal(Offset.zero, ancestor: overlay);
+      final bottomRight = box.localToGlobal(
+        box.size.bottomRight(Offset.zero),
+        ancestor: overlay,
+      );
+      pos = RelativeRect.fromRect(
+        Rect.fromPoints(topLeft, bottomRight),
+        Offset.zero & overlay.size,
+      );
+    }
+    final pick = await showMenu<String>(
+      context: context,
+      position: pos,
+      color: const Color(0xF21C1C1E),
+      elevation: 8,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      items: [
+        if (widget.onMarkIntro != null)
+          const PopupMenuItem(
+            value: 'intro',
+            child: Text(
+              '将当前位置设为片头结束',
+              style: TextStyle(
+                fontFamily: 'AppSans',
+                fontSize: 14,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        if (widget.onMarkOutro != null)
+          const PopupMenuItem(
+            value: 'outro',
+            child: Text(
+              '将当前位置设为片尾开始',
+              style: TextStyle(
+                fontFamily: 'AppSans',
+                fontSize: 14,
+                color: Colors.white,
+              ),
+            ),
+          ),
+      ],
+    );
+    if (pick == 'intro') widget.onMarkIntro?.call();
+    if (pick == 'outro') widget.onMarkOutro?.call();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final active = accent ? _playerAccent : Colors.white;
-    return SliderTheme(
-      data: SliderThemeData(
-        trackHeight: accent ? 3.5 : 3,
-        trackShape: const RoundedRectSliderTrackShape(),
-        thumbShape: RoundSliderThumbShape(
-          enabledThumbRadius: accent ? 7 : 6,
-          elevation: 2,
-        ),
-        overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
-        activeTrackColor: active,
-        inactiveTrackColor: Colors.white.withValues(alpha: 0.28),
-        thumbColor: active,
-        overlayColor: active.withValues(alpha: 0.14),
-      ),
-      child: Slider(
-        value: progress,
-        onChangeStart: totalMs > 0 ? (_) => onSeekStart?.call() : null,
-        onChanged: totalMs > 0
-            ? (v) => onSeek(Duration(milliseconds: (v * totalMs).round()))
-            : null,
-        onChangeEnd: totalMs > 0
-            ? (v) {
-                onSeek(Duration(milliseconds: (v * totalMs).round()));
-                onSeekEnd?.call();
-              }
-            : null,
+    final active = widget.accent ? _playerAccent : Colors.white;
+    final value = (_drag ?? widget.progress).clamp(0.0, 1.0);
+
+    return GestureDetector(
+      onLongPress: _onLongPress,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          return Stack(
+            alignment: Alignment.center,
+            children: [
+              SliderTheme(
+                data: SliderThemeData(
+                  trackHeight: widget.accent ? 3.5 : 3,
+                  trackShape: const RoundedRectSliderTrackShape(),
+                  thumbShape: RoundSliderThumbShape(
+                    enabledThumbRadius: widget.accent ? 7 : 6,
+                    elevation: 2,
+                  ),
+                  overlayShape:
+                      const RoundSliderOverlayShape(overlayRadius: 14),
+                  activeTrackColor: active,
+                  inactiveTrackColor: Colors.white.withValues(alpha: 0.28),
+                  thumbColor: Colors.white,
+                  overlayColor: active.withValues(alpha: 0.14),
+                ),
+                child: Slider(
+                  value: value,
+                  onChangeStart: widget.totalMs > 0
+                      ? (v) {
+                          setState(() => _drag = v);
+                          widget.onSeekStart?.call();
+                          widget.onSeekPreview?.call(
+                            Duration(
+                              milliseconds: (v * widget.totalMs).round(),
+                            ),
+                          );
+                        }
+                      : null,
+                  onChanged: widget.totalMs > 0
+                      ? (v) {
+                          setState(() => _drag = v);
+                          widget.onSeekPreview?.call(
+                            Duration(
+                              milliseconds: (v * widget.totalMs).round(),
+                            ),
+                          );
+                        }
+                      : null,
+                  onChangeEnd: widget.totalMs > 0
+                      ? (v) {
+                          final ms = (v * widget.totalMs).round();
+                          setState(() => _drag = null);
+                          widget.onSeek(Duration(milliseconds: ms));
+                          widget.onSeekEnd?.call();
+                        }
+                      : null,
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -796,49 +1005,18 @@ class _FullscreenExitButton extends StatelessWidget {
       child: const SizedBox(
         width: 36,
         height: 36,
-        child: CustomPaint(
-          painter: _BoldFullscreenExitPainter(),
+        child: Icon(
+          // 退出全屏 / 回小屏（替换四角括号图标）
+          Icons.fullscreen_exit_rounded,
+          color: Colors.white,
+          size: 28,
+          shadows: [
+            Shadow(color: Color(0xCC000000), blurRadius: 6),
+          ],
         ),
       ),
     );
   }
-}
-
-/// 加粗「退出全屏」图标，与 play_fill / next_fill 视觉重量一致
-class _BoldFullscreenExitPainter extends CustomPainter {
-  const _BoldFullscreenExitPainter();
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.6
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
-      ..isAntiAlias = true;
-
-    final cx = size.width / 2;
-    final cy = size.height / 2;
-    const arm = 5.5;
-    const gap = 3.2;
-
-    // 左上折角
-    canvas.drawLine(Offset(cx - gap - arm, cy - gap), Offset(cx - gap, cy - gap), paint);
-    canvas.drawLine(Offset(cx - gap, cy - gap - arm), Offset(cx - gap, cy - gap), paint);
-    // 右上
-    canvas.drawLine(Offset(cx + gap, cy - gap), Offset(cx + gap + arm, cy - gap), paint);
-    canvas.drawLine(Offset(cx + gap, cy - gap - arm), Offset(cx + gap, cy - gap), paint);
-    // 左下
-    canvas.drawLine(Offset(cx - gap - arm, cy + gap), Offset(cx - gap, cy + gap), paint);
-    canvas.drawLine(Offset(cx - gap, cy + gap), Offset(cx - gap, cy + gap + arm), paint);
-    // 右下
-    canvas.drawLine(Offset(cx + gap, cy + gap), Offset(cx + gap + arm, cy + gap), paint);
-    canvas.drawLine(Offset(cx + gap, cy + gap), Offset(cx + gap, cy + gap + arm), paint);
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class _ChromeIconButton extends StatelessWidget {
@@ -866,9 +1044,9 @@ class _ChromeIconButton extends StatelessWidget {
         child: Icon(
           icon,
           color: Colors.white,
-          size: size,
+          size: size + 2,
           shadows: const [
-            Shadow(color: Color(0x99000000), blurRadius: 4),
+            Shadow(color: Color(0xCC000000), blurRadius: 6),
           ],
         ),
       ),

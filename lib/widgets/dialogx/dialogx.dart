@@ -5,6 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
 import 'package:flutter/services.dart';
 
+import '../figma_loading.dart';
+import '../../theme/app_colors.dart';
+
 /// 全局 Navigator，供 DialogX 无 context 弹出。
 final GlobalKey<NavigatorState> dialogXNavigatorKey =
     GlobalKey<NavigatorState>();
@@ -17,7 +20,7 @@ class DialogXTipAction {
   final VoidCallback onPressed;
 }
 
-/// Wait：居中卡片；Tip：实心胶囊提示（无毛玻璃/折射，避免挡画面）；Confirm：图二竖排胶囊。
+/// Wait：白底居中加载卡；Tip：白底圆角轻提示；Confirm：白底竖排按钮。
 class DialogX {
   DialogX._();
 
@@ -359,8 +362,8 @@ class _GlassTipQueueState extends State<_GlassTipQueue> {
   final Map<int, Timer> _timers = {};
   int _seq = 0;
 
-  /// 槽位间距：约一颗胶囊高度，保证文字可读（不是叠在同一位置）
-  static const slotStep = 56.0;
+  /// 槽位间距：白底圆角卡高度
+  static const slotStep = 60.0;
   static const maxVisible = 8;
 
   @override
@@ -543,30 +546,6 @@ class _QueuedTipState extends State<_QueuedTip>
     if (mounted) widget.onRemoved();
   }
 
-  Widget _badge(DialogXTipType type) {
-    final bg = switch (type) {
-      DialogXTipType.success => const Color(0xFF34C759),
-      DialogXTipType.warning => const Color(0xFFFFCC00),
-      DialogXTipType.error => const Color(0xFFFF3B30),
-      DialogXTipType.info => const Color(0xFF007AFF),
-      DialogXTipType.neutral => const Color(0xFF8E8E93),
-    };
-    final icon = switch (type) {
-      DialogXTipType.success => CupertinoIcons.checkmark_alt,
-      DialogXTipType.warning => CupertinoIcons.exclamationmark,
-      DialogXTipType.error => CupertinoIcons.xmark,
-      DialogXTipType.info => CupertinoIcons.info,
-      DialogXTipType.neutral => CupertinoIcons.chat_bubble_fill,
-    };
-    return Container(
-      width: 20,
-      height: 20,
-      decoration: BoxDecoration(color: bg, shape: BoxShape.circle),
-      alignment: Alignment.center,
-      child: Icon(icon, size: 12, color: Colors.white),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -599,7 +578,6 @@ class _QueuedTipState extends State<_QueuedTip>
             message: widget.item.message,
             type: widget.item.type,
             action: widget.item.action,
-            icon: _badge(widget.item.type),
           ),
         ),
       ),
@@ -607,75 +585,66 @@ class _QueuedTipState extends State<_QueuedTip>
   }
 }
 
-/// 实心胶囊提示：不取样背后画面，避免毛玻璃/彩色光晕
+/// 纯灰底圆角提示：无图标，字色与背景融洽
 class _SolidTipCapsule extends StatelessWidget {
   const _SolidTipCapsule({
     required this.message,
     required this.type,
-    required this.icon,
     this.action,
   });
 
   final String message;
   final DialogXTipType type;
-  final Widget icon;
   final DialogXTipAction? action;
 
   @override
   Widget build(BuildContext context) {
+    // 灰底 + 同色系文字，不抢戏
+    const bg = Color(0xFFE5E5EA);
+    const fg = Color(0xFF6C6C70);
     return Material(
       color: Colors.transparent,
+      elevation: 0,
       child: Container(
-        constraints: const BoxConstraints(minHeight: 44, maxWidth: 400),
-        padding: EdgeInsets.fromLTRB(14, 10, action == null ? 16 : 8, 10),
+        constraints: const BoxConstraints(minHeight: 44, maxWidth: 320),
+        padding: EdgeInsets.fromLTRB(16, 11, action == null ? 16 : 8, 11),
         decoration: BoxDecoration(
-          color: const Color(0xFFF7F7F8),
-          borderRadius: BorderRadius.circular(999),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x22000000),
-              blurRadius: 12,
-              offset: Offset(0, 4),
-            ),
-          ],
+          color: bg,
+          borderRadius: BorderRadius.circular(12),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            icon,
-            const SizedBox(width: 10),
             Flexible(
               child: Text(
                 message,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
                 style: const TextStyle(
                   fontFamily: 'AppSans',
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF5C5C5C),
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: fg,
                   decoration: TextDecoration.none,
-                  height: 1.2,
+                  height: 1.25,
                 ),
               ),
             ),
             if (action != null) ...[
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               CupertinoButton(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 minimumSize: Size.zero,
                 onPressed: action!.onPressed,
                 child: Text(
                   action!.label,
-                  style: TextStyle(
+                  style: const TextStyle(
                     fontFamily: 'AppSans',
                     fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    color: switch (type) {
-                      DialogXTipType.error => const Color(0xFFFF3B30),
-                      DialogXTipType.warning => const Color(0xFFB87A00),
-                      _ => const Color(0xFF007AFF),
-                    },
+                    fontWeight: FontWeight.w600,
+                    color: fg,
                     decoration: TextDecoration.none,
                   ),
                 ),
@@ -760,65 +729,83 @@ class _WaitHostState extends State<_WaitHost> with TickerProviderStateMixin {
       return const SizedBox.shrink();
     }
 
+    const barrier = Color(0x73000000);
+
     return Positioned.fill(
-      child: FadeTransition(
-        opacity: _fade,
-        child: Material(
-          type: MaterialType.transparency,
-          child: Stack(
-            children: [
-              const ModalBarrier(
-                dismissible: false,
-                color: Color(0x66000000),
-              ),
-              Center(
-                child: ScaleTransition(
-                  scale: _scale,
-                  child: Container(
-                    constraints: const BoxConstraints(
-                      minWidth: 132,
-                      minHeight: 132,
-                    ),
-                    padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
-                    decoration: BoxDecoration(
-                      color: const Color(0xE6282828),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: IntrinsicWidth(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const SizedBox(
-                            width: 46,
-                            height: 46,
-                            child: CupertinoActivityIndicator(
-                              radius: 15,
-                              color: Colors.white,
-                            ),
-                          ),
-                          const SizedBox(height: 14),
-                          ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 170),
-                            child: Text(
-                              message,
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(
-                                fontFamily: 'AppSans',
-                                fontSize: 14,
-                                height: 1.25,
-                                color: Colors.white,
-                                decoration: TextDecoration.none,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
+      child: AnnotatedRegion<SystemUiOverlayStyle>(
+        // 保持透明导航栏，让半透明遮罩铺满底部，避免单独改系统栏颜色闪一下
+        value: const SystemUiOverlayStyle(
+          statusBarColor: Colors.transparent,
+          statusBarIconBrightness: Brightness.light,
+          statusBarBrightness: Brightness.dark,
+          systemNavigationBarColor: Colors.transparent,
+          systemNavigationBarDividerColor: Colors.transparent,
+          systemNavigationBarIconBrightness: Brightness.light,
+          systemNavigationBarContrastEnforced: false,
+        ),
+        child: FadeTransition(
+          opacity: _fade,
+          child: Material(
+            type: MaterialType.transparency,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                const ModalBarrier(
+                  dismissible: false,
+                  color: barrier,
+                ),
+                Center(
+                  child: ScaleTransition(
+                    scale: _scale,
+                    child: Container(
+                      constraints: const BoxConstraints(
+                        minWidth: 140,
+                        minHeight: 140,
+                      ),
+                      padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(24),
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Color(0x33000000),
+                            blurRadius: 32,
+                            offset: Offset(0, 12),
                           ),
                         ],
+                      ),
+                      child: IntrinsicWidth(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            FigmaMetaballLoader(
+                              size: 52,
+                              color: AppColors.brand,
+                            ),
+                            const SizedBox(height: 14),
+                            ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 180),
+                              child: Text(
+                                message,
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                  fontFamily: 'AppSans',
+                                  fontSize: 14,
+                                  height: 1.3,
+                                  color: Color(0xFF1C1C1E),
+                                  decoration: TextDecoration.none,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

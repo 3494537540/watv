@@ -17,6 +17,8 @@ Future<bool> showPlazaComposeSheet(BuildContext context) async {
   final result = await showModalBottomSheet<bool>(
     context: context,
     isScrollControlled: true,
+    isDismissible: true,
+    enableDrag: true,
     backgroundColor: Colors.transparent,
     barrierColor: Colors.black54,
     builder: (ctx) => const PlazaComposeSheet(),

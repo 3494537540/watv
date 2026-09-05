@@ -18,6 +18,14 @@ abstract final class FigmaSkeletonColors {
   /// Banner 暗底上的浅色环
   static const blobOnDark = Color(0xFFF2F4F7);
   static const blobOnDarkSoft = Color(0xFFAEAEB2);
+
+  static Color pageOf(BuildContext context) => AppPalette.page(context);
+  static Color boneOf(BuildContext context) => AppPalette.isDark(context)
+      ? const Color(0xFF2C2C2E)
+      : bone;
+  static Color iconOf(BuildContext context) => AppPalette.isDark(context)
+      ? const Color(0xFF636366)
+      : icon;
 }
 
 /// 页面加载：跟随设置里的「加载动画」
@@ -338,12 +346,12 @@ class FigmaCoverPlaceholder extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final child = ColoredBox(
-      color: FigmaSkeletonColors.bone,
+      color: FigmaSkeletonColors.boneOf(context),
       child: Center(
         child: Icon(
           Icons.landscape_rounded,
           size: iconSize,
-          color: FigmaSkeletonColors.icon,
+          color: FigmaSkeletonColors.iconOf(context),
         ),
       ),
     );
@@ -381,7 +389,7 @@ class FigmaMediaSkeletonCard extends StatelessWidget {
 
 /// 首页列表加载：融球 + 双列骨架
 class HomeListSkeleton extends StatelessWidget {
-  const HomeListSkeleton({super.key, this.count = 6, this.showMetaball = true});
+  const HomeListSkeleton({super.key, this.count = 6, this.showMetaball = false});
 
   final int count;
   final bool showMetaball;
@@ -389,7 +397,7 @@ class HomeListSkeleton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ColoredBox(
-      color: FigmaSkeletonColors.bg,
+      color: AppPalette.page(context),
       child: Column(
         children: [
           if (showMetaball)
@@ -427,7 +435,7 @@ class HomePosterGridSkeleton extends StatelessWidget {
   const HomePosterGridSkeleton({
     super.key,
     this.count = 9,
-    this.showMetaball = true,
+    this.showMetaball = false,
   });
 
   final int count;

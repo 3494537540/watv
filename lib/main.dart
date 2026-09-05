@@ -16,6 +16,7 @@ import 'theme/app_theme.dart';
 import 'widgets/auth_gate.dart';
 import 'widgets/brand_splash.dart';
 import 'widgets/dialogx/dialogx.dart';
+import 'widgets/tap_outside_unfocus.dart';
 
 void _disableDebugBorders() {
   debugPaintBaselinesEnabled = false;
@@ -165,12 +166,14 @@ class WaTvApp extends StatelessWidget {
             final mq = MediaQuery.of(context);
             return MediaQuery(
               data: mq.copyWith(disableAnimations: !motionOn),
-              child: ClipRect(
-                child: ColoredBox(
-                  color: dark ? AppColors.pageDark : Colors.white,
-                  child: Material(
-                    type: MaterialType.transparency,
-                    child: child ?? const SizedBox.shrink(),
+              child: TapOutsideUnfocus(
+                child: ClipRect(
+                  child: ColoredBox(
+                    color: dark ? AppColors.pageDark : Colors.white,
+                    child: Material(
+                      type: MaterialType.transparency,
+                      child: child ?? const SizedBox.shrink(),
+                    ),
                   ),
                 ),
               ),

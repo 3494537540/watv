@@ -4,16 +4,18 @@ import 'dart:math' show Rectangle;
 import 'package:floating/floating.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
+import 'package:video_player/video_player.dart';
+import 'package:video_player_pip/video_player_pip.dart';
+import 'package:video_player_pip/video_player_pip_platform_interface.dart';
 
 import '../widgets/dialogx/dialogx.dart';
 
-/// Android 系统画中画
-///
-/// 注意：进小窗时禁止改动 VideoPlayer 在树上的位置（会拆 Texture 导致引擎断连）。
+/// 系统画中画：Android 用 floating；iOS 用 video_player_pip（需 PlatformView）
 abstract final class PlayerPip {
   static final Floating _floating = Floating();
 
-  static StreamSubscription<PiPStatus>? _sub;
+  static StreamSubscription<PiPStatus>? _androidSub;
+  static StreamSubscription<bool>? _iosSub;
   static final ValueNotifier<bool> inPip = ValueNotifier<bool>(false);
   static VoidCallback? _onEntered;
 
@@ -21,44 +23,73 @@ abstract final class PlayerPip {
 
   static bool get isInPip => inPip.value;
 
+  static bool get _isIos =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+
+  static bool get _isAndroid =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
   /// 小窗进入后继续播（由播放器注册；勿在此 setState 挪动播放器）
   static void setOnEntered(VoidCallback? cb) => _onEntered = cb;
 
   static void ensureListening() {
-    if (_sub != null) return;
-    _sub = _floating.pipStatusStream.listen((s) {
-      final enabled = s == PiPStatus.enabled;
-      if (inPip.value == enabled) return;
-      inPip.value = enabled;
-      if (enabled) {
-        // 延后到帧外，避开 PiP 切换当帧的布局风暴
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          DialogX.dismiss();
-          _onEntered?.call();
-        });
-      }
-    });
+    if (_isAndroid) {
+      if (_androidSub != null) return;
+      _androidSub = _floating.pipStatusStream.listen((s) {
+        final enabled = s == PiPStatus.enabled;
+        _setInPip(enabled);
+      });
+      return;
+    }
+    if (_isIos) {
+      if (_iosSub != null) return;
+      // 触发 VideoPlayerPip 单例以挂上 method handler
+      VideoPlayerPip.instance;
+      _iosSub = VideoPlayerPip.instance.onPipModeChanged.listen(_setInPip);
+    }
+  }
+
+  static void _setInPip(bool enabled) {
+    if (inPip.value == enabled) return;
+    inPip.value = enabled;
+    if (enabled) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        DialogX.dismiss();
+        _onEntered?.call();
+      });
+    }
   }
 
   static void stopListening() {
-    _sub?.cancel();
-    _sub = null;
+    _androidSub?.cancel();
+    _androidSub = null;
+    _iosSub?.cancel();
+    _iosSub = null;
     if (inPip.value) inPip.value = false;
   }
 
   static Future<bool> get isAvailable async {
     if (kIsWeb) return false;
-    if (defaultTargetPlatform != TargetPlatform.android) return false;
-    try {
-      return await _floating.isPipAvailable;
-    } catch (_) {
-      return false;
+    if (_isAndroid) {
+      try {
+        return await _floating.isPipAvailable;
+      } catch (_) {
+        return false;
+      }
     }
+    if (_isIos) {
+      try {
+        return await VideoPlayerPip.isPipSupported();
+      } catch (_) {
+        return false;
+      }
+    }
+    return false;
   }
 
   /// 按 Home 自动进小窗（仅 Android 12+；失败则静默）
   static Future<void> enableAutoOnLeave({Rect? sourceRect}) async {
-    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    if (!_isAndroid) return;
     ensureListening();
     try {
       if (!await _floating.isPipAvailable) return;
@@ -69,13 +100,12 @@ abstract final class PlayerPip {
         ),
       );
     } catch (e) {
-      // SDK<31 会抛 PlatformException，忽略即可
       debugPrint('[pip] onLeave enable fail: $e');
     }
   }
 
   static Future<void> cancelAutoOnLeave() async {
-    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    if (!_isAndroid) return;
     try {
       await _floating.cancelOnLeavePiP();
     } catch (_) {}
@@ -85,35 +115,73 @@ abstract final class PlayerPip {
   static Future<void> enter({
     Rational aspect = const Rational.landscape(),
     Rect? sourceRect,
+    VideoPlayerController? controller,
   }) async {
-    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
-      DialogX.showWarning('画中画仅支持 Android');
+    if (kIsWeb) {
+      DialogX.showWarning('当前环境不支持画中画');
       return;
     }
     ensureListening();
     DialogX.dismiss();
-    try {
-      if (!await _floating.isPipAvailable) {
-        DialogX.showWarning('当前设备不支持画中画');
+
+    if (_isAndroid) {
+      try {
+        if (!await _floating.isPipAvailable) {
+          DialogX.showWarning('当前设备不支持画中画');
+          return;
+        }
+        final status = await _floating.enable(
+          ImmediatePiP(
+            aspectRatio: aspect,
+            sourceRectHint: _hint(sourceRect),
+          ),
+        );
+        if (status == PiPStatus.enabled) {
+          _setInPip(true);
+        }
+      } catch (e) {
+        debugPrint('[pip] android enable fail: $e');
+        DialogX.showWarning('无法进入画中画');
+      }
+      return;
+    }
+
+    if (_isIos) {
+      final c = controller;
+      if (c == null || !c.value.isInitialized) {
+        DialogX.showWarning('请先开始播放再开画中画');
         return;
       }
-      final status = await _floating.enable(
-        ImmediatePiP(
-          aspectRatio: aspect,
-          sourceRectHint: _hint(sourceRect),
-        ),
-      );
-      // ImmediatePiP 成功时可能仍短暂为 disabled，以系统回调为准
-      if (status == PiPStatus.enabled) {
-        inPip.value = true;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _onEntered?.call();
-        });
+      try {
+        if (!await VideoPlayerPip.isPipSupported()) {
+          DialogX.showWarning('当前设备不支持画中画');
+          return;
+        }
+        final ar = c.value.aspectRatio == 0 ? 16 / 9 : c.value.aspectRatio;
+        final w = 320;
+        final h = (w / ar).round().clamp(120, 480);
+        // playerId 在 video_player 标为 visibleForTesting，但原生 PiP 需要它
+        // ignore: invalid_use_of_visible_for_testing_member
+        final playerId = c.playerId;
+        final ok = await VideoPlayerPipPlatform.instance.enterPipMode(
+          playerId,
+          width: w,
+          height: h,
+        );
+        if (!ok) {
+          DialogX.showWarning('无法进入画中画，请确认在真机且已播放');
+          return;
+        }
+        // 系统回调也会更新；先乐观标记并续播
+        _setInPip(true);
+      } catch (e) {
+        debugPrint('[pip] ios enable fail: $e');
+        DialogX.showWarning('无法进入画中画');
       }
-    } catch (e) {
-      debugPrint('[pip] enable fail: $e');
-      DialogX.showWarning('无法进入画中画');
+      return;
     }
+
+    DialogX.showWarning('画中画仅支持 Android / iOS');
   }
 
   /// Android sourceRectHint 需要物理像素

@@ -19,8 +19,10 @@ import '../widgets/auth_sheet.dart';
 import '../widgets/dialogx/dialogx.dart';
 import 'home_page.dart';
 import 'cms_articles_page.dart';
+import 'cms_messages_page.dart';
 import 'movie_detail_page.dart';
 import 'profile_page.dart';
+import 'vod_cache_list_page.dart';
 import 'vod_filter_page.dart';
 
 /// 主框架：底栏可由 CMS app_config.json 自定义
@@ -40,7 +42,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    LocalNotificationService.onOpenVod = _openVodFromNotification;
+    LocalNotificationService.onTapPayload = _onNotificationPayload;
     unawaited(_ensurePortraitFriendly());
     unawaited(_loadConfig());
     unawaited(_bootstrapNotifications());
@@ -50,8 +52,8 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    if (LocalNotificationService.onOpenVod == _openVodFromNotification) {
-      LocalNotificationService.onOpenVod = null;
+    if (LocalNotificationService.onTapPayload == _onNotificationPayload) {
+      LocalNotificationService.onTapPayload = null;
     }
     CmsAppConfigStore.instance.removeListener(_onConfig);
     super.dispose();
@@ -71,13 +73,48 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
 
   Future<void> _bootstrapNotifications() async {
     await LocalNotificationService.init();
-    // 稍晚再弹说明，避免挡启动
     await Future<void>.delayed(const Duration(milliseconds: 1200));
     if (!mounted) return;
+    final ok = await LocalNotificationService.ensurePermission(
+      context: context,
+    );
+    if (!mounted) return;
+    if (ok) {
+      await LocalNotificationService.maybeSendWelcomeOnce();
+    }
     await VodUpdateWatchService.check(
       context: context,
       force: true,
-      requestPermission: true,
+      requestPermission: false,
+    );
+  }
+
+  Future<void> _onNotificationPayload(String raw) async {
+    final parsed = LocalNotificationService.parsePayload(raw);
+    switch (parsed.kind) {
+      case 'download':
+        await _openDownloads();
+      case 'inbox':
+        await _openInbox();
+      case 'vod':
+      default:
+        await _openVodFromNotification(parsed.id);
+    }
+  }
+
+  Future<void> _openInbox() async {
+    final nav = dialogXNavigatorKey.currentState;
+    if (nav == null) return;
+    await nav.push(
+      AppPageRoute<void>(builder: (_) => const CmsMessagesPage()),
+    );
+  }
+
+  Future<void> _openDownloads() async {
+    final nav = dialogXNavigatorKey.currentState;
+    if (nav == null) return;
+    await nav.push(
+      AppPageRoute<void>(builder: (_) => const VodCacheListPage()),
     );
   }
 

@@ -10,6 +10,7 @@ import '../config/api_config.dart';
 import '../services/maccms_api.dart';
 import '../services/search_history_store.dart';
 import '../utils/search_text_match.dart';
+import '../theme/app_colors.dart';
 import '../widgets/cms_cover_image.dart';
 import '../widgets/dialogx/dialogx.dart';
 import '../widgets/figma_loading.dart';
@@ -34,10 +35,10 @@ class MovieSearchPage extends StatefulWidget {
 }
 
 class _MovieSearchPageState extends State<MovieSearchPage> {
-  static const _bg = Color(0xFFFFFFFF);
-  static const _ink = Color(0xFF191919);
-  static const _muted = Color(0xFF9A9A9A);
-  static const _chipBg = Color(0xFFF3F3F5);
+  Color get _bg => AppPalette.page(context);
+  Color get _ink => AppPalette.text(context);
+  Color get _muted => AppPalette.textHint(context);
+  Color get _chipBg => AppPalette.softFill(context);
   static const _hintPool = ['仙逆', '凡人修仙传', '花开锦绣', '藏海花', '盗墓笔记'];
 
   final _controller = TextEditingController();
@@ -623,11 +624,15 @@ class _MovieSearchPageState extends State<MovieSearchPage> {
             child: _SearchCoverBlurBg(coverUrl: _resultCoverUrl),
           )
         else
-          const ColoredBox(color: Colors.white),
+          ColoredBox(color: AppPalette.page(context)),
         Positioned.fill(
           child: IgnorePointer(
             child: ColoredBox(
-              color: Color.lerp(Colors.transparent, Colors.white, t)!,
+              color: Color.lerp(
+                Colors.transparent,
+                AppPalette.page(context),
+                t,
+              )!,
             ),
           ),
         ),
@@ -645,7 +650,7 @@ class _MovieSearchPageState extends State<MovieSearchPage> {
             Expanded(
               child: DecoratedBox(
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: AppPalette.page(context),
                   borderRadius: BorderRadius.vertical(
                     top: Radius.circular(radius),
                   ),
@@ -1040,7 +1045,7 @@ class _MovieSearchPageState extends State<MovieSearchPage> {
         children: [
           Row(
         children: [
-          const Text(
+          Text(
                 '历史',
             style: TextStyle(
               fontFamily: 'AppSans',
@@ -1109,7 +1114,7 @@ class _MovieSearchPageState extends State<MovieSearchPage> {
                   children: [
                     Text(
                       _historyExpanded ? '收起' : '展开',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontFamily: 'AppSans',
                         fontSize: 13,
                         color: _muted,
@@ -1332,7 +1337,7 @@ class _MovieSearchPageState extends State<MovieSearchPage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
+              Text(
                 '暂无联想结果',
                 style: TextStyle(
                         fontFamily: 'AppSans',
@@ -1490,7 +1495,7 @@ class _MovieSearchPageState extends State<MovieSearchPage> {
             Text(
               _error!,
               textAlign: TextAlign.center,
-              style: const TextStyle(
+              style: TextStyle(
                 fontFamily: 'AppSans',
                 fontSize: 14,
                 color: _muted,
@@ -1596,7 +1601,7 @@ class _MovieSearchPageState extends State<MovieSearchPage> {
               Text(
                 '「$q」在$ch下暂无结果',
                 textAlign: TextAlign.center,
-                style: const TextStyle(
+                style: TextStyle(
             fontFamily: 'AppSans',
             fontSize: 15,
                   color: _muted,
@@ -1663,7 +1668,7 @@ class _MovieSearchPageState extends State<MovieSearchPage> {
                     ? '其他作品'
                     : '$_resultQuery其他作品',
                 textAlign: TextAlign.left,
-                style: const TextStyle(
+                style: TextStyle(
                   fontFamily: 'AppSans',
                   fontSize: 16,
                   fontWeight: FontWeight.w700,

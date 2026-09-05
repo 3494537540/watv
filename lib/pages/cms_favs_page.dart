@@ -200,21 +200,17 @@ class _CmsFavsPageState extends State<CmsFavsPage> {
     Navigator.of(context).popUntil((r) => r.isFirst);
   }
 
-  List<List<String>> get _carouselPages {
+  List<FavStackItem> get _stackItems {
     if (_chip < 0) {
-      final covers = [
+      return [
         for (final e in _favItems)
-          if (e.pic.trim().isNotEmpty) e.pic.trim(),
+          FavStackItem(id: e.vodId, name: e.name, pic: e.pic),
       ];
-      if (covers.isNotEmpty) return favCarouselPages(covers);
-      return favCarouselPages(_decorCovers);
     }
-    final covers = [
+    return [
       for (final e in _watchItems)
-        if (e.pic.trim().isNotEmpty) e.pic.trim(),
+        FavStackItem(id: e.id, name: e.name, pic: e.pic),
     ];
-    if (covers.isNotEmpty) return favCarouselPages(covers);
-    return favCarouselPages(_decorCovers);
   }
 
   bool get _isEmpty {
@@ -281,7 +277,15 @@ class _CmsFavsPageState extends State<CmsFavsPage> {
                         padding: const EdgeInsets.fromLTRB(0, 8, 0, 24),
                         children: [
                           FavCollectionCarousel(
-                            pages: _carouselPages,
+                            items: _stackItems,
+                            decorCovers: _decorCovers,
+                            onOpen: empty
+                                ? null
+                                : (it) => _openVod(
+                                      it.id,
+                                      name: it.name,
+                                      pic: it.pic,
+                                    ),
                             title: empty
                                 ? (loggedIn || _chip >= 0
                                     ? '从$statusLabel开始'
@@ -289,9 +293,13 @@ class _CmsFavsPageState extends State<CmsFavsPage> {
                                 : '我的$statusLabel',
                             subtitle: empty
                                 ? (loggedIn || _chip >= 0
-                                    ? '左右滑动切换海报，点下方去发现好片'
-                                    : '登录后同步收藏，左右滑动看看片单')
-                                : '左右滑动切换，点列表继续观看',
+                                    ? '把喜欢的影视收进来，随时继续追'
+                                    : '登录后同步收藏')
+                                : (_stackItems.length == 1
+                                    ? '点击海报直接播放'
+                                    : _stackItems.length <= 3
+                                        ? '点中间播放 · 点侧卡展开'
+                                        : '左右滑动换页 · 点中间播放 · 点侧卡展开'),
                             ctaLabel: !loggedIn && _chip < 0
                                 ? '去登录'
                                 : (_error != null ? '重试' : '去发现好片'),
@@ -306,7 +314,7 @@ class _CmsFavsPageState extends State<CmsFavsPage> {
                                 _goBrowse();
                               }
                             },
-                            height: empty ? 380 : 240,
+                            height: empty ? 380 : 280,
                             compact: !empty,
                           ),
                           if (_error != null && !empty)

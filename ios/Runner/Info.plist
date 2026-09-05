@@ -33,7 +33,15 @@
 	<key>NSCameraUsageDescription</key>
 	<string>用于拍摄头像或发布内容时拍照。</string>
 	<key>NSUserNotificationsUsageDescription</key>
-	<string>用于提醒收藏或看过的剧集更新。</string>
+	<string>用于提醒剧集更新、下载完成和重要站内消息。</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>用于搜索同一 Wi‑Fi 下的电视投屏设备（DLNA / AirPlay）。</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_ssdp._tcp</string>
+		<string>_dial._tcp</string>
+		<string>_airplay._tcp</string>
+	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
@@ -62,6 +70,10 @@
 	</dict>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

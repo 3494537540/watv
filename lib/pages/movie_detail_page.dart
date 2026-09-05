@@ -19,37 +19,37 @@ import '../theme/app_colors.dart';
 import '../utils/relative_time.dart';
 import '../widgets/cast_avatar.dart';
 import '../widgets/cast_sheet.dart';
-import '../widgets/cms_cover_image.dart';
 import '../widgets/dialogx/dialogx.dart';
 import '../widgets/media_placeholder.dart';
 import '../widgets/player/mango_inline_player.dart';
 import '../widgets/player/mango_player_chrome.dart';
 import '../widgets/player/mango_watch_panel.dart';
+import '../widgets/player/player_loading_hud.dart';
 import 'vod_cache_list_page.dart';
 import '../widgets/app_page_route.dart';
+import '../widgets/ios_edge_back.dart';
 
 const _ink = Color(0xFF181818);
 const _muted = Color(0xFF6B6B6B);
 const _faint = Color(0xFF9A9A9A);
 Color get _lime => AppColors.brand;
-const _page = Color(0xFFFFFFFF);
 const _soft = Color(0xFFF2F2F2);
 const _star = Color(0xFFFF9F0A);
 
-/// 影视详情：观影状态 · 星级评分 · 简介/演员/剧集展开 · 站内评论
+/// 影视播放页：点击列表直接进播放器（选集 / 评论在播放下方）
 class MovieDetailPage extends StatefulWidget {
   const MovieDetailPage({
     super.key,
     required this.movie,
     this.autoPlay = false,
-    this.forceWatch = false,
+    this.forceWatch = true,
     this.initialEpisodeIndex,
     this.initialSourceIndex,
   });
 
   final Movie movie;
   final bool autoPlay;
-  /// 直接进入播放态，不先展示详情页
+  /// 直接进入播放态（默认 true，不再先展示旧详情页）
   final bool forceWatch;
   /// 指定开播集数（如选集列表点某一集）
   final int? initialEpisodeIndex;
@@ -94,6 +94,8 @@ class _MovieDetailPageState extends State<MovieDetailPage>
   List<Movie> _relatedMovies = const [];
   bool _relatedLoaded = false;
   bool _relatedLoading = false;
+  bool _relatedBusy = false;
+  bool _relatedReloadQueued = false;
   bool _favored = false;
   int _downloadingCount = 0;
   /// 播放器下方展开为完整剧集列表（非弹窗）
@@ -177,6 +179,28 @@ class _MovieDetailPageState extends State<MovieDetailPage>
     }
     if (widget.initialEpisodeIndex != null) {
       _selectedEpisode = widget.initialEpisodeIndex!;
+    }
+    // 列表已预拉详情时：直接进播放壳，不再闪黑底加载页
+    if (widget.forceWatch) {
+      final hasPlay = movie.playSources.isNotEmpty ||
+          movie.playEpisodes.isNotEmpty ||
+          movie.playUrlAt(_selectedEpisode) != null;
+      if (hasPlay) {
+        _watching = true;
+        _loading = false;
+        _relatedLoading = true;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _maybeAutoPlay();
+        });
+      } else {
+        // 列表未带片源：先进播放壳，封面+骨架占位
+        _watching = true;
+        _loading = true;
+        _relatedLoading = true;
+      }
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_loadRelated());
+      });
     }
     _enter = AnimationController(
       vsync: this,
@@ -394,7 +418,11 @@ class _MovieDetailPageState extends State<MovieDetailPage>
   }
 
   void _maybeAutoPlay() {
-    if (!_autoPlayPending || _loading || _watching) return;
+    if (!_autoPlayPending) return;
+    final hasUrl =
+        movie.playUrlAt(_selectedEpisode, sourceIndex: _sourceIndex) != null;
+    // 列表已预拉到地址时可边刷详情边开播
+    if (_loading && !hasUrl) return;
     _autoPlayPending = false;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _play(episodeIndex: _selectedEpisode);
@@ -491,81 +519,161 @@ class _MovieDetailPageState extends State<MovieDetailPage>
     DialogX.showSuccess('片名已复制，可分享给好友');
   }
 
-  Future<void> _loadRelated() async {
-    if (_relatedLoading) return;
-    if (_relatedLoaded && _relatedMovies.isNotEmpty) return;
-    _relatedLoaded = true;
+  static const _weakRelatedTags = {
+    '影视',
+    '其它',
+    '其他',
+    '剧情',
+    '高清',
+    '超清',
+    '蓝光',
+    'HD',
+    '免费',
+    '会员',
+    '更新',
+    '完结',
+    '连载',
+  };
+
+  List<String> _strongGenresOf(Movie m) {
+    final out = <String>[];
+    for (final raw in m.genres) {
+      final g = raw.trim();
+      if (g.length < 2) continue;
+      if (_weakRelatedTags.contains(g)) continue;
+      if (out.contains(g)) continue;
+      out.add(g);
+    }
+    return out;
+  }
+
+  int _relatedScore(Movie seed, Movie m) {
+    if (m.id == seed.id) return -1;
+    var score = 0;
+    if (seed.typeId > 0 && m.typeId == seed.typeId) score += 3;
+    final seedG = _strongGenresOf(seed);
+    final mG = _strongGenresOf(m).toSet();
+    for (final g in seedG) {
+      if (mG.contains(g)) score += 4;
+    }
+    // 同「剧/电影」形态
+    if (seed.isSeries == m.isSeries) score += 1;
+    // 片名同系列暗示（含【影视解说】等同后缀时题材仍要靠 genres）
+    final seedSub = seed.subtitle.trim();
+    if (seedSub.isNotEmpty &&
+        seedSub == m.subtitle.trim() &&
+        !_weakRelatedTags.contains(seedSub)) {
+      score += 2;
+    }
+    return score;
+  }
+
+  bool _isRelatedEnough(Movie seed, Movie m) {
+    final s = _relatedScore(seed, m);
+    final seedG = _strongGenresOf(seed);
+    if (seedG.isNotEmpty) {
+      // 有明确题材时：至少撞上一个题材，或同分类且题材分够
+      return s >= 4;
+    }
+    // 无题材：至少同 CMS 分类
+    return seed.typeId > 0 && m.typeId == seed.typeId;
+  }
+
+  Future<void> _loadRelated({bool force = false}) async {
+    // 注意：勿用 _relatedLoading 做防重入——进页时会先置 true 占骨架，会直接 return
+    if (_relatedBusy) {
+      if (force) _relatedReloadQueued = true;
+      return;
+    }
+    if (!force && _relatedLoaded && _relatedMovies.isNotEmpty) return;
+    _relatedBusy = true;
+    _relatedReloadQueued = false;
     if (mounted) setState(() => _relatedLoading = true);
     try {
-      final exclude = movie.id;
-      List<Movie> list = const [];
-
-      // 优先同 CMS 分类
-      if (movie.typeId > 0) {
-        list = await _cms.fetchByType(typeId: movie.typeId, limit: 18);
-      }
-      // 再用类型名 / 首个题材搜同类型
-      if (list.length < 6) {
-        final key = movie.subtitle.trim().isNotEmpty
-            ? movie.subtitle.trim()
-            : (movie.genres.isNotEmpty ? movie.genres.first : '');
-        if (key.isNotEmpty) {
-          final byType = await _cms.search(key, limit: 16);
-          list = [...list, ...byType];
+      final seed = movie;
+      final exclude = seed.id;
+      final pool = <Movie>[];
+      final seen = <String>{exclude};
+      void addAll(Iterable<Movie> list) {
+        for (final m in list) {
+          if (!seen.add(m.id)) continue;
+          pool.add(m);
         }
       }
-      if (list.length < 6 && movie.genres.isNotEmpty) {
-        for (final g in movie.genres.take(2)) {
-          if (g == movie.area || g == movie.subtitle) continue;
-          final byGenre = await _cms.search(g, limit: 12);
-          list = [...list, ...byGenre];
-          if (list.length >= 10) break;
-        }
-      }
-      if (list.length < 4) {
-        final hot = await _cms.fetchHotMovies(limit: 16);
-        list = [...list, ...hot];
+
+      final typeId = seed.typeId > 0 ? seed.typeId : null;
+      final genres = _strongGenresOf(seed);
+
+      // 1) 同分类列表
+      if (typeId != null) {
+        addAll(await _cms.fetchByType(typeId: typeId, limit: 24));
       }
 
-      final preferSeries = movie.isSeries;
-      final ranked = [...list]..sort((a, b) {
-          final as = preferSeries
-              ? (a.isSeries ? 0 : 1)
-              : (a.isSeries ? 1 : 0);
-          final bs = preferSeries
-              ? (b.isSeries ? 0 : 1)
-              : (b.isSeries ? 1 : 0);
-          if (as != bs) return as.compareTo(bs);
+      // 2) 按强题材搜索（限制在同分类下，避免爱情混进科幻）
+      for (final g in genres.take(3)) {
+        addAll(
+          await _cms.search(
+            g,
+            limit: 16,
+            typeId: typeId,
+          ),
+        );
+        if (pool.length >= 40) break;
+      }
+
+      // 3) 分类名可作补充（非弱标签）
+      final typeName = seed.subtitle.trim();
+      if (typeName.isNotEmpty && !_weakRelatedTags.contains(typeName)) {
+        addAll(await _cms.search(typeName, limit: 12, typeId: typeId));
+      }
+
+      // 只保留真正相关的；不够宁可少，不要热门乱塞
+      final related = pool.where((m) => _isRelatedEnough(seed, m)).toList()
+        ..sort((a, b) {
+          final sa = _relatedScore(seed, a);
+          final sb = _relatedScore(seed, b);
+          if (sa != sb) return sb.compareTo(sa);
           return b.score.compareTo(a.score);
         });
 
-      final seen = <String>{exclude};
-      final out = <Movie>[];
-      for (final m in ranked) {
-        if (seen.add(m.id)) out.add(m);
-        if (out.length >= 10) break;
+      var out = related.take(10).toList(growable: false);
+
+      // 同分类里题材不够时：放宽为「同分类 + 同剧/电影形态」
+      if (out.length < 4 && typeId != null) {
+        final loose = pool.where((m) {
+          if (m.typeId != typeId) return false;
+          if (seed.isSeries != m.isSeries) return false;
+          return true;
+        }).toList()
+          ..sort((a, b) => b.score.compareTo(a.score));
+        final fill = <Movie>[...out];
+        final ids = {for (final m in fill) m.id};
+        for (final m in loose) {
+          if (!ids.add(m.id)) continue;
+          fill.add(m);
+          if (fill.length >= 10) break;
+        }
+        out = fill;
       }
+
       if (!mounted) return;
       setState(() {
         _relatedMovies = out;
         _relatedLoading = false;
+        _relatedLoaded = true; // 空也算加载完，避免反复刷热门
       });
     } catch (_) {
-      try {
-        final hot = await _cms.fetchHotMovies(limit: 10);
-        if (!mounted) return;
+      if (mounted) {
         setState(() {
-          _relatedMovies =
-              hot.where((m) => m.id != movie.id).take(8).toList(growable: false);
+          _relatedLoaded = false;
           _relatedLoading = false;
         });
-      } catch (_) {
-        if (mounted) {
-          setState(() {
-            _relatedLoaded = false;
-            _relatedLoading = false;
-          });
-        }
+      }
+    } finally {
+      _relatedBusy = false;
+      if (_relatedReloadQueued) {
+        _relatedReloadQueued = false;
+        unawaited(_loadRelated(force: true));
       }
     }
   }
@@ -705,44 +813,12 @@ class _MovieDetailPageState extends State<MovieDetailPage>
   }
 
   void _openWatchInfo() {
-    final synopsis =
-        movie.synopsis.trim().isEmpty ? '暂无简介' : movie.synopsis.trim();
+    HapticFeedback.selectionClick();
     showModalBottomSheet<void>(
       context: context,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                movie.title,
-                style: const TextStyle(
-                  fontFamily: 'AppSans',
-                  fontSize: 18,
-                  fontWeight: FontWeight.w800,
-                  color: _ink,
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                synopsis,
-                style: const TextStyle(
-                  fontFamily: 'AppSans',
-                  fontSize: 14,
-                  height: 1.55,
-                  color: Color(0xFF555555),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _WatchIntroSheet(movie: movie),
     );
   }
 
@@ -766,7 +842,8 @@ class _MovieDetailPageState extends State<MovieDetailPage>
       return;
     }
     setState(() {
-      _loading = true;
+      // 已在播放壳时后台刷新详情，不打断开播
+      if (!_watching) _loading = true;
       _error = null;
     });
     try {
@@ -793,6 +870,10 @@ class _MovieDetailPageState extends State<MovieDetailPage>
       });
       // 详情到位后按最终片名/ID 再拉一次评论
       unawaited(_loadComments(force: true));
+      // 详情带 typeId/题材后，按题材重拉同类型（覆盖进页时的粗结果）
+      _relatedLoaded = false;
+      _relatedMovies = const [];
+      unawaited(_loadRelated(force: true));
       _maybeAutoPlay();
     } catch (e) {
       if (!mounted) return;
@@ -859,11 +940,14 @@ class _MovieDetailPageState extends State<MovieDetailPage>
 
   void _play({int? episodeIndex}) {
     HapticFeedback.mediumImpact();
-    if (_loading) {
-      DialogX.showWarning('正在加载片源…');
-      return;
-    }
     final ep = episodeIndex ?? (movie.isSeries ? _selectedEpisode : 0);
+    if (_loading) {
+      final preview = _resolvePlayUrl(ep);
+      if (preview == null || preview.isEmpty) {
+        DialogX.showWarning('正在加载片源…');
+        return;
+      }
+    }
     if (ep != _selectedEpisode) {
       _failedSources.clear();
     }
@@ -987,6 +1071,12 @@ class _MovieDetailPageState extends State<MovieDetailPage>
   }
 
   String _watchTag() {
+    final sources = movie.playSources;
+    if (sources.length > 1) {
+      final i = _sourceIndex.clamp(0, sources.length - 1);
+      final name = sources[i].name.trim();
+      return name.isEmpty ? '线路${i + 1}' : name;
+    }
     final eps = _episodes;
     if (eps.length > 1) return '全${eps.length}集';
     final remarks = movie.remarks.trim();
@@ -1022,10 +1112,52 @@ class _MovieDetailPageState extends State<MovieDetailPage>
     EdgeInsets safeInset = EdgeInsets.zero,
   }) {
     // 尺寸由外层 AnimatedContainer / expand 控制，避免双重固定高度溢出
-    return url != null
-        ? MangoInlinePlayer(
+    final cover = movie.coverUrl?.trim() ?? '';
+    if (url == null || url.isEmpty) {
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          if (cover.isNotEmpty)
+            Image.network(
+              cover,
+              fit: BoxFit.cover,
+              gaplessPlayback: true,
+              errorBuilder: (_, _, _) =>
+                  const ColoredBox(color: Colors.black),
+            )
+          else
+            const ColoredBox(color: Colors.black),
+          const ColoredBox(color: Color(0x66000000)),
+          const Center(child: PlayerLoadingHud()),
+          Positioned(
+            left: 0,
+            right: 0,
+            top: 0,
+            child: MangoWatchTopBar(
+              topInset: topInset,
+              safeInset: safeInset,
+              title: movie.title,
+              episodeLabel: episodes.isNotEmpty
+                  ? _episodeLabelAt(_selectedEpisode)
+                  : '',
+              tag: _watchTag(),
+              onCast: expand ? _onCastTap : null,
+              onBack: () {
+                if (_landscapeFs) {
+                  unawaited(_exitLandscapeFs());
+                } else {
+                  unawaited(_exitWatch());
+                }
+              },
+            ),
+          ),
+        ],
+      );
+    }
+    return MangoInlinePlayer(
             key: _inlinePlayerKey,
             url: url,
+            posterUrl: cover.isEmpty ? null : cover,
             startPositionMs: _playStartMs,
             immersiveTop: true,
             episodes: episodes,
@@ -1033,6 +1165,30 @@ class _MovieDetailPageState extends State<MovieDetailPage>
             onEpisodeSelect: (i) => _play(episodeIndex: i),
             sourceNames: [for (final s in movie.playSources) s.name],
             sourceIndex: _sourceIndex,
+            sourceProbeUrls: [
+              for (final s in movie.playSources)
+                () {
+                  final eps = s.episodes;
+                  if (eps.isEmpty) return '';
+                  final i = _selectedEpisode.clamp(0, eps.length - 1);
+                  return eps[i].url;
+                }(),
+            ],
+            onSourceSelect: (i) {
+              if (i == _sourceIndex) return;
+              _failedSources.clear();
+              final resume =
+                  _inlinePlayerKey.currentState?.positionMs ?? _playStartMs;
+              setState(() {
+                _sourceIndex = i;
+                _playStartMs = resume;
+              });
+              _play(episodeIndex: _selectedEpisode);
+              final name = movie.playSources[i].name.trim();
+              DialogX.showSuccess(
+                name.isEmpty ? '已切换线路 ${i + 1}' : '已切换到 $name',
+              );
+            },
             onRequestSourceFailover: _onPlayerSourceFailover,
             onPrepareRetry: () async {
               _failedSources.clear();
@@ -1055,7 +1211,17 @@ class _MovieDetailPageState extends State<MovieDetailPage>
             onNextEpisode: _selectedEpisode < episodes.length - 1
                 ? () => _play(episodeIndex: _selectedEpisode + 1)
                 : null,
-            onCast: _onCastTap,
+            // 仅全屏显示投屏；未全屏不露入口
+            onCast: expand
+                ? () {
+                    final p = _inlinePlayerKey.currentState;
+                    if (p != null) {
+                      p.openCast();
+                    } else {
+                      _onCastTap();
+                    }
+                  }
+                : null,
             showEpisodesInMenu: expand,
             topOverlay: MangoWatchTopBar(
               topInset: topInset,
@@ -1066,17 +1232,29 @@ class _MovieDetailPageState extends State<MovieDetailPage>
                   ? _episodeLabelAt(_selectedEpisode)
                   : '',
               tag: _watchTag(),
-              onCast: _onCastTap,
+              onCast: expand
+                  ? () {
+                      final p = _inlinePlayerKey.currentState;
+                      if (p != null) {
+                        p.openCast();
+                      } else {
+                        _onCastTap();
+                      }
+                    }
+                  : null,
               onPip: () {
-                unawaited(
-                  _inlinePlayerKey.currentState?.enterPictureInPicture() ??
-                      PlayerPip.enter(),
-                );
+                final player = _inlinePlayerKey.currentState;
+                if (player != null) {
+                  unawaited(player.enterPictureInPicture());
+                } else {
+                  unawaited(PlayerPip.enter());
+                }
               },
               onSeekForward: () =>
                   unawaited(_inlinePlayerKey.currentState?.seekBySeconds(10)),
-              onSettings: () =>
-                  _inlinePlayerKey.currentState?.openSettings(),
+              onSettings: expand
+                  ? () => _inlinePlayerKey.currentState?.openSettings()
+                  : null,
               onBack: () {
                 if (_landscapeFs) {
                   unawaited(_exitLandscapeFs());
@@ -1085,8 +1263,7 @@ class _MovieDetailPageState extends State<MovieDetailPage>
                 }
               },
             ),
-          )
-        : const ColoredBox(color: Colors.black);
+          );
   }
 
   Widget _buildMangoWatchScaffold(BuildContext context) {
@@ -1146,7 +1323,7 @@ class _MovieDetailPageState extends State<MovieDetailPage>
           MangoWatchHeader(
             title: movie.title,
             sourceLine: _watchSourceLine,
-            onTitleTap: _openWatchInfo,
+            onSynopsisTap: _openWatchInfo,
           ),
           const SizedBox(height: MangoWatchStyle.gapMetaTabs),
           MangoWatchTabs(
@@ -1161,6 +1338,7 @@ class _MovieDetailPageState extends State<MovieDetailPage>
               if (i == 1) _loadComments();
             },
             onFavorite: _toggleFav,
+            onCast: null,
             favored: _favored,
             onShare: _shareMovie,
             onCache: () => unawaited(_openDownloadPick()),
@@ -1244,7 +1422,43 @@ class _MovieDetailPageState extends State<MovieDetailPage>
                                     _play(episodeIndex: i),
                                 relatedMovies: _relatedMovies,
                                 relatedLoading: _relatedLoading,
+                                shellLoading: _loading ||
+                                    (episodes.isEmpty &&
+                                        movie.playSources.isEmpty),
                                 hideChrome: true,
+                                sourceNames: [
+                                  for (final s in movie.playSources) s.name,
+                                ],
+                                sourceIndex: _sourceIndex,
+                                sourceProbeUrls: [
+                                  for (final s in movie.playSources)
+                                    () {
+                                      final eps = s.episodes;
+                                      if (eps.isEmpty) return '';
+                                      final i = _selectedEpisode
+                                          .clamp(0, eps.length - 1);
+                                      return eps[i].url;
+                                    }(),
+                                ],
+                                onSourceSelect: (i) {
+                                  if (i == _sourceIndex) return;
+                                  _failedSources.clear();
+                                  final resume = _inlinePlayerKey
+                                          .currentState?.positionMs ??
+                                      _playStartMs;
+                                  setState(() {
+                                    _sourceIndex = i;
+                                    _playStartMs = resume;
+                                  });
+                                  _play(episodeIndex: _selectedEpisode);
+                                  final name =
+                                      movie.playSources[i].name.trim();
+                                  DialogX.showSuccess(
+                                    name.isEmpty
+                                        ? '已切换线路 ${i + 1}'
+                                        : '已切换到 $name',
+                                  );
+                                },
                                 onShowAllEpisodes: _showAllEpisodesInline,
                                 episodeIntro: _episodeIntro,
                                 relatedTitle: movie.isSeries
@@ -1325,7 +1539,8 @@ class _MovieDetailPageState extends State<MovieDetailPage>
         systemNavigationBarIconBrightness: Brightness.light,
       ),
       child: Scaffold(
-        backgroundColor: expandPlayer ? Colors.black : _page,
+        backgroundColor:
+            expandPlayer ? Colors.black : AppPalette.page(context),
         extendBody: true,
         extendBodyBehindAppBar: true,
         resizeToAvoidBottomInset: false,
@@ -1370,58 +1585,27 @@ class _MovieDetailPageState extends State<MovieDetailPage>
 
   @override
   Widget build(BuildContext context) {
+    // forceWatch：列表侧已预加载；此处直接进播放壳，避免单独黑底加载页
     if (widget.forceWatch && !_watching) {
-      final cover = movie.coverUrl?.trim() ?? '';
-    return ColoredBox(
-        color: Colors.black,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-            if (cover.isNotEmpty)
-              Opacity(
-                opacity: 0.45,
-                child: CmsCoverImage(
-                  url: cover,
-                  fit: BoxFit.cover,
-                ),
-              ),
-            const ColoredBox(color: Color(0x66000000)),
-            Center(
-                        child: Column(
-                mainAxisSize: MainAxisSize.min,
-                          children: [
-                  const CupertinoActivityIndicator(color: Colors.white),
-                  if (movie.title.trim().isNotEmpty) ...[
-                    const SizedBox(height: 14),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 32),
-                      child: Text(
-                              movie.title,
-                        textAlign: TextAlign.center,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontFamily: 'AppSans',
-                          fontSize: 15,
-                                fontWeight: FontWeight.w700,
-                                color: Colors.white,
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-                              ),
-                            ),
-                          ],
-                        ),
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _watching || !widget.forceWatch) return;
+        if (!_loading) {
+          _maybeAutoPlay();
+        }
+      });
+      return InterceptPopScope(
+        onIntercept: () {
+          if (Navigator.of(context).canPop()) {
+            Navigator.of(context).pop();
+          }
+        },
+        child: _buildMangoWatchScaffold(context),
       );
     }
 
     if (_watching) {
-      return PopScope(
-        canPop: false,
-        onPopInvokedWithResult: (didPop, _) {
-          if (didPop) return;
+      return InterceptPopScope(
+        onIntercept: () {
           if (_downloadPick) {
             _collapseDownloadPick();
           } else if (_episodesExpanded) {
@@ -1630,15 +1814,9 @@ class _MovieDetailPageState extends State<MovieDetailPage>
                               value: _watch,
                               onChanged: _setWatch,
                             ),
-                            if (movie.director.isNotEmpty ||
-                                movie.writer.isNotEmpty) ...[
+                            if (movie.writer.isNotEmpty) ...[
                               const SizedBox(height: 14),
-                              if (movie.director.isNotEmpty)
-                                _QuietLine('导演', movie.director),
-                              if (movie.writer.isNotEmpty) ...[
-                                const SizedBox(height: 4),
-                                _QuietLine('编剧', movie.writer),
-                              ],
+                              _QuietLine('编剧', movie.writer),
                             ],
                             if (_error != null) ...[
                               const SizedBox(height: 10),
@@ -1846,15 +2024,8 @@ class _PackFlyOverlayState extends State<_PackFlyOverlay>
                               width: 28,
                               height: 28,
                               decoration: BoxDecoration(
-                                color: const Color(0xFFFF9F0A),
-                                borderRadius: BorderRadius.circular(8),
-                                boxShadow: const [
-                                  BoxShadow(
-                                    color: Color(0x55000000),
-                                    blurRadius: 8,
-                                    offset: Offset(0, 2),
-                                  ),
-                                ],
+                                color: AppColors.brand,
+                                shape: BoxShape.circle,
                               ),
                               child: const Icon(
                                 Icons.download_rounded,
@@ -3026,36 +3197,35 @@ class _CommentPanelState extends State<_CommentPanel> {
   Widget _sortTextTab(String label, bool hot) {
     final on = _sortHot == hot;
     return GestureDetector(
-                            onTap: () {
+      onTap: () {
         if (_sortHot == hot) return;
-                              HapticFeedback.selectionClick();
+        HapticFeedback.selectionClick();
         setState(() => _sortHot = hot);
       },
       behavior: HitTestBehavior.opaque,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              fontFamily: 'AppSans',
-              fontSize: 14,
-              fontWeight: on ? FontWeight.w800 : FontWeight.w600,
-              color: on ? _lime : _faint,
-              decoration: TextDecoration.none,
-            ),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+        decoration: BoxDecoration(
+          color: on ? _lime.withValues(alpha: 0.16) : const Color(0xFFF2F3F5),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: on ? _lime.withValues(alpha: 0.55) : const Color(0xFFE8E8EC),
+            width: 1,
           ),
-          SizedBox(height: 4),
-          AnimatedContainer(
-                              duration: const Duration(milliseconds: 180),
-            width: on ? 16 : 0,
-            height: 3,
-                              decoration: BoxDecoration(
-              color: _lime,
-              borderRadius: BorderRadius.circular(2),
-            ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontFamily: 'AppSans',
+            fontSize: 13,
+            fontWeight: on ? FontWeight.w800 : FontWeight.w600,
+            color: on ? _ink : _muted,
+            decoration: TextDecoration.none,
+            height: 1.1,
           ),
-        ],
+        ),
       ),
     );
   }
@@ -3261,138 +3431,138 @@ class _CommentPanelState extends State<_CommentPanel> {
   @override
   Widget build(BuildContext context) {
     final comments = _sorted;
-    return _GlassCard(
-      padding: const EdgeInsets.fromLTRB(10, 10, 10, 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-          Row(
+    return Stack(
+      children: [
+        _GlassCard(
+          padding: const EdgeInsets.fromLTRB(10, 10, 10, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Expanded(
-                child: Text(
-                  '评论',
-                  textAlign: TextAlign.left,
-                  style: TextStyle(
-                    fontFamily: 'AppSans',
-                    fontSize: 17,
-                    fontWeight: FontWeight.w800,
-                    color: _ink,
-                    decoration: TextDecoration.none,
-                  ),
-                ),
-              ),
-              GestureDetector(
-                onTap: widget.onRefresh,
-                child: Padding(
-                  padding: EdgeInsets.all(6),
-                  child: Icon(
-                    Icons.refresh_rounded,
-                    size: 20,
-                    color: _faint,
-                  ),
-                ),
-              ),
-              GestureDetector(
-                onTap: () => _toggleCompose(),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 4),
-                  child: Text(
-                    _composeOpen ? '收起' : '写评论',
-                    style: TextStyle(
-                      fontFamily: 'AppSans',
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: _composeOpen ? _ink : _lime,
-                      decoration: TextDecoration.none,
+              Row(
+                children: [
+                  _sortTextTab('最新', false),
+                  const SizedBox(width: 8),
+                  _sortTextTab('最热', true),
+                  const Spacer(),
+                  GestureDetector(
+                    onTap: widget.onRefresh,
+                    child: const Padding(
+                      padding: EdgeInsets.all(6),
+                      child: Icon(
+                        Icons.refresh_rounded,
+                        size: 20,
+                        color: _faint,
+                      ),
                     ),
                   ),
-                ),
-              ),
-              if (widget.onClose != null)
-                IconButton(
-                  onPressed: widget.onClose,
-                  visualDensity: VisualDensity.compact,
-                  icon: const Icon(
-                    CupertinoIcons.xmark,
-                      size: 18,
-                    color: _faint,
+                  GestureDetector(
+                    onTap: () => _toggleCompose(),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Text(
+                        _composeOpen ? '收起' : '写评论',
+                        style: TextStyle(
+                          fontFamily: 'AppSans',
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: _composeOpen ? _ink : _lime,
+                          decoration: TextDecoration.none,
+                        ),
+                      ),
+                    ),
                   ),
-                ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              _sortTextTab('最新', false),
-              const SizedBox(width: 18),
-              _sortTextTab('最热', true),
-            ],
-          ),
-          AnimatedSize(
-            duration: const Duration(milliseconds: 260),
-            curve: Curves.easeOutCubic,
-            alignment: Alignment.topCenter,
-            child: _composeOpen
-                ? Padding(
-                    padding: const EdgeInsets.only(top: 14),
-                    child: _composeEditor(),
-                  )
-                : const SizedBox(width: double.infinity),
-          ),
-          const SizedBox(height: 10),
-          if (widget.loading)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 24),
-              child: Center(child: CupertinoActivityIndicator()),
-            )
-          else if (widget.error != null)
-            Padding(
-              padding: EdgeInsets.symmetric(vertical: 16),
-              child: GestureDetector(
-                onTap: widget.onRefresh,
-                child: Text(
-                  '${widget.error}\n点击重试',
-                  textAlign: TextAlign.center,
+                  if (widget.onClose != null)
+                    IconButton(
+                      onPressed: widget.onClose,
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(
+                        CupertinoIcons.xmark,
+                        size: 18,
+                        color: _faint,
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              if (widget.loading)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 24),
+                  child: Center(child: CupertinoActivityIndicator()),
+                )
+              else if (widget.error != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  child: GestureDetector(
+                    onTap: widget.onRefresh,
+                    child: Text(
+                      '${widget.error}\n点击重试',
+                      textAlign: TextAlign.center,
                       style: const TextStyle(
                         fontFamily: 'AppSans',
-                    fontSize: 13,
-                    color: Color(0xFFB54708),
+                        fontSize: 13,
+                        color: Color(0xFFB54708),
                         decoration: TextDecoration.none,
                       ),
                     ),
-              ),
-            )
-          else if (comments.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 28),
-              child: Center(
-                child: Text(
-                  '暂无评论',
-                  style: TextStyle(
-                    fontFamily: 'AppSans',
-                    fontSize: 14,
-                    color: _faint,
-                    decoration: TextDecoration.none,
-              ),
+                  ),
+                )
+              else if (comments.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 28),
+                  child: Center(
+                    child: Text(
+                      '暂无评论，来说两句吧',
+                      style: TextStyle(
+                        fontFamily: 'AppSans',
+                        fontSize: 14,
+                        color: _faint,
+                        decoration: TextDecoration.none,
+                      ),
+                    ),
+                  ),
+                )
+              else
+                for (final c in comments) ...[
+                  _CommentTile(
+                    comment: c,
+                    onUp: () => _digg(c, 'up'),
+                    onDown: () => _digg(c, 'down'),
+                    onReply: () => _toggleCompose(
+                      replyTo: c.userName.trim().isEmpty
+                          ? '访客'
+                          : c.userName.trim(),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                ],
+            ],
+          ),
+        ),
+        if (_composeOpen)
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: () {
+                _focus.unfocus();
+                setState(() {
+                  _composeOpen = false;
+                  _replyHint = null;
+                });
+              },
+              child: const ColoredBox(color: Color(0x22000000)),
             ),
           ),
-            )
-          else
-            for (final c in comments) ...[
-              _CommentTile(
-                comment: c,
-                onUp: () => _digg(c, 'up'),
-                onDown: () => _digg(c, 'down'),
-                onReply: () => _toggleCompose(
-                  replyTo: c.userName.trim().isEmpty
-                      ? '访客'
-                      : c.userName.trim(),
-                ),
-              ),
-              const SizedBox(height: 16),
-            ],
-        ],
-      ),
+        if (_composeOpen)
+          Positioned(
+            left: 10,
+            right: 10,
+            top: 52,
+            child: Material(
+              color: Colors.transparent,
+              child: _composeEditor(),
+            ),
+          ),
+      ],
     );
   }
 }
@@ -3428,159 +3598,157 @@ class _CommentTile extends StatelessWidget {
         comment.userName.trim().isEmpty ? '访客' : comment.userName.trim();
     final time = formatCommentTime(comment.timeText, timeMs: comment.timeMs);
     final body = _cleanBody(comment.content);
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        CircleAvatar(
-          radius: 18,
-          backgroundColor: _soft,
-          child: (comment.avatarUrl ?? '').isEmpty
-              ? Text(
-                  name.isNotEmpty ? name[0] : '?',
-                  style: const TextStyle(
-                    fontFamily: 'AppSans',
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: _muted,
-                  ),
-                )
-              : ClipOval(
-                  child: Image.network(
-                    comment.avatarUrl!,
-                    width: 36,
-                    height: 36,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, error, stackTrace) => Text(
-                      name.isNotEmpty ? name[0] : '?',
-                      style: const TextStyle(
-                        fontFamily: 'AppSans',
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: _muted,
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFF0F0F3)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          CircleAvatar(
+            radius: 18,
+            backgroundColor: _soft,
+            child: (comment.avatarUrl ?? '').isEmpty
+                ? Text(
+                    name.isNotEmpty ? name[0] : '?',
+                    style: const TextStyle(
+                      fontFamily: 'AppSans',
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: _muted,
+                    ),
+                  )
+                : ClipOval(
+                    child: Image.network(
+                      comment.avatarUrl!,
+                      width: 36,
+                      height: 36,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, error, stackTrace) => Text(
+                        name.isNotEmpty ? name[0] : '?',
+                        style: const TextStyle(
+                          fontFamily: 'AppSans',
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: _muted,
+                        ),
                       ),
                     ),
                   ),
-                ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                name,
-                style: const TextStyle(
-                  fontFamily: 'AppSans',
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  color: _ink,
-                  decoration: TextDecoration.none,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                body,
-                style: const TextStyle(
-                  fontFamily: 'AppSans',
-                  fontSize: 14,
-                  height: 1.5,
-                  color: Color(0xFF333333),
-                  decoration: TextDecoration.none,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontFamily: 'AppSans',
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: _ink,
+                          decoration: TextDecoration.none,
+                        ),
+                      ),
+                    ),
+                    Text(
                       time,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         fontFamily: 'AppSans',
-                        fontSize: 12,
+                        fontSize: 11,
                         color: _faint,
                         decoration: TextDecoration.none,
                       ),
                     ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  body,
+                  style: const TextStyle(
+                    fontFamily: 'AppSans',
+                    fontSize: 14,
+                    height: 1.45,
+                    color: Color(0xFF333333),
+                    decoration: TextDecoration.none,
                   ),
-                  _CommentAction(
-                    icon: Icons.thumb_up_alt_outlined,
-                    count: comment.up,
-                    onTap: onUp,
-                  ),
-                  const SizedBox(width: 12),
-                  _CommentAction(
-                    icon: Icons.thumb_down_alt_outlined,
-                    count: comment.down,
-                    onTap: onDown,
-                  ),
-                  const SizedBox(width: 12),
-                  _CommentAction(
-                    icon: Icons.chat_bubble_outline_rounded,
-                    count: comment.replyCount,
-                    onTap: onReply,
-                    hideZero: true,
-                  ),
-                ],
-              ),
-            ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    _CommentAction(
+                      icon: Icons.thumb_up_alt_outlined,
+                      label: '${comment.up}',
+                      onTap: onUp,
+                    ),
+                    const SizedBox(width: 14),
+                    _CommentAction(
+                      icon: Icons.thumb_down_alt_outlined,
+                      label: '${comment.down}',
+                      onTap: onDown,
+                    ),
+                    const SizedBox(width: 14),
+                    _CommentAction(
+                      icon: Icons.chat_bubble_outline_rounded,
+                      label: '回复',
+                      onTap: onReply,
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
 
-/// 统一尺寸的加粗线框图标 + 右侧数量
+/// 统一尺寸的加粗线框图标 + 右侧文案
 class _CommentAction extends StatelessWidget {
   const _CommentAction({
     required this.icon,
-    required this.count,
+    required this.label,
     required this.onTap,
-    this.hideZero = false,
   });
 
   final IconData icon;
-  final int count;
+  final String label;
   final VoidCallback onTap;
-  final bool hideZero;
 
   @override
   Widget build(BuildContext context) {
-    final showCount = count > 0 || !hideZero;
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          SizedBox(
-            width: 22,
-            height: 22,
-            child: Icon(
-              icon,
-              size: 20,
-              color: const Color(0xFF666666),
-              weight: 600,
-              fill: 0,
-              grade: 0,
-              opticalSize: 24,
-            ),
+          Icon(
+            icon,
+            size: 18,
+            color: const Color(0xFF666666),
           ),
-          if (showCount) ...[
-            const SizedBox(width: 3),
+          const SizedBox(width: 4),
           Text(
-              '$count',
-              style: const TextStyle(
+            label,
+            style: const TextStyle(
               fontFamily: 'AppSans',
-                fontSize: 12,
+              fontSize: 12,
               fontWeight: FontWeight.w600,
-                color: Color(0xFF666666),
+              color: Color(0xFF666666),
               decoration: TextDecoration.none,
             ),
           ),
-          ],
         ],
       ),
     );
@@ -3656,4 +3824,385 @@ class _GlassBack extends StatelessWidget {
       ),
     );
   }
+}
+
+
+class _WatchIntroSheet extends StatefulWidget {
+  const _WatchIntroSheet({required this.movie});
+
+  final Movie movie;
+
+  @override
+  State<_WatchIntroSheet> createState() => _WatchIntroSheetState();
+}
+
+class _WatchIntroSheetState extends State<_WatchIntroSheet> {
+  static const _tabs = ['全部', '主演', '导演', '编剧'];
+  int _tab = 0;
+  bool _expanded = false;
+
+  Movie get movie => widget.movie;
+
+  static List<String> _splitPeople(String raw) {
+    return raw
+        .split(RegExp(r'[,，、/|]'))
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty && e != '暂无' && e != '内详')
+        .toList(growable: false);
+  }
+
+  List<_WatchCastRow> get _rows {
+    final out = <_WatchCastRow>[];
+    final seen = <String>{};
+    for (final d in _splitPeople(movie.director)) {
+      if (!seen.add(d)) continue;
+      out.add(_WatchCastRow(name: d, role: '导演', kind: 2));
+    }
+    for (final w in _splitPeople(movie.writer)) {
+      if (!seen.add(w)) continue;
+      out.add(_WatchCastRow(name: w, role: '编剧', kind: 3));
+    }
+    for (final a in movie.cast) {
+      final n = a.name.trim();
+      if (n.isEmpty || !seen.add(n)) continue;
+      final role = a.role.trim().isEmpty ? '主演' : a.role.trim();
+      out.add(_WatchCastRow(
+        name: n,
+        role: role,
+        avatarUrl: a.avatarUrl,
+        kind: 1,
+      ));
+    }
+    return out;
+  }
+
+  List<_WatchCastRow> get _filtered {
+    final all = _rows;
+    if (_tab == 0) return all;
+    return all.where((e) => e.kind == _tab).toList(growable: false);
+  }
+
+  Color _avatarColor(String name) {
+    final palette = <Color>[
+      const Color(0xFF5B8DEF),
+      const Color(0xFF34C759),
+      const Color(0xFFFF9F0A),
+      const Color(0xFFFF453A),
+      const Color(0xFFBF5AF2),
+      const Color(0xFF64D2FF),
+    ];
+    return palette[name.hashCode.abs() % palette.length];
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final synopsis = movie.synopsis.trim().isEmpty ? '暂无简介' : movie.synopsis.trim();
+    final meta = <String>[
+      if (movie.year > 0) '${movie.year}',
+      if (movie.area.trim().isNotEmpty) movie.area.trim(),
+      ...movie.genres.take(3).map((e) => e.trim()).where((e) => e.isNotEmpty),
+      if (movie.lang.trim().isNotEmpty) movie.lang.trim(),
+    ].join(' · ');
+    final bottom = MediaQuery.viewPaddingOf(context).bottom;
+    final filtered = _filtered;
+
+    return Container(
+      height: MediaQuery.sizeOf(context).height * 0.72,
+      decoration: const BoxDecoration(
+        color: Color(0xFFFAFAFA),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      child: Column(
+        children: [
+          const SizedBox(height: 10),
+          Container(
+            width: 36,
+            height: 4,
+            decoration: BoxDecoration(
+              color: const Color(0xFFD1D1D6),
+              borderRadius: BorderRadius.circular(999),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 8, 0),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        movie.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontFamily: 'AppSans',
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800,
+                          color: Color(0xFF111111),
+                          height: 1.2,
+                          decoration: TextDecoration.none,
+                        ),
+                      ),
+                      if (meta.isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          meta,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontFamily: 'AppSans',
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: const Color(0xFF111111).withValues(alpha: 0.45),
+                            decoration: TextDecoration.none,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                IconButton(
+                  onPressed: () => Navigator.of(context).maybePop(),
+                  icon: const Icon(Icons.close_rounded, color: Color(0xFF8E8E93)),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                GestureDetector(
+                  onTap: synopsis.length > 60
+                      ? () {
+                          HapticFeedback.selectionClick();
+                          setState(() => _expanded = !_expanded);
+                        }
+                      : null,
+                  behavior: HitTestBehavior.opaque,
+                  child: AnimatedSize(
+                    duration: const Duration(milliseconds: 360),
+                    curve: Curves.easeOutCubic,
+                    alignment: Alignment.topLeft,
+                    clipBehavior: Clip.hardEdge,
+                    child: Text(
+                      synopsis,
+                      maxLines: _expanded || synopsis.length <= 60 ? null : 3,
+                      overflow: _expanded || synopsis.length <= 60
+                          ? TextOverflow.visible
+                          : TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily: 'AppSans',
+                        fontSize: 13,
+                        height: 1.45,
+                        fontWeight: FontWeight.w500,
+                        color: const Color(0xFF111111).withValues(alpha: 0.72),
+                        decoration: TextDecoration.none,
+                      ),
+                    ),
+                  ),
+                ),
+                if (synopsis.length > 60)
+                  GestureDetector(
+                    onTap: () {
+                      HapticFeedback.selectionClick();
+                      setState(() => _expanded = !_expanded);
+                    },
+                    behavior: HitTestBehavior.opaque,
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 220),
+                            switchInCurve: Curves.easeOut,
+                            switchOutCurve: Curves.easeIn,
+                            transitionBuilder: (child, anim) {
+                              return FadeTransition(
+                                opacity: anim,
+                                child: child,
+                              );
+                            },
+                            child: Text(
+                              _expanded ? '收起' : '展开',
+                              key: ValueKey(_expanded),
+                              style: const TextStyle(
+                                fontFamily: 'AppSans',
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF007AFF),
+                                decoration: TextDecoration.none,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 2),
+                          AnimatedRotation(
+                            turns: _expanded ? 0.5 : 0,
+                            duration: const Duration(milliseconds: 320),
+                            curve: Curves.easeOutCubic,
+                            child: const Icon(
+                              CupertinoIcons.chevron_down,
+                              size: 14,
+                              color: Color(0xFF007AFF),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          SizedBox(
+            height: 34,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              itemCount: _tabs.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 8),
+              itemBuilder: (context, i) {
+                final on = _tab == i;
+                return GestureDetector(
+                  onTap: () {
+                    HapticFeedback.selectionClick();
+                    setState(() => _tab = i);
+                  },
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    curve: Curves.easeOutCubic,
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: on ? const Color(0xFF111111) : const Color(0xFFF2F2F7),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      _tabs[i],
+                      style: TextStyle(
+                        fontFamily: 'AppSans',
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: on
+                            ? Colors.white
+                            : const Color(0xFF111111).withValues(alpha: 0.55),
+                        decoration: TextDecoration.none,
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 240),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              transitionBuilder: (child, anim) {
+                return FadeTransition(
+                  opacity: anim,
+                  child: SlideTransition(
+                    position: Tween<Offset>(
+                      begin: const Offset(0.04, 0),
+                      end: Offset.zero,
+                    ).animate(anim),
+                    child: child,
+                  ),
+                );
+              },
+              child: filtered.isEmpty
+                  ? Center(
+                      key: ValueKey('empty-$_tab'),
+                      child: Text(
+                        '暂无相关人员',
+                        style: TextStyle(
+                          fontFamily: 'AppSans',
+                          fontSize: 13,
+                          color: const Color(0xFF111111).withValues(alpha: 0.4),
+                          decoration: TextDecoration.none,
+                        ),
+                      ),
+                    )
+                  : ListView.separated(
+                      key: ValueKey('list-$_tab-${filtered.length}'),
+                      padding: EdgeInsets.fromLTRB(16, 8, 16, 16 + bottom),
+                      itemCount: filtered.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 12),
+                      itemBuilder: (context, i) {
+                        final row = filtered[i];
+                        return Row(
+                          children: [
+                            ClipOval(
+                              child: CastAvatarImage(
+                                name: row.name,
+                                color: _avatarColor(row.name),
+                                avatarUrl: row.avatarUrl,
+                                size: 48,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    row.name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontFamily: 'AppSans',
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w700,
+                                      color: Color(0xFF111111),
+                                      decoration: TextDecoration.none,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    row.role,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontFamily: 'AppSans',
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500,
+                                      color: const Color(0xFF111111)
+                                          .withValues(alpha: 0.45),
+                                      decoration: TextDecoration.none,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WatchCastRow {
+  const _WatchCastRow({
+    required this.name,
+    required this.role,
+    required this.kind,
+    this.avatarUrl,
+  });
+
+  final String name;
+  final String role;
+  final String? avatarUrl;
+  /// 1主演 2导演 3编剧
+  final int kind;
 }

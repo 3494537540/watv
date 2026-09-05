@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/movie_models.dart';
 import 'app_permission.dart';
 import 'cms_fav_store.dart';
+import 'cms_message_store.dart';
 import 'local_notification_service.dart';
 import 'local_play_store.dart';
 import 'maccms_api.dart';
@@ -61,7 +62,7 @@ abstract final class VodUpdateWatchService {
           context: context,
         );
         if (!ok) {
-          await prefs.setInt(_lastCheckKey, now);
+          // 未授权时不写 lastCheck，下次仍可再请求
           return;
         }
       } else if (!await AppPermission.isGranted(
@@ -96,6 +97,14 @@ abstract final class VodUpdateWatchService {
           vodId: id,
           title: movie.title,
           body: body,
+        );
+        // 同步写入软件内「公告/通知」列表
+        await CmsMessageStore.instance.pushLocalNotice(
+          id: 'vod_up_$id',
+          title: movie.title,
+          content: body,
+          tag: '剧集更新',
+          systemNotify: false, // 系统栏已由 showVodUpdate 发送
         );
       }
 

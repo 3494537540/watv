@@ -139,4 +139,7 @@ class PlaybackSpeedTracker {
     if (!_loading) return '— KB/s';
     return '${(180 + (_tickFrame % 40)).toString()} KB/s';
   }
+
+  /// 当前展示用字节/秒（供 HUD 上色）
+  double get displayBps => _displayBps;
 }

@@ -28,9 +28,9 @@ class VodFilterPage extends StatefulWidget {
 }
 
 class _VodFilterPageState extends State<VodFilterPage> {
-  static const _ink = Color(0xFF111111);
-  static const _muted = Color(0xFF8A8F98);
-  static const _pageBg = Color(0xFFFFFFFF);
+  Color get _ink => AppPalette.text(context);
+  Color get _muted => AppPalette.textHint(context);
+  Color get _pageBg => AppPalette.page(context);
   static Color get _accent => AppColors.brand;
   static const _pageSize = 30;
   static const _excludeRoots = {20, 30}; // 成人 / 里番
@@ -325,7 +325,7 @@ class _VodFilterPageState extends State<VodFilterPage> {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
-                      const Text(
+                      Text(
                         '片库',
                         style: TextStyle(
                           fontFamily: 'AppSans',
@@ -344,7 +344,7 @@ class _VodFilterPageState extends State<VodFilterPage> {
                           !_typesReady || _loading
                               ? '加载中…'
                               : '${_movies.length} 部',
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontFamily: 'AppSans',
                             fontSize: 13,
                             fontWeight: FontWeight.w500,
@@ -442,7 +442,7 @@ class _VodFilterPageState extends State<VodFilterPage> {
         const SliverPadding(
           padding: EdgeInsets.fromLTRB(0, 4, 0, 40),
           sliver: SliverToBoxAdapter(
-            child: HomePosterGridSkeleton(count: 9, showMetaball: true),
+            child: HomePosterGridSkeleton(count: 9),
           ),
         ),
       ];
@@ -454,7 +454,7 @@ class _VodFilterPageState extends State<VodFilterPage> {
           child: Center(
             child: TextButton(
               onPressed: () => unawaited(_reload()),
-              child: const Text(
+            child: Text(
                 '加载失败，点击重试',
                 style: TextStyle(
                   fontFamily: 'AppSans',
@@ -469,7 +469,7 @@ class _VodFilterPageState extends State<VodFilterPage> {
     }
     if (_movies.isEmpty) {
       return [
-        const SliverFillRemaining(
+        SliverFillRemaining(
           hasScrollBody: false,
           child: Center(
             child: Text(
@@ -591,7 +591,7 @@ class _FilterTextRow extends StatelessWidget {
                 fontFamily: 'AppSans',
                 fontSize: 14,
                 fontWeight: on ? FontWeight.w700 : FontWeight.w500,
-                color: on ? accent : _VodFilterPageState._ink,
+                color: on ? accent : AppPalette.text(context),
                 decoration: TextDecoration.none,
               ),
             ),

@@ -1,7 +1,5 @@
 import 'dart:async';
-import 'dart:math' as math;
 
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -91,32 +89,32 @@ class _AppOnboardingGateState extends State<AppOnboardingGate> {
   static const steps = <ProductTourStep>[
     ProductTourStep(
       targetId: 'tour_search',
-      title: '搜索与热榜',
-      body: '在这里搜片名、演员；点橙色「热榜」可看当下热门。',
+      title: '搜索影片',
+      body: '输入片名或演员即可搜索；橙色「热榜」可看当下热门。',
       preferBelow: true,
     ),
     ProductTourStep(
       targetId: 'tour_tabs',
-      title: '切换频道',
-      body: '推荐、电影、电视剧、综艺、动漫、短剧——左右滑动切换分类。',
+      title: '频道分类',
+      body: '左右滑动切换推荐、电影、剧集、综艺、动漫等频道。',
       preferBelow: true,
     ),
     ProductTourStep(
       targetId: 'tour_quick',
-      title: '快捷入口',
-      body: '分类片库、榜单、会员、追番表、兑福利，常用功能一键直达。',
+      title: '快捷功能',
+      body: '片库筛选、榜单、会员与福利入口都在这里。',
       preferBelow: true,
     ),
     ProductTourStep(
       targetId: 'tour_feed',
-      title: '刷片开播',
-      body: '下滑浏览本周热门，点海报进详情与播放。右下角会出现「上次观看」续看小卡。',
+      title: '发现好片',
+      body: '下滑浏览热门海报，点一下就能进详情播放。',
       preferBelow: false,
     ),
     ProductTourStep(
       targetId: 'tour_nav',
       title: '底部导航',
-      body: '首页找片、筛选片库、资讯公告、我的账号——随时切换。',
+      body: '首页 · 片库 · 资讯 · 我的，随时切换。',
       preferBelow: false,
     ),
   ];
@@ -270,33 +268,15 @@ class _ProductTourOverlayState extends State<ProductTourOverlay>
   @override
   Widget build(BuildContext context) {
     final step = widget.steps[_index];
-    final size = MediaQuery.sizeOf(context);
     final pad = MediaQuery.paddingOf(context);
     final hole = _hole;
     final total = widget.steps.length;
-
-    // 气泡位置
-    final tipW = math.min(320.0, size.width - 32);
-    double tipTop;
-    if (hole == null) {
-      tipTop = size.height * 0.38;
-    } else if (step.preferBelow) {
-      tipTop = hole.bottom + 14;
-      if (tipTop + 180 > size.height - pad.bottom - 24) {
-        tipTop = hole.top - 190;
-      }
-    } else {
-      tipTop = hole.top - 190;
-      if (tipTop < pad.top + 12) tipTop = hole.bottom + 14;
-    }
-    tipTop = tipTop.clamp(pad.top + 8, size.height - pad.bottom - 200);
 
     return Material(
       color: Colors.transparent,
       child: Stack(
         fit: StackFit.expand,
         children: [
-          // 遮罩挖孔
           AnimatedBuilder(
             animation: _pulse,
             builder: (context, _) {
@@ -309,7 +289,6 @@ class _ProductTourOverlayState extends State<ProductTourOverlay>
               );
             },
           ),
-          // 点击遮罩不穿透
           Positioned.fill(
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
@@ -317,7 +296,6 @@ class _ProductTourOverlayState extends State<ProductTourOverlay>
               child: const SizedBox.expand(),
             ),
           ),
-          // 选中区：浅色抬起底 + 细描边（不再用粗青绿描边）
           if (hole != null)
             Positioned(
               left: hole.left,
@@ -337,28 +315,17 @@ class _ProductTourOverlayState extends State<ProductTourOverlay>
                           color: Colors.white.withValues(alpha: 0.55 + p * 0.25),
                           width: 1.5,
                         ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.22),
-                            blurRadius: 16 + p * 6,
-                            offset: const Offset(0, 4),
-                          ),
-                          BoxShadow(
-                            color: Colors.white.withValues(alpha: 0.18 + p * 0.1),
-                            blurRadius: 12 + p * 8,
-                          ),
-                        ],
                       ),
                     );
                   },
                 ),
               ),
             ),
-          // 气泡
+          // 底部固定说明卡：避免挡住高亮区，布局更稳
           Positioned(
-            left: (size.width - tipW) / 2,
-            top: tipTop,
-            width: tipW,
+            left: 16,
+            right: 16,
+            bottom: pad.bottom + 16,
             child: _TourBubble(
               step: _index + 1,
               total: total,
@@ -440,6 +407,21 @@ class _TourBubble extends StatelessWidget {
             const SizedBox(height: 14),
             Row(
               children: [
+                for (var i = 0; i < total; i++) ...[
+                  if (i > 0) const SizedBox(width: 6),
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    width: i + 1 == step ? 16 : 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: i + 1 == step
+                          ? AppColors.brand
+                          : AppColors.brand.withValues(alpha: 0.22),
+                      borderRadius: BorderRadius.circular(99),
+                    ),
+                  ),
+                ],
+                const Spacer(),
                 TextButton(
                   onPressed: onSkip,
                   child: const Text(
@@ -451,7 +433,7 @@ class _TourBubble extends StatelessWidget {
                     ),
                   ),
                 ),
-                const Spacer(),
+                const SizedBox(width: 4),
                 FilledButton(
                   onPressed: onNext,
                   style: FilledButton.styleFrom(
@@ -465,7 +447,7 @@ class _TourBubble extends StatelessWidget {
                     ),
                   ),
                   child: Text(
-                    isLast ? '完成导览' : '下一步',
+                    isLast ? '完成' : '下一步',
                     style: const TextStyle(
                       fontFamily: 'AppSans',
                       fontWeight: FontWeight.w800,

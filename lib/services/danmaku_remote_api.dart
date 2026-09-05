@@ -33,7 +33,7 @@ class DanmakuRemoteApi {
       'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 '
       '(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
 
-  static const _maxItems = 2500;
+  static const _maxItems = 1200;
 
   static String md5Hex(String key) =>
       md5.convert(utf8.encode(key.trim())).toString();

@@ -1,13 +1,17 @@
 import 'dart:async';
 
+import 'package:airplay_button/air_play_button.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../player/dlna_cast_service.dart';
+import '../player/ios_airplay.dart';
+import '../theme/app_colors.dart';
 import 'dialogx/dialogx.dart';
 
-/// 投屏面板：白底中性配色，无演示设备
+/// 投屏：短弹层；全屏可走侧栏 [CastPanel]
 Future<void> showCastSheet({
   required BuildContext context,
   required String mediaUrl,
@@ -19,78 +23,109 @@ Future<void> showCastSheet({
     context: context,
     backgroundColor: Colors.transparent,
     isScrollControlled: true,
-    builder: (ctx) => _CastSheet(
-      mediaUrl: mediaUrl,
-      title: title,
-      onCastStarted: onCastStarted,
-      onCastStopped: onCastStopped,
-    ),
+    isDismissible: true,
+    enableDrag: true,
+    barrierColor: const Color(0x66000000),
+    builder: (ctx) {
+      return GestureDetector(
+        onTap: () => Navigator.of(ctx).maybePop(),
+        behavior: HitTestBehavior.opaque,
+        child: GestureDetector(
+          onTap: () {},
+          child: Align(
+            alignment: Alignment.bottomCenter,
+            child: CastPanel(
+              mediaUrl: mediaUrl,
+              title: title,
+              compact: true,
+              onClose: () => Navigator.of(ctx).maybePop(),
+              onCastStarted: onCastStarted,
+              onCastStopped: onCastStopped,
+            ),
+          ),
+        ),
+      );
+    },
   );
 }
 
-class _CastSheet extends StatefulWidget {
-  const _CastSheet({
+/// 投屏内容（底栏短弹 / 全屏侧栏共用）
+class CastPanel extends StatefulWidget {
+  const CastPanel({
+    super.key,
     required this.mediaUrl,
     required this.title,
+    required this.onClose,
     this.onCastStarted,
     this.onCastStopped,
+    this.compact = true,
+    this.asSide = false,
   });
 
   final String mediaUrl;
   final String title;
+  final VoidCallback onClose;
   final VoidCallback? onCastStarted;
   final VoidCallback? onCastStopped;
+  final bool compact;
+  final bool asSide;
 
   @override
-  State<_CastSheet> createState() => _CastSheetState();
+  State<CastPanel> createState() => _CastPanelState();
 }
 
-class _CastSheetState extends State<_CastSheet> {
+class _CastPanelState extends State<CastPanel> {
   static const _bg = Color(0xFFFFFFFF);
   static const _soft = Color(0xFFF5F5F7);
-  static const _line = Color(0xFFE5E5EA);
   static const _ink = Color(0xFF1C1C1E);
   static const _muted = Color(0xFF8E8E93);
-  static const _accent = Color(0xFF1C1C1E);
 
   final _svc = DlnaCastService.instance;
   List<DlnaDevice> _devices = const [];
   bool _scanning = false;
   bool _casting = false;
   bool _paused = false;
+  bool _showMore = false;
   DlnaDevice? _active;
-  String? _hint;
+
+  bool get _isIos =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+
+  Color get _accent => AppColors.brand;
 
   @override
   void initState() {
     super.initState();
-    unawaited(_scan());
+    if (!_isIos) unawaited(_scan());
   }
 
   Future<void> _scan() async {
     if (_scanning) return;
-    setState(() {
-      _scanning = true;
-      _hint = null;
-    });
+    setState(() => _scanning = true);
     try {
       final list = await _svc.search();
       if (!mounted) return;
       setState(() {
         _devices = list;
         _scanning = false;
-        _hint = list.isEmpty
-            ? '未发现设备，请确认电视与手机在同一 Wi‑Fi 后重试'
-            : '发现 ${list.length} 台设备';
       });
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _devices = const [];
         _scanning = false;
-        _hint = '搜索失败，请检查网络权限后重试';
       });
     }
+  }
+
+  Future<void> _openAirPlay() async {
+    HapticFeedback.mediumImpact();
+    final ok = await IosAirPlay.showPicker();
+    if (!ok) {
+      DialogX.showWarning('无法打开 AirPlay');
+      return;
+    }
+    widget.onCastStarted?.call();
   }
 
   Future<void> _castTo(DlnaDevice d) async {
@@ -154,465 +189,272 @@ class _CastSheetState extends State<_CastSheet> {
     DialogX.showSuccess('已停止投屏');
   }
 
-  Future<void> _copyUrl() async {
-    final url = widget.mediaUrl.trim();
-    if (url.isEmpty) {
-      DialogX.showWarning('暂无播放地址');
-      return;
-    }
-    await Clipboard.setData(ClipboardData(text: url));
-    DialogX.showSuccess('播放地址已复制');
+  Widget _castIcon({double size = 44}) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: _accent.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(size * 0.28),
+      ),
+      child: Icon(
+        Icons.cast_rounded,
+        color: _accent,
+        size: size * 0.48,
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final bottom = MediaQuery.paddingOf(context).bottom;
-    final maxH = MediaQuery.sizeOf(context).height * 0.72;
+    final radius = widget.asSide
+        ? BorderRadius.zero
+        : const BorderRadius.vertical(top: Radius.circular(16));
 
-    return Padding(
-      padding: EdgeInsets.only(
-        bottom: MediaQuery.viewInsetsOf(context).bottom,
-      ),
-      child: Align(
-        alignment: Alignment.bottomCenter,
-        child: Container(
-          constraints: BoxConstraints(maxHeight: maxH),
-          decoration: const BoxDecoration(
-            color: _bg,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-          ),
+    return Material(
+      color: _bg,
+      borderRadius: radius,
+      clipBehavior: Clip.antiAlias,
+      child: SafeArea(
+        left: false,
+        top: widget.asSide,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(16, widget.asSide ? 8 : 10, 12, 12 + bottom),
           child: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const SizedBox(height: 10),
-              Container(
-                width: 36,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFD1D1D6),
-                  borderRadius: BorderRadius.circular(99),
+              if (!widget.asSide)
+                Center(
+                  child: Container(
+                    width: 36,
+                    height: 4,
+                    margin: const EdgeInsets.only(bottom: 12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFD1D1D6),
+                      borderRadius: BorderRadius.circular(99),
+                    ),
+                  ),
                 ),
+              Row(
+                children: [
+                  _castIcon(size: 40),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          '投屏',
+                          style: TextStyle(
+                            fontFamily: 'AppSans',
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                            color: _ink,
+                          ),
+                        ),
+                        Text(
+                          _isIos ? 'AirPlay / 屏幕镜像' : '同一 Wi‑Fi 下的电视',
+                          style: const TextStyle(
+                            fontFamily: 'AppSans',
+                            fontSize: 12,
+                            color: _muted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: widget.onClose,
+                    icon: const Icon(
+                      CupertinoIcons.xmark_circle_fill,
+                      color: Color(0xFFC7C7CC),
+                      size: 24,
+                    ),
+                  ),
+                ],
               ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 16, 12, 0),
-                child: Row(
+              const SizedBox(height: 12),
+              if (_isIos) ...[
+                Row(
                   children: [
-                    Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: _soft,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: const Icon(
-                        CupertinoIcons.tv,
-                        color: _ink,
-                        size: 20,
+                    Expanded(
+                      child: FilledButton(
+                        onPressed: _openAirPlay,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: _accent,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: const Text(
+                          '打开系统投屏',
+                          style: TextStyle(
+                            fontFamily: 'AppSans',
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
                       ),
                     ),
-                    const SizedBox(width: 12),
-                    const Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            '投屏',
-                            style: TextStyle(
-                              fontFamily: 'AppSans',
-                              fontSize: 18,
-                              fontWeight: FontWeight.w800,
-                              color: _ink,
-                            ),
-                          ),
-                          Text(
-                            '手机与电视需连接同一 Wi‑Fi',
-                            style: TextStyle(
-                              fontFamily: 'AppSans',
-                              fontSize: 12,
-                              color: _muted,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: _scanning ? null : _scan,
-                      icon: Icon(
-                        CupertinoIcons.refresh,
-                        color: _scanning ? _muted : _ink,
-                        size: 22,
+                    const SizedBox(width: 10),
+                    SizedBox(
+                      width: 44,
+                      height: 44,
+                      child: AirPlayButton(
+                        size: 40,
+                        tintColor: _accent,
+                        activeTintColor: _accent,
                       ),
                     ),
                   ],
                 ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
-                child: Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 10,
+                const SizedBox(height: 8),
+                const Text(
+                  '也可下拉控制中心使用「屏幕镜像」',
+                  style: TextStyle(
+                    fontFamily: 'AppSans',
+                    fontSize: 11,
+                    color: _muted,
                   ),
+                ),
+                if (!_showMore)
+                  TextButton(
+                    onPressed: () {
+                      setState(() => _showMore = true);
+                      unawaited(_scan());
+                    },
+                    child: Text(
+                      '更多 DLNA 设备',
+                      style: TextStyle(
+                        fontFamily: 'AppSans',
+                        fontSize: 12,
+                        color: _accent,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+              ] else ...[
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        _scanning
+                            ? '正在搜索…'
+                            : (_devices.isEmpty
+                                ? '未发现设备'
+                                : '发现 ${_devices.length} 台'),
+                        style: const TextStyle(
+                          fontFamily: 'AppSans',
+                          fontSize: 12,
+                          color: _muted,
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _scanning ? null : _scan,
+                      child: Text(
+                        '刷新',
+                        style: TextStyle(
+                          fontFamily: 'AppSans',
+                          fontWeight: FontWeight.w700,
+                          color: _accent,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+              if (_active != null) ...[
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
                     color: _soft,
-                    borderRadius: BorderRadius.circular(10),
+                    borderRadius: BorderRadius.circular(12),
                   ),
                   child: Row(
                     children: [
-                      const Icon(
-                        CupertinoIcons.play_fill,
-                        size: 14,
-                        color: _muted,
-                      ),
-                      const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          widget.title,
+                          '正在投屏 · ${_active!.name}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
                             fontFamily: 'AppSans',
                             fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: _ink,
+                            fontWeight: FontWeight.w700,
                           ),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: _togglePause,
+                        child: Text(_paused ? '继续' : '暂停'),
+                      ),
+                      TextButton(
+                        onPressed: _stop,
+                        child: const Text(
+                          '断开',
+                          style: TextStyle(color: Color(0xFFE53935)),
                         ),
                       ),
                     ],
                   ),
                 ),
-              ),
-              if (_active != null)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
-                  child: _ConnectedCard(
-                    device: _active!,
-                    paused: _paused,
-                    onPause: _togglePause,
-                    onStop: _stop,
+              ],
+              if ((!_isIos || _showMore) && _devices.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: widget.asSide ? 280 : 160,
                   ),
-                ),
-              if (_hint != null)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      _hint!,
-                      style: const TextStyle(
-                        fontFamily: 'AppSans',
-                        fontSize: 12,
-                        color: _muted,
-                      ),
-                    ),
-                  ),
-                ),
-              Flexible(
-                child: _devices.isEmpty
-                    ? Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 36),
-                        child: Center(
-                          child: Text(
-                            _scanning ? '正在搜索设备…' : '暂无可用设备',
-                            style: const TextStyle(
-                              fontFamily: 'AppSans',
-                              fontSize: 14,
-                              color: _muted,
-                            ),
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: _devices.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 6),
+                    itemBuilder: (context, i) {
+                      final d = _devices[i];
+                      final on = _active?.usn == d.usn;
+                      return ListTile(
+                        dense: true,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        tileColor: on ? _accent.withValues(alpha: 0.12) : _soft,
+                        leading: Icon(Icons.tv_rounded, color: _accent),
+                        title: Text(
+                          d.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontFamily: 'AppSans',
+                            fontWeight: FontWeight.w700,
+                            fontSize: 14,
                           ),
                         ),
-                      )
-                    : ListView.separated(
-                        padding: const EdgeInsets.fromLTRB(20, 14, 20, 8),
-                        shrinkWrap: true,
-                        itemCount: _devices.length,
-                        separatorBuilder: (_, _) => const SizedBox(height: 10),
-                        itemBuilder: (context, i) {
-                          final d = _devices[i];
-                          final on = _active?.usn == d.usn;
-                          return _DeviceTile(
-                            device: d,
-                            active: on,
-                            busy: _casting && !on,
-                            onTap: on || _casting ? null : () => _castTo(d),
-                          );
-                        },
-                      ),
-              ),
-              Padding(
-                padding: EdgeInsets.fromLTRB(20, 4, 20, 12 + bottom),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: _copyUrl,
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: _ink,
-                          side: const BorderSide(color: _line),
-                          backgroundColor: _soft,
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                        ),
-                        icon: const Icon(CupertinoIcons.doc_on_doc, size: 16),
-                        label: const Text(
-                          '复制地址',
-                          style: TextStyle(fontFamily: 'AppSans'),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed: _scanning ? null : _scan,
-                        style: FilledButton.styleFrom(
-                          backgroundColor: _accent,
-                          foregroundColor: Colors.white,
-                          disabledBackgroundColor: const Color(0xFFAEAEB2),
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                        ),
-                        icon: Icon(
-                          _scanning
-                              ? CupertinoIcons.hourglass
-                              : CupertinoIcons.search,
-                          size: 16,
-                        ),
-                        label: Text(
-                          _scanning ? '搜索中' : '重新搜索',
-                          style: const TextStyle(fontFamily: 'AppSans'),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ConnectedCard extends StatelessWidget {
-  const _ConnectedCard({
-    required this.device,
-    required this.paused,
-    required this.onPause,
-    required this.onStop,
-  });
-
-  final DlnaDevice device;
-  final bool paused;
-  final VoidCallback onPause;
-  final VoidCallback onStop;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF5F5F7),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE5E5EA)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Text(
-            '正在投屏',
-            style: TextStyle(
-              fontFamily: 'AppSans',
-              fontSize: 14,
-              fontWeight: FontWeight.w800,
-              color: Color(0xFF1C1C1E),
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            device.name,
-            style: const TextStyle(
-              fontFamily: 'AppSans',
-              fontSize: 13,
-              color: Color(0xFF636366),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: _MiniAction(
-                  icon: paused
-                      ? CupertinoIcons.play_fill
-                      : CupertinoIcons.pause_fill,
-                  label: paused ? '继续' : '暂停',
-                  onTap: onPause,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _MiniAction(
-                  icon: CupertinoIcons.stop_fill,
-                  label: '断开',
-                  onTap: onStop,
-                  danger: true,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _MiniAction extends StatelessWidget {
-  const _MiniAction({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-    this.danger = false,
-  });
-
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-  final bool danger;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: danger ? const Color(0x14FF3B30) : Colors.white,
-      borderRadius: BorderRadius.circular(10),
-      child: InkWell(
-        onTap: () {
-          HapticFeedback.selectionClick();
-          onTap();
-        },
-        borderRadius: BorderRadius.circular(10),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                icon,
-                size: 16,
-                color: danger ? const Color(0xFFE53935) : const Color(0xFF1C1C1E),
-              ),
-              const SizedBox(width: 6),
-              Text(
-                label,
-                style: TextStyle(
-                  fontFamily: 'AppSans',
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  color: danger
-                      ? const Color(0xFFE53935)
-                      : const Color(0xFF1C1C1E),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _DeviceTile extends StatelessWidget {
-  const _DeviceTile({
-    required this.device,
-    required this.active,
-    required this.busy,
-    required this.onTap,
-  });
-
-  final DlnaDevice device;
-  final bool active;
-  final bool busy;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: active ? const Color(0xFF1C1C1E) : const Color(0xFFF5F5F7),
-      borderRadius: BorderRadius.circular(12),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Row(
-            children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: active ? Colors.white : Colors.white,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: const Color(0xFFE5E5EA)),
-                ),
-                child: Icon(
-                  CupertinoIcons.tv,
-                  color: active
-                      ? const Color(0xFF1C1C1E)
-                      : const Color(0xFF636366),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      device.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontFamily: 'AppSans',
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        color: active ? Colors.white : const Color(0xFF1C1C1E),
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    Text(
-                      device.manufacturer.isNotEmpty
-                          ? device.manufacturer
-                          : 'DLNA 设备',
-                      style: TextStyle(
-                        fontFamily: 'AppSans',
-                        fontSize: 12,
-                        color: active
-                            ? Colors.white70
-                            : const Color(0xFF8E8E93),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (busy)
-                const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              else
-                Text(
-                  active ? '已连接' : '投屏',
-                  style: TextStyle(
-                    fontFamily: 'AppSans',
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    color: active ? Colors.white : const Color(0xFF1C1C1E),
+                        trailing: _casting && !on
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : Text(
+                                on ? '已连接' : '投屏',
+                                style: TextStyle(
+                                  fontFamily: 'AppSans',
+                                  fontWeight: FontWeight.w700,
+                                  color: _accent,
+                                  fontSize: 13,
+                                ),
+                              ),
+                        onTap: on || _casting ? null : () => _castTo(d),
+                      );
+                    },
                   ),
                 ),
+              ],
             ],
           ),
         ),

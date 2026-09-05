@@ -222,9 +222,9 @@ Future<void> showPlayerSourceSheet({
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const Padding(
-              padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+              padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
               child: Text(
-                '切换线路',
+                '播放线路',
                 style: TextStyle(
                   fontFamily: 'AppSans',
                   fontSize: 17,
@@ -232,24 +232,54 @@ Future<void> showPlayerSourceSheet({
                 ),
               ),
             ),
-            for (var i = 0; i < names.length; i++)
-              ListTile(
-                title: Text(
-                  names[i],
-                  style: TextStyle(
-                    fontFamily: 'AppSans',
-                    fontWeight: i == selected ? FontWeight.w800 : FontWeight.w500,
-                  ),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text(
+                '点哪条播哪条；卡顿或模糊可换一条试试',
+                style: TextStyle(
+                  fontFamily: 'AppSans',
+                  fontSize: 12,
+                  color: Color(0xFF888888),
                 ),
-                trailing: i == selected
-                    ? const Icon(CupertinoIcons.check_mark, size: 18)
-                    : null,
-                onTap: () {
-                  HapticFeedback.selectionClick();
-                  Navigator.pop(ctx);
-                  onSelect(i);
+              ),
+            ),
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: names.length,
+                itemBuilder: (_, i) {
+                  final raw = names[i].trim();
+                  final title = raw.isEmpty ? '线路${i + 1}' : raw;
+                  final on = i == selected;
+                  return ListTile(
+                    title: Text(
+                      title,
+                      style: TextStyle(
+                        fontFamily: 'AppSans',
+                        fontWeight: on ? FontWeight.w800 : FontWeight.w500,
+                        color: on ? const Color(0xFF111111) : const Color(0xFF333333),
+                      ),
+                    ),
+                    subtitle: Text(
+                      '线路 ${i + 1}',
+                      style: const TextStyle(
+                        fontFamily: 'AppSans',
+                        fontSize: 12,
+                        color: Color(0xFF999999),
+                      ),
+                    ),
+                    trailing: on
+                        ? const Icon(CupertinoIcons.check_mark, size: 18)
+                        : null,
+                    onTap: () {
+                      HapticFeedback.selectionClick();
+                      Navigator.pop(ctx);
+                      onSelect(i);
+                    },
+                  );
                 },
               ),
+            ),
             const SizedBox(height: 8),
           ],
         ),
@@ -763,6 +793,8 @@ Future<DanmakuDraft?> showSendDanmakuSheet(
     context: context,
     backgroundColor: Colors.white,
     isScrollControlled: true,
+    isDismissible: true,
+    enableDrag: true,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
     ),

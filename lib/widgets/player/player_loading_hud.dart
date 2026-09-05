@@ -75,10 +75,22 @@ class _PlayerLoadingHudState extends State<PlayerLoadingHud> {
     return s;
   }
 
+  Color get _speedColor {
+    final bps = widget.tracker?.displayBps ?? 0;
+    if (bps <= 0) return const Color(0xF2FFFFFF);
+    if (bps >= 120 * 1024) return const Color(0xFF34C759);
+    if (bps >= 40 * 1024) return const Color(0xFFFF9F0A);
+    return const Color(0xFFFF3B30);
+  }
+
   @override
   Widget build(BuildContext context) {
     final size = widget.compact ? 42.0 : 58.0;
     final label = _label;
+    final speedStyle = (widget.compact
+            ? PlayerLoadingHud._speedStyleCompact
+            : PlayerLoadingHud._speedStyle)
+        .copyWith(color: _speedColor);
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -92,9 +104,7 @@ class _PlayerLoadingHudState extends State<PlayerLoadingHud> {
             child: Text(
               label,
               key: ValueKey(label),
-              style: widget.compact
-                  ? PlayerLoadingHud._speedStyleCompact
-                  : PlayerLoadingHud._speedStyle,
+              style: speedStyle,
             ),
           ),
         ],

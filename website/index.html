@@ -601,7 +601,7 @@
               <svg class="android-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.6 9.48l1.84-3.18c.16-.31.04-.69-.26-.85a.637.637 0 0 0-.83.22l-1.88 3.24a11.43 11.43 0 0 0-8.94 0L5.65 5.67a.643.643 0 0 0-.87-.2c-.28.18-.37.54-.2.83L6.4 9.48A10.78 10.78 0 0 0 1 18h22a10.78 10.78 0 0 0-5.4-8.52zM7 15.25a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5zm10 0a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5z"/></svg>
               安卓安装
             </a>
-            <a class="btn btn-dark" href="#download">
+            <a class="btn btn-dark" href="/install/">
               <svg class="apple-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
               iOS 安装
             </a>
@@ -694,20 +694,20 @@
     <section class="download" id="download">
       <div class="wrap fx fx-scale">
         <h2>安卓 &amp; iOS 安装</h2>
-        <p>双端均可安装。安卓直接下 APK；iOS 通过 TestFlight / 企业签或商店链接安装。</p>
+        <p>双端均可安装。安卓直接下 APK；iOS 用 Safari 打开安装页一键安装。</p>
         <div class="cta">
           <a class="btn btn-brand" id="apkLink" href="#">
             <svg class="android-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.6 9.48l1.84-3.18c.16-.31.04-.69-.26-.85a.637.637 0 0 0-.83.22l-1.88 3.24a11.43 11.43 0 0 0-8.94 0L5.65 5.67a.643.643 0 0 0-.87-.2c-.28.18-.37.54-.2.83L6.4 9.48A10.78 10.78 0 0 0 1 18h22a10.78 10.78 0 0 0-5.4-8.52zM7 15.25a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5zm10 0a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5z"/></svg>
             <span>安卓安装包</span>
             <span class="ver" id="apkVer" hidden></span>
           </a>
-          <a class="btn btn-dark" id="iosLink" href="#">
+          <a class="btn btn-dark" id="iosLink" href="/install/">
             <svg class="apple-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
             <span>iOS 安装</span>
             <span class="ver" id="iosVer" hidden></span>
           </a>
         </div>
-        <p class="store-note">下载地址由官方渠道同步；若按钮暂不可用，请稍后再试。</p>
+        <p class="store-note">iOS 请用 Safari 打开安装页；安卓安装包由官方渠道同步。</p>
       </div>
     </section>
   </main>
@@ -985,12 +985,15 @@
       a.addEventListener("click", () => navLinks.classList.remove("open"))
     );
 
-    /* —— CMS: downloads + changelogs —— */
+    const IOS_INSTALL = "/install/";
     const apkLink = document.getElementById("apkLink");
     const iosLink = document.getElementById("iosLink");
     const apkVer = document.getElementById("apkVer");
     const iosVer = document.getElementById("iosVer");
     const logList = document.getElementById("logList");
+
+    // iOS 默认进网页安装页（不依赖后台是否填了下载地址）
+    iosLink.href = IOS_INSTALL;
 
     function esc(s) {
       return String(s == null ? "" : s)
@@ -1032,10 +1035,10 @@
       return Number.isNaN(t) ? 0 : t;
     }
 
-    function setDownload(el, verEl, info) {
+    function setDownload(el, verEl, info, keepHref) {
       if (!info) return;
       const url = info.download_url || info.url || info.apk_url || "";
-      if (url) el.href = url;
+      if (url && !keepHref) el.href = url;
       const ver = info.version || "";
       if (ver) {
         verEl.textContent = "v" + String(ver).replace(/^v/i, "");
@@ -1090,7 +1093,8 @@
         if (json && json.code === 1 && json.data) {
           const data = json.data;
           setDownload(apkLink, apkVer, data.android);
-          setDownload(iosLink, iosVer, data.ios);
+          setDownload(iosLink, iosVer, data.ios, true);
+          iosLink.href = IOS_INSTALL;
           renderLogs(Array.isArray(data.changelogs) ? data.changelogs : []);
           return;
         }
@@ -1105,7 +1109,8 @@
         const android = a && a.code === 1 ? a.data : null;
         const ios = i && i.code === 1 ? i.data : null;
         setDownload(apkLink, apkVer, android);
-        setDownload(iosLink, iosVer, ios);
+        setDownload(iosLink, iosVer, ios, true);
+        iosLink.href = IOS_INSTALL;
         const logs = [];
         for (const row of [android, ios]) {
           if (!row) continue;

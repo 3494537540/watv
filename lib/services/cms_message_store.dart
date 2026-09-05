@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../utils/relative_time.dart';
 import 'huihuo_panel_api.dart';
+import 'local_notification_service.dart';
 import 'maccms_user_api.dart';
 
 /// CMS 站内消息本地缓存与已读状态（变更时通知角标）
@@ -14,6 +15,7 @@ class CmsMessageStore extends ChangeNotifier {
 
   static const _cachePrefix = 'cms_messages_v3_';
   static const _readPrefix = 'cms_messages_read_v3_';
+  static const _notifiedPrefix = 'cms_messages_notified_v1_';
   static const _legacyKeys = [
     'cms_messages_v1',
     'cms_messages_v2',
@@ -31,6 +33,7 @@ class CmsMessageStore extends ChangeNotifier {
 
   String get _cacheKey => '$_cachePrefix$_userId';
   String get _readKey => '$_readPrefix$_userId';
+  String get _notifiedKey => '$_notifiedPrefix$_userId';
 
   static bool _isJunk(CmsMessageItem m) {
     // 哇TV 面板通知不过滤
@@ -210,6 +213,8 @@ class CmsMessageStore extends ChangeNotifier {
         return b.id.compareTo(a.id);
       });
 
+    final prevIds = {for (final m in _items) m.id};
+
     final anyOk = remoteOk || panelOk;
     if (anyOk) {
       if (merged.isNotEmpty) {
@@ -229,7 +234,118 @@ class CmsMessageStore extends ChangeNotifier {
     _recomputeUnread();
     await _persist();
     notifyListeners();
+
+    // 系统公告 / 站内信 → 同步推到系统通知栏（与软件内「公告」列表联动）
+    await _pushSystemNotificationsForNew(prevIds);
+
     return _items;
+  }
+
+  /// 剧集更新等本地事件写入软件通知列表，并可选择推系统通知
+  Future<void> pushLocalNotice({
+    required String id,
+    required String title,
+    required String content,
+    String tag = '通知',
+    bool systemNotify = true,
+  }) async {
+    final nid = id.trim();
+    if (nid.isEmpty) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final exists = _items.any((e) => e.id == nid);
+    final item = CmsMessageItem(
+      id: nid,
+      title: title.trim().isEmpty ? '通知' : title.trim(),
+      content: content.trim(),
+      timeText: '刚刚',
+      createdAt: now,
+      read: false,
+      tag: tag,
+      style: 'important',
+    );
+    if (exists) {
+      _items = [for (final m in _items) if (m.id == nid) item else m];
+    } else {
+      _items = [item, ..._items];
+    }
+    _recomputeUnread();
+    await _persist();
+    notifyListeners();
+
+    if (systemNotify) {
+      try {
+        await LocalNotificationService.showInboxMessage(
+          messageId: nid,
+          title: item.title,
+          body: item.content.isEmpty ? '点击查看详情' : item.content,
+        );
+        final prefs = await SharedPreferences.getInstance();
+        final notified =
+            (prefs.getStringList(_notifiedKey) ?? const <String>[]).toSet()
+              ..add(nid);
+        await prefs.setStringList(_notifiedKey, notified.toList());
+      } catch (e) {
+        debugPrint('local notice push failed: $e');
+      }
+    }
+  }
+
+  Future<void> _pushSystemNotificationsForNew(Set<String> prevIds) async {
+    final prefs = await SharedPreferences.getInstance();
+    final notified =
+        (prefs.getStringList(_notifiedKey) ?? const <String>[]).toSet();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final isColdStart = prevIds.isEmpty;
+
+    final candidates = _items.where((m) {
+      if (m.read) return false;
+      if (notified.contains(m.id)) return false;
+      // 冷启动：只推最近 3 天的新公告，避免历史刷屏
+      if (isColdStart) {
+        final created = m.createdAt <= 0
+            ? now
+            : (m.createdAt > 2000000000 ? m.createdAt : m.createdAt * 1000);
+        if (now - created > const Duration(days: 3).inMilliseconds) {
+          notified.add(m.id);
+          return false;
+        }
+      }
+      return true;
+    }).take(5);
+
+    var changed = false;
+    for (final m in candidates) {
+      final body = m.content.trim().isNotEmpty
+          ? m.content.trim()
+          : (m.subtitle.trim().isNotEmpty ? m.subtitle.trim() : '点击查看详情');
+      try {
+        await LocalNotificationService.showInboxMessage(
+          messageId: m.id,
+          title: m.title.isEmpty ? '新公告' : m.title,
+          body: body,
+        );
+        notified.add(m.id);
+        changed = true;
+      } catch (e) {
+        debugPrint('inbox notify failed: $e');
+      }
+    }
+    // 把已跳过的历史 id 也记上，避免下次再扫
+    if (isColdStart) {
+      for (final m in _items) {
+        if (!notified.contains(m.id) && m.createdAt > 0) {
+          final created =
+              m.createdAt > 2000000000 ? m.createdAt : m.createdAt * 1000;
+          if (now - created > const Duration(days: 3).inMilliseconds) {
+            notified.add(m.id);
+            changed = true;
+          }
+        }
+      }
+    }
+    if (changed || notified.isNotEmpty) {
+      await prefs.setStringList(_notifiedKey, notified.toList());
+    }
   }
 
   Future<void> markRead(String id) async {
