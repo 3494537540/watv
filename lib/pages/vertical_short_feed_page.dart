@@ -497,11 +497,14 @@ class _FeedCell extends StatelessWidget {
           url: playUrl,
           active: active && playUrl.isNotEmpty,
           coverUrl: cover.isEmpty ? null : cover,
-          bottomInset: bottomInset + 56,
+          // 进度贴近底边；右侧让出点赞/选集
+          bottomInset: bottomInset + 4,
+          rightInset: 72,
         ),
         Positioned(
           right: 10,
-          bottom: bottomInset + 88,
+          // 整体抬高，避开进度条
+          bottom: bottomInset + 108,
           child: Column(
             children: [
               _SideAction(
@@ -534,7 +537,8 @@ class _FeedCell extends StatelessWidget {
         Positioned(
           left: 14,
           right: 72,
-          bottom: bottomInset + 16,
+          // 标题在进度条上方
+          bottom: bottomInset + 52,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [

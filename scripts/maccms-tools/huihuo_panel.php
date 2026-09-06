@@ -1773,27 +1773,33 @@ function huihuoHandleApi(
                 echo json_encode(['code' => 0, 'msg' => 'user_id required', 'list' => []], JSON_UNESCAPED_UNICODE);
                 return;
             }
-            // 登录评论常有 user_id；游客/旧数据可能只有 comment_name（用户44556）
+            // 登录评论：优先精确 user_id；游客旧数据仅用 comment_name 精确匹配。
+            // 禁止把纯数字 user_id 当作 comment_name OR，否则会串进后台大量评论。
             $parts = [];
             $args = [];
             if ($userId > 0) {
                 $parts[] = '`c`.`user_id`=?';
                 $args[] = $userId;
-                $aliases[] = (string)$userId;
-                $aliases[] = '用户' . $userId;
             }
             $names = [];
             foreach (array_merge([$userName, $nickName], $aliases) as $n) {
                 $n = trim((string)$n);
-                if ($n !== '' && !in_array($n, $names, true)) {
+                if ($n === '' || preg_match('/^\d+$/', $n)) {
+                    continue;
+                }
+                if (!in_array($n, $names, true)) {
                     $names[] = $n;
                 }
             }
+            if ($userId > 0) {
+                $names[] = '用户' . $userId;
+            }
             foreach ($names as $n) {
-                $parts[] = '`c`.`comment_name`=?';
+                // 仅匹配无 user_id 的旧游客评，避免 OR 打穿全表
+                $parts[] = '((`c`.`user_id` IS NULL OR `c`.`user_id`=0) AND `c`.`comment_name`=?)';
                 $args[] = $n;
             }
-            // 按登录名/昵称反查会员 id（不依赖 user_qq 字段，避免旧库 500）
+            // 按登录名/昵称反查会员 id
             if (!empty($names)) {
                 try {
                     $in = implode(',', array_fill(0, count($names), '?'));
@@ -1806,7 +1812,7 @@ function huihuoHandleApi(
                     $stU->execute(array_merge($names, $names));
                     foreach ($stU->fetchAll(PDO::FETCH_COLUMN) as $uid) {
                         $uid = (int)$uid;
-                        if ($uid > 0) {
+                        if ($uid > 0 && $uid !== $userId) {
                             $parts[] = '`c`.`user_id`=?';
                             $args[] = $uid;
                         }

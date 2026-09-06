@@ -1160,10 +1160,8 @@ class _QuickEntryCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Expanded(
-                    child: Text(
-                      '$count',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                    child: _CountTypewriter(
+                      value: count,
                       style: TextStyle(
                         fontFamily: 'AppSans',
                         fontSize: tall ? 34 : 22,
@@ -1184,6 +1182,83 @@ class _QuickEntryCard extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// 数字打字机：从 0 跳到目标值
+class _CountTypewriter extends StatefulWidget {
+  const _CountTypewriter({
+    required this.value,
+    required this.style,
+  });
+
+  final int value;
+  final TextStyle style;
+
+  @override
+  State<_CountTypewriter> createState() => _CountTypewriterState();
+}
+
+class _CountTypewriterState extends State<_CountTypewriter>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late Animation<double> _anim;
+  int _from = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 720),
+    );
+    _anim = Tween<double>(begin: 0, end: widget.value.toDouble()).animate(
+      CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic),
+    );
+    if (widget.value > 0) {
+      _ctrl.forward();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _CountTypewriter oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.value == widget.value) return;
+    _from = (_anim.value).round();
+    _anim = Tween<double>(
+      begin: _from.toDouble(),
+      end: widget.value.toDouble(),
+    ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
+    _ctrl
+      ..duration = Duration(
+        milliseconds: (420 + (widget.value - _from).abs() * 18).clamp(420, 900),
+      )
+      ..forward(from: 0);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.value <= 0 && !_ctrl.isAnimating) {
+      return Text('0', maxLines: 1, overflow: TextOverflow.ellipsis, style: widget.style);
+    }
+    return AnimatedBuilder(
+      animation: _anim,
+      builder: (context, _) {
+        final n = _anim.value.round().clamp(0, 1 << 30);
+        return Text(
+          '$n',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: widget.style,
+        );
+      },
     );
   }
 }
@@ -1259,8 +1334,6 @@ class _VipEntryCard extends StatelessWidget {
                   ),
                 ),
               ),
-              const SizedBox(width: 10),
-              Icon(CupertinoIcons.ticket_fill, size: 28, color: accent),
             ],
           ),
         ),

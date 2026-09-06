@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'cms_message_store.dart';
 import 'huihuo_panel_api.dart';
+import 'local_notification_service.dart';
 import 'maccms_api.dart';
 import 'maccms_user_api.dart';
 
@@ -36,6 +37,12 @@ abstract final class VodNewCollectService {
         final titles = await HuihuoPanelApi.syncVodCollectAnnounce();
         if (titles.isNotEmpty) {
           announced = true;
+          final stamp = DateTime.now().millisecondsSinceEpoch;
+          await LocalNotificationService.showInboxMessage(
+            messageId: 'vod_new_sys_$stamp',
+            title: '今日新增 ${titles.length} 部剧',
+            body: '打开 App 查看详情',
+          );
         }
         // 面板写了公告后，刷新站内信列表（系统通知由 store 推送）
         try {
@@ -103,7 +110,13 @@ abstract final class VodNewCollectService {
       title: '片库更新 · 新增 ${fresh.length} 部',
       content: buf.toString().trim(),
       tag: '片库更新',
-      systemNotify: true,
+      // 公告里保留剧名列表；系统通知只说今日新增几部，不带片名
+      systemNotify: false,
+    );
+    await LocalNotificationService.showInboxMessage(
+      messageId: 'vod_new_sys_$stamp',
+      title: '今日新增 ${fresh.length} 部剧',
+      body: '打开 App 查看详情',
     );
   }
 }

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
@@ -193,7 +194,8 @@ class VideoPlayerVodEngine extends VodEngine {
       backBufferDurationMs: 90000,
       allowBackgroundPlayback: true,
     );
-    final viewType = preferPlatformView
+    final viewType = (preferPlatformView ||
+            (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS))
         ? VideoViewType.platformView
         : VideoViewType.textureView;
     final lower = url.toLowerCase();
@@ -204,11 +206,24 @@ class VideoPlayerVodEngine extends VodEngine {
       if (path.startsWith('file:')) {
         path = Uri.parse(path).toFilePath();
       }
-      c = VideoPlayerController.file(
-        File(path),
-        videoPlayerOptions: opts,
-        viewType: viewType,
-      );
+      // Android：file() 无 formatHint，本地 m3u8 需 networkUrl+hls
+      // iOS：file() + prepareLocalMediaPath 把分片改成绝对 file://
+      if (isHls &&
+          !kIsWeb &&
+          defaultTargetPlatform == TargetPlatform.android) {
+        c = VideoPlayerController.networkUrl(
+          Uri.file(path),
+          formatHint: VideoFormat.hls,
+          videoPlayerOptions: opts,
+          viewType: viewType,
+        );
+      } else {
+        c = VideoPlayerController.file(
+          File(path),
+          videoPlayerOptions: opts,
+          viewType: viewType,
+        );
+      }
     } else {
       c = VideoPlayerController.networkUrl(
         Uri.parse(url),

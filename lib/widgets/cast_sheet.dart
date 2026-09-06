@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:airplay_button/air_play_button.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -118,14 +117,110 @@ class _CastPanelState extends State<CastPanel> {
     }
   }
 
-  Future<void> _openAirPlay() async {
+  Future<void> _openAirPlayVideo() async {
     HapticFeedback.mediumImpact();
-    final ok = await IosAirPlay.showPicker();
+    final ok = await IosAirPlay.showVideoPicker();
     if (!ok) {
-      DialogX.showWarning('无法打开 AirPlay');
+      DialogX.showWarning('无法打开 AirPlay 视频面板');
       return;
     }
     widget.onCastStarted?.call();
+  }
+
+  Future<void> _showScreenMirrorGuide() async {
+    HapticFeedback.mediumImpact();
+    if (!mounted) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return SafeArea(
+          child: Container(
+            margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.cast_connected_rounded, color: _accent, size: 22),
+                    const SizedBox(width: 8),
+                    const Expanded(
+                      child: Text(
+                        '屏幕镜像',
+                        style: TextStyle(
+                          fontFamily: 'AppSans',
+                          fontSize: 17,
+                          fontWeight: FontWeight.w800,
+                          color: _ink,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      icon: const Icon(
+                        CupertinoIcons.xmark_circle_fill,
+                        color: Color(0xFFC7C7CC),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  '系统不允许 App 直接打开「屏幕镜像」面板，请按下面步骤操作：',
+                  style: TextStyle(
+                    fontFamily: 'AppSans',
+                    fontSize: 13,
+                    height: 1.4,
+                    color: _muted,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                const Text(
+                  '1. 从右上角向下滑出「控制中心」\n'
+                  '2. 长按或点按「屏幕镜像」\n'
+                  '3. 选择电视 / 显示器开始同屏',
+                  style: TextStyle(
+                    fontFamily: 'AppSans',
+                    fontSize: 14,
+                    height: 1.55,
+                    fontWeight: FontWeight.w600,
+                    color: _ink,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: _accent,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: const Text(
+                      '知道了',
+                      style: TextStyle(
+                        fontFamily: 'AppSans',
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _castTo(DlnaDevice d) async {
@@ -255,7 +350,7 @@ class _CastPanelState extends State<CastPanel> {
                           ),
                         ),
                         Text(
-                          _isIos ? 'AirPlay / 局域网设备' : '同一 Wi‑Fi 下的电视',
+                          _isIos ? '屏幕镜像 / 局域网设备' : '同一 Wi‑Fi 下的电视',
                           style: const TextStyle(
                             fontFamily: 'AppSans',
                             fontSize: 12,
@@ -277,46 +372,57 @@ class _CastPanelState extends State<CastPanel> {
               ),
               const SizedBox(height: 12),
               if (_isIos) ...[
-                // ① AirPlay：系统路由面板（搜 Apple TV / AirPlay 音箱等）
-                Row(
-                  children: [
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed: _openAirPlay,
-                        icon: const Icon(Icons.airplay_rounded, size: 18),
-                        label: const Text(
-                          'AirPlay 搜设备',
-                          style: TextStyle(
-                            fontFamily: 'AppSans',
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: _accent,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
+                // ① 屏幕镜像（系统不开放 API，给步骤指引）
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: _showScreenMirrorGuide,
+                    icon: const Icon(Icons.cast_connected_rounded, size: 18),
+                    label: const Text(
+                      '屏幕镜像',
+                      style: TextStyle(
+                        fontFamily: 'AppSans',
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
-                    const SizedBox(width: 10),
-                    SizedBox(
-                      width: 44,
-                      height: 44,
-                      child: AirPlayButton(
-                        size: 40,
-                        tintColor: _accent,
-                        activeTintColor: _accent,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: _accent,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
                       ),
                     ),
-                  ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                // ② AirPlay 视频（投到 Apple TV；不是音箱音频面板）
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: _openAirPlayVideo,
+                    icon: const Icon(Icons.airplay_rounded, size: 18),
+                    label: const Text(
+                      'AirPlay 投视频',
+                      style: TextStyle(
+                        fontFamily: 'AppSans',
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: _accent,
+                      side: BorderSide(color: _accent.withValues(alpha: 0.45)),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 6),
                 const Text(
-                  'AirPlay：把当前视频投到 Apple TV / 支持 AirPlay 的设备\n'
-                  '屏幕镜像：请下拉控制中心点「屏幕镜像」搜同屏设备',
+                  '屏幕镜像：控制中心 → 屏幕镜像（整机同屏）\n'
+                  'AirPlay 投视频：把当前影片投到 Apple TV（不是音箱）',
                   style: TextStyle(
                     fontFamily: 'AppSans',
                     fontSize: 11,
@@ -325,7 +431,7 @@ class _CastPanelState extends State<CastPanel> {
                   ),
                 ),
                 const SizedBox(height: 12),
-                // ② 内置 DLNA：搜电视盒子
+                // ③ 内置 DLNA：搜电视盒子
                 Row(
                   children: [
                     const Expanded(

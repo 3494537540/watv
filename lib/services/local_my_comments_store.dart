@@ -8,7 +8,8 @@ import '../models/movie_models.dart';
 class LocalMyCommentsStore {
   LocalMyCommentsStore._();
 
-  static const _key = 'my_comments_v1';
+  // v2：丢弃曾被串台污染的本机备份
+  static const _key = 'my_comments_v2';
 
   static Future<List<MovieComment>> list({int? userId}) async {
     final prefs = await SharedPreferences.getInstance();
@@ -38,6 +39,7 @@ class LocalMyCommentsStore {
               final a = '${m['avatar'] ?? ''}'.trim();
               return a.isEmpty ? null : a;
             }(),
+            userId: int.tryParse('${m['user_id'] ?? m['owner_uid'] ?? 0}') ?? 0,
             vodId: '${m['vod_id'] ?? ''}',
             vodName: '${m['vod_name'] ?? ''}',
             vodPic: '${m['vod_pic'] ?? ''}',
@@ -63,6 +65,7 @@ class LocalMyCommentsStore {
       {
         'id': comment.id,
         'owner_uid': ownerUid,
+        'user_id': comment.userId > 0 ? comment.userId : ownerUid,
         'user_name': comment.userName,
         'content': comment.content,
         'time_text': comment.timeText,
@@ -82,6 +85,7 @@ class LocalMyCommentsStore {
           {
             'id': c.id,
             'owner_uid': ownerUid,
+            'user_id': c.userId > 0 ? c.userId : ownerUid,
             'user_name': c.userName,
             'content': c.content,
             'time_text': c.timeText,

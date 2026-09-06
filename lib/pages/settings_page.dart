@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../config/api_config.dart';
 import '../services/app_update_service.dart';
+import '../services/cms_endpoint_bootstrap.dart';
 import '../services/huihuo_panel_api.dart';
 import '../services/local_notification_service.dart';
 import '../services/vod_update_watch_service.dart';
@@ -351,6 +352,12 @@ class _SettingsPageState extends State<SettingsPage> {
                               .setDownloadNotifyEnabled(v);
                           if (!mounted) return;
                           setState(() => _downloadNotify = v);
+                          if (v) {
+                            await LocalNotificationService.showTest(
+                              context: context,
+                            );
+                          }
+                          if (!mounted) return;
                           DialogX.showSuccess(v ? '已开启下载通知' : '已关闭下载通知');
                         },
                       ),
@@ -576,7 +583,9 @@ class _SettingsPageState extends State<SettingsPage> {
                       title: '自定义服务器地址',
                       subtitle: _customServerOn
                           ? (usingCustom ? '已启用自定义地址' : '开启后填写地址并保存')
-                          : '当前使用默认服务器',
+                          : (CmsEndpointBootstrap.lastResolved != null
+                              ? '已连接（自动解析）'
+                              : '使用默认服务器'),
                       trailing: CupertinoSwitch(
                         value: _customServerOn,
                         activeTrackColor: AppColors.brand,
@@ -753,10 +762,10 @@ class _SettingsPageState extends State<SettingsPage> {
               ],
             ),
           ),
-        ),
+          ),
         );
-      },
-    );
+        },
+      );
   }
 }
 
@@ -971,24 +980,34 @@ class _SettingsSubScaffold extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dark = ThemeController.instance.isDark;
-    final pageBg = dark ? const Color(0xFF121214) : const Color(0xFFF2F2F7);
-    final navFg = dark ? Colors.white : AppColors.text;
-    return CupertinoPageScaffold(
-      backgroundColor: pageBg,
-      navigationBar: CupertinoNavigationBar(
-        backgroundColor: pageBg.withValues(alpha: 0.94),
-        border: null,
-        middle: Text(
-          title,
-          style: TextStyle(
-            fontFamily: 'AppSans',
-            fontWeight: FontWeight.w600,
-            color: navFg,
+    final pageBg = AppPalette.page(context);
+    final navFg = AppColors.text;
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle(
+        statusBarColor: pageBg,
+        statusBarIconBrightness: Brightness.dark,
+        statusBarBrightness: Brightness.light,
+        systemNavigationBarColor: pageBg,
+        systemNavigationBarIconBrightness: Brightness.dark,
+      ),
+      child: CupertinoPageScaffold(
+        backgroundColor: pageBg,
+        navigationBar: CupertinoNavigationBar(
+          backgroundColor: pageBg,
+          border: Border(
+            bottom: BorderSide(color: AppPalette.line(context), width: 0.5),
+          ),
+          middle: Text(
+            title,
+            style: TextStyle(
+              fontFamily: 'AppSans',
+              fontWeight: FontWeight.w600,
+              color: navFg,
+            ),
           ),
         ),
+        child: SafeArea(child: child),
       ),
-      child: SafeArea(child: child),
     );
   }
 }
@@ -1105,6 +1124,19 @@ class _ChangelogPageState extends State<_ChangelogPage> {
                   decoration: BoxDecoration(
                     color: cardBg,
                     borderRadius: BorderRadius.circular(18),
+                    border: Border.all(
+                      color: AppPalette.line(context),
+                      width: 0.8,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: dark
+                            ? const Color(0x33000000)
+                            : const Color(0x14000000),
+                        blurRadius: 14,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,

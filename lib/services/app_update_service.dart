@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
@@ -17,6 +17,7 @@ import '../widgets/dialogx/dialogx.dart';
 import 'app_permission.dart';
 import 'app_security.dart';
 import 'huihuo_panel_api.dart';
+import 'local_notification_service.dart';
 
 /// 检查哇TV 面板发布的 App 更新（Android / iOS 分端）
 class AppUpdateService {
@@ -108,6 +109,10 @@ class AppUpdateService {
     final newer = remote.isNewerThan(localCode);
 
     if (silent && (!newer || !remote.forceUpdate)) {
+      if (newer && !remote.forceUpdate) {
+        // 有更新任务但不强制弹窗：发一条系统通知
+        unawaited(_notifyUpdateAvailable(remote));
+      }
       if (!newer && remote.versionCode > 0) {
         unawaited(_maybeReportAlreadyOn(remote));
       }
@@ -127,6 +132,24 @@ class AppUpdateService {
     if (!context.mounted) return true;
     await showAppUpdateDownloadDialog(context, remote);
     return true;
+  }
+
+  static Future<void> _notifyUpdateAvailable(HuihuoAppUpdate remote) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final key = 'watv_update_notified_${remote.platform}_${remote.versionCode}';
+      if (prefs.getBool(key) == true) return;
+      await LocalNotificationService.showInboxMessage(
+        messageId: 'app_up_${remote.platform}_${remote.versionCode}',
+        title: '发现新版本 ${remote.version}',
+        body: remote.changelog.trim().isNotEmpty
+            ? remote.changelog.trim()
+            : '打开 App 即可更新',
+      );
+      await prefs.setBool(key, true);
+    } catch (e) {
+      debugPrint('update notify failed: $e');
+    }
   }
 
   static Future<void> _maybeReportAlreadyOn(HuihuoAppUpdate remote) async {
@@ -163,9 +186,11 @@ class AppUpdateService {
   }
 
   /// 下载安装包到临时目录（Android .apk / iOS .ipa）
+  /// [shouldAbort] 返回 true 时中断（用于暂停）
   static Future<File> downloadPackage(
     HuihuoAppUpdate u, {
     required void Function(double progress, int received, int total) onProgress,
+    bool Function()? shouldAbort,
   }) async {
     final uri = Uri.parse(u.downloadUrl);
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 20);
@@ -187,14 +212,23 @@ class AppUpdateService {
       if (await file.exists()) await file.delete();
       final sink = file.openWrite();
       var received = 0;
-      await for (final chunk in res) {
-        sink.add(chunk);
-        received += chunk.length;
-        final p = total > 0 ? (received / total).clamp(0.0, 1.0) : 0.0;
-        onProgress(p, received, total > 0 ? total : received);
+      try {
+        await for (final chunk in res) {
+          if (shouldAbort?.call() == true) {
+            throw const _UpdateDownloadPaused();
+          }
+          sink.add(chunk);
+          received += chunk.length;
+          final p = total > 0 ? (received / total).clamp(0.0, 1.0) : 0.0;
+          onProgress(p, received, total > 0 ? total : received);
+        }
+      } finally {
+        await sink.flush();
+        await sink.close();
       }
-      await sink.flush();
-      await sink.close();
+      if (shouldAbort?.call() == true) {
+        throw const _UpdateDownloadPaused();
+      }
       onProgress(1, received, total > 0 ? total : received);
       return file;
     } finally {
@@ -242,6 +276,12 @@ class AppUpdateService {
   }
 }
 
+class _UpdateDownloadPaused implements Exception {
+  const _UpdateDownloadPaused();
+  @override
+  String toString() => '已暂停下载';
+}
+
 Future<void> showAppUpdateDownloadDialog(
   BuildContext context,
   HuihuoAppUpdate update,
@@ -277,6 +317,7 @@ class _AppUpdateDownloadDialog extends StatefulWidget {
 
 class _AppUpdateDownloadDialogState extends State<_AppUpdateDownloadDialog> {
   bool _downloading = false;
+  bool _paused = false;
   bool _installing = false;
   double _progress = 0;
   int _received = 0;
@@ -340,6 +381,7 @@ class _AppUpdateDownloadDialogState extends State<_AppUpdateDownloadDialog> {
 
     setState(() {
       _downloading = true;
+      _paused = false;
       _error = null;
       _progress = 0;
       _received = 0;
@@ -357,6 +399,7 @@ class _AppUpdateDownloadDialogState extends State<_AppUpdateDownloadDialog> {
             _total = t;
           });
         },
+        shouldAbort: () => _paused,
       );
       if (!mounted) return;
       setState(() {
@@ -377,14 +420,27 @@ class _AppUpdateDownloadDialogState extends State<_AppUpdateDownloadDialog> {
         HapticFeedback.lightImpact();
         DialogX.showSuccess('已调起系统安装');
       }
+    } on _UpdateDownloadPaused {
+      if (!mounted) return;
+      setState(() {
+        _downloading = false;
+        _paused = true;
+        _error = null;
+      });
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _downloading = false;
         _installing = false;
+        _paused = false;
         _error = '$e';
       });
     }
+  }
+
+  void _pauseDownload() {
+    HapticFeedback.selectionClick();
+    setState(() => _paused = true);
   }
 
   Future<void> _retryInstallOrShare() async {
@@ -458,13 +514,26 @@ class _AppUpdateDownloadDialogState extends State<_AppUpdateDownloadDialog> {
     final busy = _downloading || _installing;
     final pct = (_progress * 100).clamp(0, 100).toStringAsFixed(0);
     final icon = CmsCoverImage.resolve(u.iconUrl);
-    final primaryLabel = busy
-        ? (_installing
-            ? (_isIos ? '打开分享…' : '安装中…')
-            : '下载中…')
-        : _pkg != null
-            ? (_isIos ? '再次分享到签名工具' : '重新安装')
-            : (_isIos ? '下载安装包' : '立即更新');
+    final primaryLabel = _installing
+        ? (_isIos ? '打开分享…' : '安装中…')
+        : _downloading
+            ? '暂停'
+            : _paused
+                ? '继续下载'
+                : _pkg != null
+                    ? (_isIos ? '再次分享到签名工具' : '重新安装')
+                    : (_isIos ? '下载安装包' : '立即更新');
+
+    VoidCallback? primaryAction;
+    if (_installing) {
+      primaryAction = null;
+    } else if (_downloading) {
+      primaryAction = _pauseDownload;
+    } else if (_paused || _pkg == null) {
+      primaryAction = _startDownload;
+    } else {
+      primaryAction = _retryInstallOrShare;
+    }
 
     return Center(
       child: Material(
@@ -576,7 +645,12 @@ class _AppUpdateDownloadDialogState extends State<_AppUpdateDownloadDialog> {
                             ? '${_fmtBytes(_received)}'
                                 '${_total > 0 ? ' / ${_fmtBytes(_total)}' : ''}'
                                 '${_total > 0 ? '  $pct%' : ''}'
-                            : '下载完成',
+                            : _paused
+                                ? '已暂停 · ${_fmtBytes(_received)}'
+                                    '${_total > 0 ? ' / ${_fmtBytes(_total)}' : ''}'
+                                : _pkg != null
+                                    ? '下载完成'
+                                    : '',
                     style: TextStyle(
                       fontFamily: 'AppSans',
                       fontSize: 11,
@@ -629,11 +703,7 @@ class _AppUpdateDownloadDialogState extends State<_AppUpdateDownloadDialog> {
                     width: double.infinity,
                     height: 42,
                     child: FilledButton(
-                      onPressed: busy
-                          ? null
-                          : (_pkg != null
-                              ? _retryInstallOrShare
-                              : _startDownload),
+                      onPressed: _installing ? null : primaryAction,
                       style: FilledButton.styleFrom(
                         backgroundColor: text,
                         disabledBackgroundColor: text.withValues(alpha: 0.35),
@@ -653,7 +723,7 @@ class _AppUpdateDownloadDialogState extends State<_AppUpdateDownloadDialog> {
                       ),
                     ),
                   ),
-                  if (!busy) ...[
+                  if (!busy && !_paused) ...[
                     const SizedBox(height: 8),
                     _secondaryBtn(
                       label: '浏览器打开直链',
@@ -670,11 +740,7 @@ class _AppUpdateDownloadDialogState extends State<_AppUpdateDownloadDialog> {
                     width: double.infinity,
                     height: 42,
                     child: FilledButton(
-                      onPressed: busy
-                          ? null
-                          : (_pkg != null
-                              ? _retryInstallOrShare
-                              : _startDownload),
+                      onPressed: _installing ? null : primaryAction,
                       style: FilledButton.styleFrom(
                         backgroundColor: AppColors.brand,
                         disabledBackgroundColor:
@@ -695,7 +761,7 @@ class _AppUpdateDownloadDialogState extends State<_AppUpdateDownloadDialog> {
                       ),
                     ),
                   ),
-                  if (!busy) ...[
+                  if (!busy && !_paused) ...[
                     const SizedBox(height: 8),
                     _secondaryBtn(
                       label: '官网下载',

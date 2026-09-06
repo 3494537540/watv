@@ -1940,27 +1940,33 @@ class MacCmsApi {
         page: page,
       ).timeout(const Duration(seconds: 10));
       if (rows.isNotEmpty) {
+        // 面板 SQL 已按 rid；统一写回 vodId，禁止空 rid 在下游被串用
         return [
-          for (final c in _parseCommentJsonList(rows)) _withQqAvatar(c),
+          for (final c in _parseCommentJsonList(rows))
+            _withQqAvatar(_forceVodId(c, id)),
         ];
       }
     } catch (e) {
       debugPrint('panel comment_list: $e');
     }
 
-    // 2) CMS ajax / 详情页（仍只用精确 rid）
+    // 2) CMS ajax：主题常忽略 rid 返回全站评论，无 rid 一律丢弃
     try {
       final ajax = await _fetchCommentsCmsAjax(id, page: page);
-      if (ajax.isNotEmpty) {
-        return [for (final c in ajax) _withQqAvatar(c)];
+      final scoped = _onlyThisVod(ajax, id);
+      if (scoped.isNotEmpty) {
+        return [for (final c in scoped) _withQqAvatar(c)];
       }
     } catch (e) {
       debugPrint('cms comment ajax $id: $e');
     }
+    // 3) 详情页 HTML：URL 已带影片 id，可安全挂 rid（页面为空则解析为空）
     try {
       final pageList = await _fetchCommentsFromDetailHtml(id);
       if (pageList.isNotEmpty) {
-        return [for (final c in pageList) _withQqAvatar(c)];
+        return [
+          for (final c in pageList) _withQqAvatar(_forceVodId(c, id)),
+        ];
       }
     } catch (e) {
       debugPrint('cms comment detail $id: $e');
@@ -1968,11 +1974,40 @@ class MacCmsApi {
     return const [];
   }
 
+  /// 仅保留 rid 明确等于 [id] 的评论；空 rid / 错 rid 一律丢弃（防全站灌入空片）
+  static List<MovieComment> _onlyThisVod(List<MovieComment> list, String id) {
+    if (list.isEmpty) return const [];
+    return [
+      for (final c in list)
+        if (c.vodId.trim() == id) c,
+    ];
+  }
+
+  static MovieComment _forceVodId(MovieComment c, String id) {
+    if (c.vodId.trim() == id) return c;
+    return MovieComment(
+      id: c.id,
+      userName: c.userName,
+      content: c.content,
+      timeText: c.timeText,
+      timeMs: c.timeMs,
+      avatarUrl: c.avatarUrl,
+      up: c.up,
+      down: c.down,
+      replyCount: c.replyCount,
+      userId: c.userId,
+      vodId: id,
+      vodName: c.vodName,
+      vodPic: c.vodPic,
+    );
+  }
+
   static MovieComment _withQqAvatar(MovieComment c) {
     if ((c.avatarUrl ?? '').trim().isNotEmpty) return c;
     final qq = QqAvatar.urlFromCandidates([
       c.userName,
       c.id,
+      if (c.userId > 0) '${c.userId}',
     ]);
     if (qq == null) return c;
     return MovieComment(
@@ -1985,6 +2020,7 @@ class MacCmsApi {
       up: c.up,
       down: c.down,
       replyCount: c.replyCount,
+      userId: c.userId,
       vodId: c.vodId,
       vodName: c.vodName,
       vodPic: c.vodPic,
@@ -2107,7 +2143,7 @@ class MacCmsApi {
       if (userId > 0) '用户$userId',
     };
 
-    final remote = <MovieComment>[];
+    var remote = <MovieComment>[];
 
     // 1) 面板
     try {
@@ -2125,7 +2161,7 @@ class MacCmsApi {
       debugPrint('panel comment_mine: $e');
     }
 
-    // 2) CMS 会员中心（面板空/失败时）
+    // 2) CMS 会员中心（仅作补充；结果必须再按身份过滤，防后台全量评论串入）
     if (remote.isEmpty) {
       final paths = <(String, Map<String, String>)>[
         ('/index.php/user/comment.html', {'page': '$page'}),
@@ -2176,6 +2212,8 @@ class MacCmsApi {
     if (remote.isEmpty) {
       for (final alias in aliases) {
         if (alias == userName.trim() || alias == nickName.trim()) continue;
+        // 纯数字别名极易误匹配别人的 comment_name，跳过
+        if (RegExp(r'^\d+$').hasMatch(alias)) continue;
         try {
           final rows = await HuihuoPanelApi.fetchMyCommentRows(
             userId: 0,
@@ -2192,6 +2230,13 @@ class MacCmsApi {
         } catch (_) {}
       }
     }
+
+    // 客户端再滤一次：只留当前用户身份能对上的评论
+    remote = _filterCommentsOwnedBy(
+      remote,
+      userId: userId,
+      names: aliases,
+    );
 
     // 4) 本机备份合并
     final local = await LocalMyCommentsStore.list(userId: userId);
@@ -2213,6 +2258,41 @@ class MacCmsApi {
     }
     merged.sort((a, b) => b.timeMs.compareTo(a.timeMs));
     return merged;
+  }
+
+  /// 只保留属于当前用户的评论（防 CMS/面板串入全站评论）
+  static List<MovieComment> _filterCommentsOwnedBy(
+    List<MovieComment> list, {
+    required int userId,
+    required Set<String> names,
+  }) {
+    if (list.isEmpty) return list;
+    final allow = <String>{
+      for (final n in names)
+        if (n.trim().isNotEmpty) n.trim(),
+    };
+    // 纯数字「用户 id」不当名字匹配，避免把 comment_name=别人的数字串进来
+    allow.removeWhere((n) => RegExp(r'^\d+$').hasMatch(n));
+    if (userId > 0) {
+      allow.add('用户$userId');
+    }
+    if (allow.isEmpty && userId <= 0) return const [];
+
+    final out = <MovieComment>[];
+    for (final c in list) {
+      final n = c.userName.trim();
+      if (n.isEmpty) continue;
+      if (allow.contains(n)) {
+        out.add(c);
+        continue;
+      }
+      // 宽松：去掉空白后再比
+      final compact = n.replaceAll(RegExp(r'\s+'), '');
+      if (allow.any((a) => a.replaceAll(RegExp(r'\s+'), '') == compact)) {
+        out.add(c);
+      }
+    }
+    return out;
   }
 
   /// 会员中心「我的评论」列表
@@ -2413,6 +2493,7 @@ class MacCmsApi {
           up: _toInt(m['comment_up'] ?? m['up']),
           down: _toInt(m['comment_down'] ?? m['down']),
           replyCount: _toInt(m['comment_reply'] ?? m['reply']),
+          userId: _toInt(m['user_id'] ?? m['uid'] ?? m['comment_uid']),
           vodId: '${m['comment_rid'] ?? m['vod_id'] ?? m['rid'] ?? ''}'.trim(),
           vodName: '${m['vod_name'] ?? ''}'.trim(),
           vodPic: () {
@@ -2764,6 +2845,15 @@ class MacCmsApi {
               QqAvatar.urlFromAccount(name),
           up: up,
           down: down,
+          userId: int.tryParse(
+                _matchGroup(block, [
+                      r'''data-user[_-]?id=["'](\d+)["']''',
+                      r'''user[_-]?id=["'](\d+)["']''',
+                      r'''/user/index/id/(\d+)''',
+                    ]) ??
+                    '0',
+              ) ??
+              0,
         ),
       );
     }
@@ -2966,6 +3056,15 @@ class MacCmsApi {
           up: up,
           down: down,
           replyCount: replyCount,
+          userId: int.tryParse(
+                _matchGroup(block, [
+                      r'''data-user[_-]?id=["'](\d+)["']''',
+                      r'''user[_-]?id=["'](\d+)["']''',
+                      r'''/user/index/id/(\d+)''',
+                    ]) ??
+                    '0',
+              ) ??
+              0,
         ),
       );
     }

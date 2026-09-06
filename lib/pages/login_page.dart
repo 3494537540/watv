@@ -7,6 +7,7 @@ import '../services/maccms_user_api.dart';
 import '../services/qq_login_service.dart';
 import '../state/cms_auth_controller.dart';
 import '../theme/app_colors.dart';
+import '../utils/account_validators.dart';
 import '../widgets/dialogx/dialogx.dart';
 import '../widgets/ios_edge_back.dart';
 import '../widgets/login_brand_widgets.dart';
@@ -168,6 +169,13 @@ class _LoginPageState extends State<LoginPage>
     if (name.isEmpty) {
       setState(() => _error = '请输入账号');
       return;
+    }
+    if (_mode == LoginPageMode.register) {
+      final nameErr = AccountValidators.registerUsernameError(name);
+      if (nameErr != null) {
+        setState(() => _error = nameErr);
+        return;
+      }
     }
     if (pwd.length < 6) {
       setState(() => _error = '密码至少 6 位');

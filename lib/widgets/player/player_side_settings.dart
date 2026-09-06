@@ -351,13 +351,15 @@ class _FlatSettingsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final h = host;
-    return SizedBox.expand(
-      child: ColoredBox(
-        color: const Color(0xFFF5F6F8),
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(12, 4, 12, 20),
-          children: [
-            Row(
+    // 顶栏固定 + 下方可滚：避免整卡被拉高出现「空一大截」
+    return ColoredBox(
+      color: const Color(0xFFF5F6F8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 4, 4, 0),
+            child: Row(
               children: [
                 const Expanded(
                   child: Text(
@@ -376,6 +378,11 @@ class _FlatSettingsPage extends StatelessWidget {
                 ),
               ],
             ),
+          ),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 20),
+              children: [
             _SettingsCard(
           title: '流畅与画质',
           child: Column(
@@ -616,8 +623,10 @@ class _FlatSettingsPage extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 16),
-      ],
-        ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -651,6 +660,7 @@ class _SettingsCard extends StatelessWidget {
         ],
       ),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(

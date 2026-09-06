@@ -10,6 +10,7 @@ import '../models/movie_models.dart';
 import '../config/api_config.dart';
 import '../theme/app_colors.dart';
 import 'app_onboarding.dart';
+import 'brand_sunlight_text.dart';
 import 'figma_loading.dart';
 import 'media_placeholder.dart';
 import 'movie_watch_menu.dart';
@@ -456,8 +457,8 @@ class HomeStickyTopBar extends StatelessWidget {
                         // 左侧品牌字标
                         Padding(
                           padding: const EdgeInsets.only(right: 8),
-                          child: Text(
-                            '哇TV',
+                          child: BrandSunlightText(
+                            text: '哇TV',
                             style: TextStyle(
                               fontFamily: 'ZCOOLKuaiLe',
                               fontSize: 22,

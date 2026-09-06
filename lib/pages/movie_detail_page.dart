@@ -10,6 +10,7 @@ import '../player/player_pip.dart';
 import '../player/source_latency.dart';
 import '../services/cms_fav_store.dart';
 import '../services/vod_cache_store.dart';
+import '../services/local_notification_service.dart';
 import '../services/local_play_store.dart';
 import '../services/local_my_comments_store.dart';
 import '../services/maccms_api.dart';
@@ -84,6 +85,9 @@ class _MovieDetailPageState extends State<MovieDetailPage>
   int _watchTab = 0; // 播放中：0 视频 1 评论
   bool _watching = false;
   bool _landscapeFs = false;
+  /// 非会员观看限制遮罩（样式对齐播放失败，无取消）
+  bool _vipGate = false;
+  bool _silencedForVipGate = false;
   /// 是否已锁横屏（与 UI 标记分开，保证异常退出也能解锁）
   bool _orientationLocked = false;
   int _playStartMs = 0;
@@ -285,6 +289,10 @@ class _MovieDetailPageState extends State<MovieDetailPage>
         _relatedLoading = true;
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) {
+            if (!_canPlayAsVip) {
+              _vipGate = true;
+              unawaited(_silencePlaybackForVipGate());
+            }
             _maybeAutoPlay();
             unawaited(_autoPickBestSource());
           }
@@ -294,6 +302,7 @@ class _MovieDetailPageState extends State<MovieDetailPage>
         _watching = true;
         _loading = true;
         _relatedLoading = true;
+        if (!_canPlayAsVip) _vipGate = true;
       }
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) unawaited(_loadRelated());
@@ -360,6 +369,7 @@ class _MovieDetailPageState extends State<MovieDetailPage>
     }
     setState(() {
       _watching = false;
+      _vipGate = false;
       _episodesExpanded = false;
       _downloadPick = false;
     });
@@ -490,10 +500,15 @@ class _MovieDetailPageState extends State<MovieDetailPage>
         if (prev != null &&
             prev.episodeIndex == _selectedEpisode &&
             prev.positionMs > 3000) {
-          _playStartMs = prev.positionMs;
-          _resumeLabel = prev.episodeLabel.trim().isNotEmpty
-              ? prev.episodeLabel.trim()
-              : '第${_selectedEpisode + 1}集';
+          final dur = prev.durationMs;
+          final pos = prev.positionMs;
+          final nearEnd = dur > 0 && (pos > dur - 8000 || pos > dur * 0.97);
+          if (!nearEnd) {
+            _playStartMs = pos;
+            _resumeLabel = prev.episodeLabel.trim().isNotEmpty
+                ? prev.episodeLabel.trim()
+                : '第${_selectedEpisode + 1}集';
+          }
         }
         return;
       }
@@ -505,10 +520,15 @@ class _MovieDetailPageState extends State<MovieDetailPage>
           _selectedEpisode = prev.episodeIndex;
         }
         if (prev.positionMs > 3000) {
-          _playStartMs = prev.positionMs;
-          _resumeLabel = prev.episodeLabel.trim().isNotEmpty
-              ? prev.episodeLabel.trim()
-              : '第${prev.episodeIndex + 1}集';
+          final dur = prev.durationMs;
+          final pos = prev.positionMs;
+          final nearEnd = dur > 0 && (pos > dur - 8000 || pos > dur * 0.97);
+          if (!nearEnd) {
+            _playStartMs = pos;
+            _resumeLabel = prev.episodeLabel.trim().isNotEmpty
+                ? prev.episodeLabel.trim()
+                : '第${prev.episodeIndex + 1}集';
+          }
         }
       }
     });
@@ -833,6 +853,13 @@ class _MovieDetailPageState extends State<MovieDetailPage>
       return;
     }
 
+    // 下载前申请通知权限，否则进度/完成通知会被静默跳过
+    if (await LocalNotificationService.isDownloadNotifyEnabled()) {
+      if (!mounted) return;
+      await LocalNotificationService.ensurePermission(context: context);
+    }
+    if (!mounted) return;
+
     await _playPackIntoCacheIcon(count: jobs.length);
     if (!mounted) return;
     setState(() {
@@ -1047,16 +1074,22 @@ class _MovieDetailPageState extends State<MovieDetailPage>
   ) async {
     final u = CmsAuthController.instance.user;
     if (u == null || list.isEmpty) return;
+    final id = vodId.trim();
+    if (id.isEmpty) return;
     final names = <String>{
       u.displayName.trim(),
       u.userName.trim(),
       u.nickName.trim(),
       if (u.userId > 0) '用户${u.userId}',
-      if (u.userId > 0) '${u.userId}',
-      '我',
     }..removeWhere((e) => e.isEmpty);
+    // 去掉纯数字 /「我」等过宽匹配，避免把别人的评论记到本片
+    names.removeWhere((n) => RegExp(r'^\d+$').hasMatch(n));
+    if (names.isEmpty) return;
     final cover = _movie.coverUrl ?? '';
     for (final c in list) {
+      final rid = c.vodId.trim();
+      // 必须已带本片 rid，禁止空 rid 强挂到当前片
+      if (rid != id) continue;
       final n = c.userName.trim();
       if (n.isEmpty || !names.contains(n)) continue;
       await LocalMyCommentsStore.add(
@@ -1067,7 +1100,7 @@ class _MovieDetailPageState extends State<MovieDetailPage>
           timeText: c.timeText,
           timeMs: c.timeMs,
           avatarUrl: c.avatarUrl,
-          vodId: vodId,
+          vodId: id,
           vodName: vodTitle,
           vodPic: cover,
         ),
@@ -1078,61 +1111,274 @@ class _MovieDetailPageState extends State<MovieDetailPage>
     }
   }
 
-  /// 播放前校验 CMS 会员：未登录先登录，非会员引导开通/兑换
+  /// 仅 VIP 可播（未登录 / 非会员一律拦截）
+  bool get _canPlayAsVip =>
+      CmsAuthController.instance.isLoggedIn &&
+      CmsAuthController.instance.user?.isVip == true;
+
+  /// 播放前校验：未登录 / 非会员 → 播放器遮罩（不弹取消窗、不直接开播）
   Future<bool> _ensureMemberToPlay() async {
     final auth = CmsAuthController.instance;
-    if (!auth.isLoggedIn) {
-      final ok = await showAuthSheet(context);
-      if (!ok || !mounted) return false;
+    if (auth.isLoggedIn) {
+      try {
+        await auth.refreshProfile();
+      } catch (_) {}
+      if (!mounted) return false;
     }
-    // 刷新资料，避免本地缓存过期
-    try {
-      await auth.refreshProfile();
-    } catch (_) {}
-    if (!mounted) return false;
-    final user = CmsAuthController.instance.user;
-    if (user != null && user.isVip) return true;
+    if (_canPlayAsVip) {
+      if (_vipGate) setState(() => _vipGate = false);
+      _silencedForVipGate = false;
+      return true;
+    }
 
-    final action = await showCupertinoDialog<String>(
-      context: context,
-      builder: (ctx) => CupertinoAlertDialog(
-        title: const Text('开通会员后观看'),
-        content: const Text('本片需会员权限。开通会员或使用兑换码后即可播放。'),
-        actions: [
-          CupertinoDialogAction(
-            onPressed: () => Navigator.pop(ctx, 'cancel'),
-            child: const Text('取消'),
-          ),
-          CupertinoDialogAction(
-            onPressed: () => Navigator.pop(ctx, 'redeem'),
-            child: const Text('兑换码'),
-          ),
-          CupertinoDialogAction(
-            isDefaultAction: true,
-            onPressed: () => Navigator.pop(ctx, 'shop'),
-            child: const Text('开通会员'),
-          ),
-        ],
+    // 拦截时立刻掐掉任何残留播放（含其它页未停的音轨）
+    await _silencePlaybackForVipGate();
+
+    final ep = movie.isSeries ? _selectedEpisode : 0;
+    setState(() {
+      _vipGate = true;
+      _watching = true;
+      _selectedEpisode = ep;
+      _watchTab = 0;
+      _autoPlayPending = false;
+    });
+    unawaited(_applyImmersiveWatchUi());
+    return false;
+  }
+
+  Future<void> _silencePlaybackForVipGate() async {
+    if (_silencedForVipGate) {
+      // 仍再 pause 一次，防止异步晚到的 play
+      try {
+        await _inlinePlayerKey.currentState?.pause();
+      } catch (_) {}
+      return;
+    }
+    _silencedForVipGate = true;
+    try {
+      await _inlinePlayerKey.currentState?.forceStop();
+    } catch (_) {}
+    try {
+      await stopAllInlinePlayback();
+    } catch (_) {}
+  }
+
+  Future<void> _openLoginFromGate() async {
+    HapticFeedback.selectionClick();
+    final ok = await showAuthSheet(context);
+    if (!ok || !mounted) return;
+    try {
+      await CmsAuthController.instance.refreshProfile();
+    } catch (_) {}
+    if (!mounted) return;
+    if (_canPlayAsVip) {
+      setState(() {
+        _vipGate = false;
+        _silencedForVipGate = false;
+      });
+      unawaited(_playGuarded(episodeIndex: _selectedEpisode));
+      return;
+    }
+    // 已登录但仍非会员：留在遮罩，刷新按钮为开通/兑换
+    setState(() => _vipGate = true);
+  }
+
+  Future<void> _openVipShopFromGate() async {
+    HapticFeedback.selectionClick();
+    if (!CmsAuthController.instance.isLoggedIn) {
+      await _openLoginFromGate();
+      if (!mounted || !CmsAuthController.instance.isLoggedIn) return;
+    }
+    await showMembershipShopSheet(context);
+    if (!mounted) return;
+    try {
+      await CmsAuthController.instance.refreshProfile();
+    } catch (_) {}
+    if (!mounted) return;
+    if (_canPlayAsVip) {
+      setState(() {
+        _vipGate = false;
+        _silencedForVipGate = false;
+      });
+      unawaited(_playGuarded(episodeIndex: _selectedEpisode));
+    }
+  }
+
+  Future<void> _openRedeemFromGate() async {
+    HapticFeedback.selectionClick();
+    if (!CmsAuthController.instance.isLoggedIn) {
+      await _openLoginFromGate();
+      if (!mounted || !CmsAuthController.instance.isLoggedIn) return;
+    }
+    await Navigator.of(context).push(
+      AppPageRoute<void>(builder: (_) => const RedeemPage()),
+    );
+    if (!mounted) return;
+    try {
+      await CmsAuthController.instance.refreshProfile();
+    } catch (_) {}
+    if (!mounted) return;
+    if (_canPlayAsVip) {
+      setState(() {
+        _vipGate = false;
+        _silencedForVipGate = false;
+      });
+      unawaited(_playGuarded(episodeIndex: _selectedEpisode));
+    }
+  }
+
+  Widget _buildVipGateOverlay({String? posterUrl}) {
+    final cover = (posterUrl ?? movie.coverUrl)?.trim() ?? '';
+    final loggedIn = CmsAuthController.instance.isLoggedIn;
+    final title = loggedIn ? '开通会员后观看' : '登录后观看';
+    final subtitle = loggedIn
+        ? '本片需会员权限，开通会员或使用兑换码后即可播放'
+        : '请先登录账号，开通会员后即可观看本片';
+    // 遮罩深色：状态栏同色，避免弹出式白条
+    const mask = Color(0xFF000000);
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: const SystemUiOverlayStyle(
+        statusBarColor: mask,
+        statusBarIconBrightness: Brightness.light,
+        statusBarBrightness: Brightness.dark,
+        systemNavigationBarColor: mask,
+        systemNavigationBarIconBrightness: Brightness.light,
+        systemStatusBarContrastEnforced: false,
+        systemNavigationBarContrastEnforced: false,
+      ),
+      child: ColoredBox(
+        color: mask,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (cover.isNotEmpty)
+              Opacity(
+                opacity: 0.35,
+                child: Image.network(
+                  cover,
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                  errorBuilder: (_, _, _) => const SizedBox.shrink(),
+                ),
+              ),
+            const ColoredBox(color: Color(0xB3000000)),
+            Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontFamily: 'AppSans',
+                      color: Colors.white70,
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: Text(
+                      subtitle,
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontFamily: 'AppSans',
+                        color: Colors.white38,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  if (!loggedIn)
+                    SizedBox(
+                      height: 42,
+                      child: FilledButton(
+                        onPressed: () => unawaited(_openLoginFromGate()),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFF1ECAD3),
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          padding: const EdgeInsets.symmetric(horizontal: 36),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(21),
+                          ),
+                        ),
+                        child: const Text(
+                          '登录',
+                          style: TextStyle(
+                            fontFamily: 'AppSans',
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    )
+                  else
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          height: 42,
+                          child: FilledButton(
+                            onPressed: () => unawaited(_openVipShopFromGate()),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: const Color(0xFF1ECAD3),
+                              foregroundColor: Colors.white,
+                              elevation: 0,
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 28),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(21),
+                              ),
+                            ),
+                            child: const Text(
+                              '开通会员',
+                              style: TextStyle(
+                                fontFamily: 'AppSans',
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        SizedBox(
+                          height: 42,
+                          child: OutlinedButton(
+                            onPressed: () => unawaited(_openRedeemFromGate()),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: const Color(0xFFE0B13A),
+                              side: const BorderSide(
+                                color: Color(0xFFE0B13A),
+                                width: 1.4,
+                              ),
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 24),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(21),
+                              ),
+                            ),
+                            child: const Text(
+                              '兑换码',
+                              style: TextStyle(
+                                fontFamily: 'AppSans',
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFFE0B13A),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
-    if (!mounted) return false;
-    if (action == 'shop') {
-      await showMembershipShopSheet(context);
-      try {
-        await CmsAuthController.instance.refreshProfile();
-      } catch (_) {}
-      return CmsAuthController.instance.user?.isVip == true;
-    }
-    if (action == 'redeem') {
-      await Navigator.of(context).push(
-        AppPageRoute<void>(builder: (_) => const RedeemPage()),
-      );
-      try {
-        await CmsAuthController.instance.refreshProfile();
-      } catch (_) {}
-      return CmsAuthController.instance.user?.isVip == true;
-    }
-    return false;
   }
 
   void _play({int? episodeIndex}) {
@@ -1317,6 +1563,28 @@ class _MovieDetailPageState extends State<MovieDetailPage>
   }) {
     // 尺寸由外层 AnimatedContainer / expand 控制，避免双重固定高度溢出
     final cover = movie.coverUrl?.trim() ?? '';
+    // 未登录 / 非会员：禁止创建播放器（含 forceWatch 预开播路径）
+    if (_vipGate || !_canPlayAsVip) {
+      SystemChrome.setSystemUIOverlayStyle(
+        const SystemUiOverlayStyle(
+          statusBarColor: Color(0xFF000000),
+          statusBarIconBrightness: Brightness.light,
+          statusBarBrightness: Brightness.dark,
+          systemNavigationBarColor: Color(0xFF000000),
+          systemNavigationBarIconBrightness: Brightness.light,
+          systemStatusBarContrastEnforced: false,
+          systemNavigationBarContrastEnforced: false,
+        ),
+      );
+      // 每次进入遮罩都确保音轨已停（避免重建后残留）
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (_vipGate || !_canPlayAsVip) {
+          unawaited(_silencePlaybackForVipGate());
+        }
+      });
+      return _buildVipGateOverlay(posterUrl: cover);
+    }
     if (url == null || url.isEmpty) {
       return Stack(
         fit: StackFit.expand,
@@ -3404,6 +3672,7 @@ class _CommentPanelState extends State<_CommentPanel> {
         timeText: '刚刚',
         timeMs: DateTime.now().millisecondsSinceEpoch,
         avatarUrl: CmsAuthController.instance.user?.avatarUrl,
+        userId: CmsAuthController.instance.user?.userId ?? 0,
         vodId: widget.movieId,
         vodName: widget.movieTitle,
         vodPic: widget.movieCover,
@@ -3435,21 +3704,6 @@ class _CommentPanelState extends State<_CommentPanel> {
       await _reloadCaptcha();
     } finally {
       if (mounted) setState(() => _posting = false);
-    }
-  }
-
-  Future<void> _digg(MovieComment c, String type) async {
-    HapticFeedback.lightImpact();
-    try {
-      widget.cms.adoptCmsSessionCookie(
-        CmsAuthController.instance.api.sessionCookie,
-      );
-      await widget.cms.diggComment(commentId: c.id, type: type);
-      if (!mounted) return;
-      await widget.onRefresh();
-      DialogX.showSuccess(type == 'up' ? '已点赞' : '已反对');
-    } catch (e) {
-      DialogX.showError('$e');
     }
   }
 
@@ -3778,16 +4032,7 @@ class _CommentPanelState extends State<_CommentPanel> {
             )
           else
             for (final c in comments) ...[
-              _CommentTile(
-                comment: c,
-                onUp: () => _digg(c, 'up'),
-                onDown: () => _digg(c, 'down'),
-                onReply: () => _toggleCompose(
-                  replyTo: c.userName.trim().isEmpty
-                      ? '访客'
-                      : c.userName.trim(),
-                ),
-              ),
+              _CommentTile(comment: c),
               const SizedBox(height: 10),
             ],
         ],
@@ -3797,17 +4042,9 @@ class _CommentPanelState extends State<_CommentPanel> {
 }
 
 class _CommentTile extends StatelessWidget {
-  const _CommentTile({
-    required this.comment,
-    required this.onUp,
-    required this.onDown,
-    required this.onReply,
-  });
+  const _CommentTile({required this.comment});
 
   final MovieComment comment;
-  final VoidCallback onUp;
-  final VoidCallback onDown;
-  final VoidCallback onReply;
 
   static String _cleanBody(String raw) {
     var s = raw.trim();
@@ -3832,7 +4069,6 @@ class _CommentTile extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFF0F0F3)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -3849,7 +4085,7 @@ class _CommentTile extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Expanded(
+                    Flexible(
                       child: Text(
                         name,
                         maxLines: 1,
@@ -3863,6 +4099,31 @@ class _CommentTile extends StatelessWidget {
                         ),
                       ),
                     ),
+                    if (comment.isOfficial) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppColors.brand.withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          '官方',
+                          style: TextStyle(
+                            fontFamily: 'AppSans',
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.brand,
+                            height: 1.1,
+                            decoration: TextDecoration.none,
+                          ),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(width: 8),
                     Text(
                       time,
                       style: const TextStyle(
@@ -3885,71 +4146,7 @@ class _CommentTile extends StatelessWidget {
                     decoration: TextDecoration.none,
                   ),
                 ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    _CommentAction(
-                      icon: Icons.thumb_up_alt_outlined,
-                      label: '${comment.up}',
-                      onTap: onUp,
-                    ),
-                    const SizedBox(width: 14),
-                    _CommentAction(
-                      icon: Icons.thumb_down_alt_outlined,
-                      label: '${comment.down}',
-                      onTap: onDown,
-                    ),
-                    const SizedBox(width: 14),
-                    _CommentAction(
-                      icon: Icons.chat_bubble_outline_rounded,
-                      label: '回复',
-                      onTap: onReply,
-                    ),
-                  ],
-                ),
               ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// 统一尺寸的加粗线框图标 + 右侧文案
-class _CommentAction extends StatelessWidget {
-  const _CommentAction({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            icon,
-            size: 18,
-            color: const Color(0xFF666666),
-          ),
-          const SizedBox(width: 4),
-          Text(
-            label,
-            style: const TextStyle(
-              fontFamily: 'AppSans',
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF666666),
-              decoration: TextDecoration.none,
             ),
           ),
         ],

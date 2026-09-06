@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config/api_config.dart';
+import '../utils/account_validators.dart';
 import '../utils/qq_avatar.dart';
 import '../utils/relative_time.dart';
 import 'app_security.dart';
@@ -142,42 +143,48 @@ class CmsUser {
     return u.isEmpty ? '会员' : u;
   }
 
-  /// 是否有效会员（等级名 / 到期时间）
+  /// 免费/默认组（新注册常见：注册会员 / 普通会员）
+  bool get isFreeMemberGroup {
+    final g = groupName.trim();
+    if (g.isEmpty) return true;
+    final low = g.toLowerCase();
+    if (low.contains('游客')) return true;
+    if (low.contains('注册')) return true;
+    if (low.contains('普通')) return true;
+    if (g == '会员' || g == '默认' || g == '默认会员') return true;
+    return false;
+  }
+
+  /// 付费会员组名（不能仅凭「…会员」二字判断，否则注册用户会被当成 VIP）
+  bool get looksPaidVipGroup {
+    if (isFreeMemberGroup) return false;
+    final g = groupName.trim();
+    final low = g.toLowerCase();
+    return low.contains('vip') ||
+        low.contains('svip') ||
+        g.contains('黄金') ||
+        g.contains('钻石') ||
+        g.contains('至尊') ||
+        g.contains('铂金') ||
+        g.contains('白金') ||
+        g.contains('包月') ||
+        g.contains('包年');
+  }
+
+  /// 是否有效会员（付费组 / 明确未过期的到期时间）
   bool get isVip {
-    final group = groupName.trim();
-    final looksVip = group.contains('VIP') ||
-        group.contains('vip') ||
-        group.contains('黄金') ||
-        group.contains('钻石') ||
-        group.contains('至尊') ||
-        (group.contains('会员') &&
-            !group.contains('游客') &&
-            !group.contains('注册'));
+    if (isFreeMemberGroup) return false;
 
-    final raw = endTime.trim();
-    if (raw.isEmpty || raw == '0' || raw == '0000-00-00') {
-      return looksVip;
-    }
-    if (raw.contains('永久')) return true;
+    final expire = formatVipEndDate(endTime);
+    if (expire == 'expired') return false;
 
-    final ts = int.tryParse(raw);
-    if (ts != null && ts > 1000000000) {
-      final sec = ts > 9999999999 ? ts ~/ 1000 : ts;
-      if (sec >= 4102444800) return true;
-      final dt = DateTime.fromMillisecondsSinceEpoch(sec * 1000);
-      return dt.isAfter(DateTime.now());
+    if (looksPaidVipGroup) {
+      // VIP 组：无到期或永久 / 未来日期都算已开通
+      return true;
     }
 
-    final m = RegExp(r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})').firstMatch(raw);
-    if (m != null) {
-      final y = int.parse(m.group(1)!);
-      final mo = int.parse(m.group(2)!);
-      final d = int.parse(m.group(3)!);
-      if (y >= 2099) return true;
-      return DateTime(y, mo, d).isAfter(DateTime.now());
-    }
-
-    return looksVip;
+    // 组名不明确时：必须有有效未来/永久到期，才算会员
+    return expire == 'permanent' || (expire != null && expire != 'expired');
   }
 
   /// 个人页 VIP 条：只显示到期日期
@@ -187,7 +194,7 @@ class CmsUser {
     if (expire == null) return '已开通';
     if (expire == 'permanent') return '永久';
     if (expire == 'expired') return '已过期';
-    return expire;
+    return '$expire 到期';
   }
 
   /// 个人页 / 会员入口展示文案（严格按后台组名+到期，不臆造「永久」）
@@ -196,7 +203,7 @@ class CmsUser {
     final expire = formatVipEndDate(endTime);
     if (!isVip) {
       if (group.isEmpty) return '未开通';
-      if (group.contains('游客') || group.contains('注册')) return group;
+      if (isFreeMemberGroup) return '点击开通';
       return group;
     }
     final name = group.isEmpty ? 'VIP会员' : group;
@@ -711,6 +718,10 @@ class MacCmsUserApi {
     required String password2,
     required String verify,
   }) async {
+    final nameErr = AccountValidators.registerUsernameError(userName);
+    if (nameErr != null) {
+      throw CmsUserException(nameErr);
+    }
     final res = await _request(
       'POST',
       _uri('/index.php/user/reg.html'),

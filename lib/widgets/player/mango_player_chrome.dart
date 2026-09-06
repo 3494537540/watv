@@ -11,6 +11,11 @@ import 'player_sys_status.dart';
 /// 播放器强调色：品牌青
 Color get _playerAccent => AppColors.brand;
 
+/// 横屏顶栏 / 底栏 / 进度条共用左右边距（safe 另加）
+const double _kLandscapeChromeH = 8;
+/// 顶栏再贴左一点（相对底栏）
+const double _kLandscapeTopExtraLeft = -4;
+
 /// 播放器图标按钮
 /// [outlined] 圆形描边；[card] 圆角卡片描边（返回键）
 class PlayerCircleButton extends StatelessWidget {
@@ -248,108 +253,124 @@ class MangoWatchTopBar extends StatelessWidget {
         ),
     ];
 
-    final bar = Padding(
-      padding: EdgeInsets.fromLTRB(
-        16 + padLeft,
-        // 全屏顶栏略下移，避开刘海/状态栏更舒服
-        landscape
-            ? (padTop > 0 ? padTop + 10 : 14.0)
-            : padTop + 12,
-        10 + padRight,
-        8,
-      ),
-      child: Row(
-        children: [
-          PlayerCircleButton(
-            icon: Icons.chevron_left_rounded,
-            onTap: onBack,
-            size: 32,
-            iconSize: 28,
-            weight: 700,
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (t.isNotEmpty)
-                  Text(
-                    t,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: _titleStyle,
-                  ),
-                const SizedBox(height: 2),
-                Row(
-                  children: [
-                    if (ep.isNotEmpty)
-                      Flexible(
-                        child: Text(
-                          ep,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: _episodeStyle,
-                        ),
-                      ),
-                    if (tagText.isNotEmpty) ...[
-                      if (ep.isNotEmpty) const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.14),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          tagText,
-                          style: const TextStyle(
-                            fontFamily: 'AppSans',
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
-                    ],
-                    const SizedBox(width: 6),
-                    const PlayerNetworkIndicator(),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          for (var i = 0; i < actions.length; i++) ...[
-            if (i > 0) _iconGap,
-            actions[i],
-          ],
-        ],
-      ),
-    );
+    // 顶栏再往左一点；底栏仍用同一基准边距
+    final hLeft = (landscape ? _kLandscapeChromeH : 16) +
+        padLeft +
+        (landscape ? _kLandscapeTopExtraLeft : 0);
+    final hRight = (landscape ? _kLandscapeChromeH : 16) + padRight;
+    final vTop = landscape
+        ? (padTop > 0 ? padTop + 8 : 12.0)
+        : padTop + 12;
 
-    if (!showClock) return bar;
-
-    // 与两侧圆形按钮同高对齐（按钮默认 36）
-    final barTop = landscape ? (padTop > 0 ? padTop + 2 : 8.0) : padTop + 6;
-    return Stack(
-      clipBehavior: Clip.none,
+    // 左：返回+标题；右：操作；中间叠时间电量（垂直与两侧控件居中）
+    final leftGroup = Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        bar,
-        Positioned(
-          top: barTop,
-          left: 0,
-          right: 0,
-          height: 36,
-          child: const IgnorePointer(
-            child: Align(
-              alignment: Alignment.center,
-              child: PlayerSysStatus(compact: true),
-            ),
+        PlayerCircleButton(
+          icon: Icons.chevron_left_rounded,
+          onTap: onBack,
+          size: 32,
+          iconSize: 28,
+          weight: 700,
+        ),
+        const SizedBox(width: 4),
+        Flexible(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (t.isNotEmpty)
+                Text(
+                  t,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: _titleStyle,
+                ),
+              const SizedBox(height: 2),
+              Row(
+                children: [
+                  if (ep.isNotEmpty)
+                    Flexible(
+                      child: Text(
+                        ep,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: _episodeStyle,
+                      ),
+                    ),
+                  if (tagText.isNotEmpty) ...[
+                    if (ep.isNotEmpty) const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.14),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        tagText,
+                        style: const TextStyle(
+                          fontFamily: 'AppSans',
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(width: 6),
+                  const PlayerNetworkIndicator(),
+                ],
+              ),
+            ],
           ),
         ),
       ],
+    );
+
+    final rightGroup = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var i = 0; i < actions.length; i++) ...[
+          if (i > 0) _iconGap,
+          actions[i],
+        ],
+      ],
+    );
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(hLeft, vTop, hRight, 8),
+      child: SizedBox(
+        height: 44,
+        child: Stack(
+          alignment: Alignment.center,
+          clipBehavior: Clip.none,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: leftGroup,
+                  ),
+                ),
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: rightGroup,
+                  ),
+                ),
+              ],
+            ),
+            if (showClock)
+              const IgnorePointer(
+                child: PlayerSysStatus(compact: true),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -451,7 +472,7 @@ class MangoPlayerChrome extends StatelessWidget {
   static const _timeStyle = TextStyle(
     fontFamily: 'AppSans',
     fontSize: 12,
-    fontWeight: FontWeight.w500,
+    fontWeight: FontWeight.w700,
     color: Colors.white,
     fontFeatures: [FontFeature.tabularFigures()],
     shadows: [
@@ -497,18 +518,24 @@ class MangoPlayerChrome extends StatelessWidget {
                 begin: Alignment.bottomCenter,
                 end: Alignment.topCenter,
                 colors: [
-                  Color(0xE6000000),
-                  Color(0x66000000),
+                  Color(0xCC000000),
+                  Color(0x55000000),
                   Color(0x00000000),
                 ],
-                stops: [0.0, 0.55, 1.0],
+                stops: [0.0, 0.45, 1.0],
               ),
             ),
             child: Padding(
               padding: EdgeInsets.fromLTRB(
-                landscape ? 14 + MediaQuery.viewPaddingOf(context).left : 12,
+                landscape
+                    ? _kLandscapeChromeH +
+                        MediaQuery.viewPaddingOf(context).left
+                    : 12,
                 landscape ? 6 : 20,
-                landscape ? 14 + MediaQuery.viewPaddingOf(context).right : 12,
+                landscape
+                    ? _kLandscapeChromeH +
+                        MediaQuery.viewPaddingOf(context).right
+                    : 12,
                 landscape
                     ? 6 + MediaQuery.viewPaddingOf(context).bottom
                     : 14,
@@ -568,124 +595,130 @@ class MangoPlayerChrome extends StatelessWidget {
     int totalMs,
   ) {
     final wide = MediaQuery.sizeOf(context).width >= 640;
+    final left = <Widget>[
+      _PlayPauseButton(playing: playing, onTap: onPlayPause),
+      if (onNextEpisode != null) ...[
+        const SizedBox(width: 2),
+        _ChromeIconButton(
+          icon: Icons.skip_next_rounded,
+          onTap: onNextEpisode!,
+          size: 24,
+        ),
+      ],
+      if (onSkip != null) ...[
+        const SizedBox(width: 2),
+        Builder(
+          builder: (ctx) => _ChromeTextButton(
+            label: skipEnabled ? '跳过·开' : '跳过',
+            onTap: () => onSkip!(ctx),
+          ),
+        ),
+      ],
+      if (showDanmakuToggle && onDanmakuToggle != null) ...[
+        const SizedBox(width: 4),
+        _DanmakuToggleButton(
+          enabled: danmakuEnabled,
+          onTap: onDanmakuToggle!,
+        ),
+      ],
+      if (!wide && showDanmakuToggle && onDanmakuSend != null) ...[
+        const SizedBox(width: 4),
+        _ChromeIconButton(
+          icon: CupertinoIcons.pencil,
+          onTap: onDanmakuSend!,
+          size: 18,
+        ),
+      ],
+    ];
+
+    final right = <Widget>[
+      if (onEpisodes != null)
+        Builder(
+          builder: (ctx) => _ChromeTextButton(
+            label: '选集',
+            onTap: () => onEpisodes!(ctx),
+          ),
+        ),
+      if (onSources != null)
+        Builder(
+          builder: (ctx) => _ChromeTextButton(
+            label: sourceLabel,
+            onTap: () => onSources!(ctx),
+          ),
+        ),
+      if (onAspect != null)
+        Builder(
+          builder: (ctx) => _ChromeTextButton(
+            label: aspectLabel,
+            onTap: () => onAspect!(ctx),
+          ),
+        ),
+      if (onQuality != null)
+        Builder(
+          builder: (ctx) => _ChromeTextButton(
+            label: qualityLabel,
+            onTap: () => onQuality!(ctx),
+          ),
+        ),
+      if (onSpeed != null)
+        Builder(
+          builder: (ctx) => _ChromeTextButton(
+            label: speedLabel,
+            onTap: () => onSpeed!(ctx),
+          ),
+        ),
+      _FullscreenExitButton(onTap: onFullscreen),
+    ];
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(
-          '${_fmt(position)} / ${_fmt(duration)}',
-          style: _timeStyle,
-        ),
-        SizedBox(
-          height: 26,
-          child: _ProgressSlider(
-            progress: progress,
-            totalMs: totalMs,
-            onSeek: onSeek,
-            onSeekPreview: onSeekPreview,
-            onSeekStart: onSeekStart,
-            onSeekEnd: onSeekEnd,
-            accent: true,
-            introMs: introMs,
-            outroMs: outroMs,
-            onMarkIntro: onMarkIntro,
-            onMarkOutro: onMarkOutro,
+        // 进度条左右比底栏控件再缩进一截
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${_fmt(position)} / ${_fmt(duration)}',
+                style: _timeStyle,
+              ),
+              SizedBox(
+                height: 26,
+                child: _ProgressSlider(
+                  progress: progress,
+                  totalMs: totalMs,
+                  onSeek: onSeek,
+                  onSeekPreview: onSeekPreview,
+                  onSeekStart: onSeekStart,
+                  onSeekEnd: onSeekEnd,
+                  accent: true,
+                  introMs: introMs,
+                  outroMs: outroMs,
+                  onMarkIntro: onMarkIntro,
+                  onMarkOutro: onMarkOutro,
+                ),
+              ),
+            ],
           ),
         ),
         SizedBox(
           height: 36,
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              _PlayPauseButton(playing: playing, onTap: onPlayPause),
-              if (onNextEpisode != null) ...[
-                const SizedBox(width: 2),
-                _ChromeIconButton(
-                  icon: Icons.skip_next_rounded,
-                  onTap: onNextEpisode!,
-                  size: 24,
-                ),
-              ],
-              if (onSkip != null) ...[
-                const SizedBox(width: 2),
-                Builder(
-                  builder: (ctx) => _ChromeTextButton(
-                    label: skipEnabled ? '跳过·开' : '跳过',
-                    onTap: () => onSkip!(ctx),
-                  ),
-                ),
-              ],
-              if (showDanmakuToggle && onDanmakuToggle != null) ...[
-                const SizedBox(width: 4),
-                _DanmakuToggleButton(
-                  enabled: danmakuEnabled,
-                  onTap: onDanmakuToggle!,
-                ),
-              ],
+              ...left,
               if (wide && showDanmakuToggle && onDanmakuSend != null) ...[
-                const SizedBox(width: 8),
+                const SizedBox(width: 6),
+                // 铺满左右控件之间的空档
                 Expanded(
                   child: _DanmakuInputChip(onTap: onDanmakuSend!),
                 ),
-              ] else ...[
-                if (showDanmakuToggle && onDanmakuSend != null)
-                  _ChromeIconButton(
-                    icon: CupertinoIcons.pencil,
-                    onTap: onDanmakuSend!,
-                    size: 18,
-                  ),
+                const SizedBox(width: 6),
+              ] else
                 const Spacer(),
-              ],
-              Flexible(
-                child: Align(
-                  alignment: Alignment.centerRight,
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    reverse: true,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (onEpisodes != null)
-                          Builder(
-                            builder: (ctx) => _ChromeTextButton(
-                              label: '选集',
-                              onTap: () => onEpisodes!(ctx),
-                            ),
-                          ),
-                        if (onSources != null)
-                          Builder(
-                            builder: (ctx) => _ChromeTextButton(
-                              label: sourceLabel,
-                              onTap: () => onSources!(ctx),
-                            ),
-                          ),
-                        if (onAspect != null)
-                          Builder(
-                            builder: (ctx) => _ChromeTextButton(
-                              label: aspectLabel,
-                              onTap: () => onAspect!(ctx),
-                            ),
-                          ),
-                        if (onQuality != null)
-                          Builder(
-                            builder: (ctx) => _ChromeTextButton(
-                              label: qualityLabel,
-                              onTap: () => onQuality!(ctx),
-                            ),
-                          ),
-                        if (onSpeed != null)
-                          Builder(
-                            builder: (ctx) => _ChromeTextButton(
-                              label: speedLabel,
-                              onTap: () => onSpeed!(ctx),
-                            ),
-                          ),
-                        // 投屏/设置移到顶栏，仅全屏显示
-                        _FullscreenExitButton(onTap: onFullscreen),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
+              ...right,
             ],
           ),
         ),
@@ -798,6 +831,10 @@ class _ProgressSliderState extends State<_ProgressSlider> {
             children: [
               SliderTheme(
                 data: SliderThemeData(
+                  // 进度条轨道左右再留空，避免贴边
+                  padding: widget.accent
+                      ? const EdgeInsets.symmetric(horizontal: 4)
+                      : EdgeInsets.zero,
                   trackHeight: widget.accent ? 3.5 : 3,
                   trackShape: const RoundedRectSliderTrackShape(),
                   thumbShape: RoundSliderThumbShape(
@@ -865,12 +902,13 @@ class _DanmakuInputChip extends StatelessWidget {
       child: DecoratedBox(
         decoration: BoxDecoration(
           color: Colors.white.withValues(alpha: 0.12),
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: BorderRadius.circular(16),
         ),
         child: SizedBox(
-          height: 32,
+          height: 30,
+          width: double.infinity,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
+            padding: const EdgeInsets.fromLTRB(12, 0, 10, 0),
             child: Row(
               children: [
                 Expanded(
@@ -881,14 +919,16 @@ class _DanmakuInputChip extends StatelessWidget {
                     style: TextStyle(
                       fontFamily: 'AppSans',
                       fontSize: 12,
-                      color: Colors.white.withValues(alpha: 0.55),
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white.withValues(alpha: 0.72),
                     ),
                   ),
                 ),
+                const SizedBox(width: 6),
                 Icon(
                   CupertinoIcons.paperplane,
-                  size: 14,
-                  color: Colors.white.withValues(alpha: 0.7),
+                  size: 13,
+                  color: Colors.white.withValues(alpha: 0.75),
                 ),
               ],
             ),
@@ -910,16 +950,22 @@ class _ChromeTextButton extends StatelessWidget {
     return PressScale(
       onTap: onTap,
       scale: 0.9,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        child: Text(
-          label,
-          style: const TextStyle(
-            fontFamily: 'AppSans',
-            fontSize: 13,
-            fontWeight: FontWeight.w800,
-            color: Colors.white,
-            shadows: [Shadow(color: Color(0x99000000), blurRadius: 4)],
+      child: SizedBox(
+        height: 36,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+          child: Center(
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontFamily: 'AppSans',
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+                height: 1,
+                color: Colors.white,
+                shadows: [Shadow(color: Color(0x99000000), blurRadius: 4)],
+              ),
+            ),
           ),
         ),
       ),

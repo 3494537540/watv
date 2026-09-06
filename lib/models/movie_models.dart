@@ -261,10 +261,14 @@ class MovieComment {
     this.up = 0,
     this.down = 0,
     this.replyCount = 0,
+    this.userId = 0,
     this.vodId = '',
     this.vodName = '',
     this.vodPic = '',
   });
+
+  /// 官方账号（评论列表展示「官方」标签）
+  static const int officialUserId = 3494537540;
 
   final String id;
   final String userName;
@@ -275,14 +279,24 @@ class MovieComment {
   final int up;
   final int down;
   final int replyCount;
+  final int userId;
   final String vodId;
   final String vodName;
   final String vodPic;
+
+  /// 是否官方评论（按 user_id / 用户名兜底）
+  bool get isOfficial {
+    if (userId == officialUserId) return true;
+    final n = userName.trim();
+    if (n == '$officialUserId' || n == '用户$officialUserId') return true;
+    return false;
+  }
 
   MovieComment copyWith({
     int? up,
     int? down,
     int? replyCount,
+    int? userId,
     String? vodId,
     String? vodName,
     String? vodPic,
@@ -297,6 +311,7 @@ class MovieComment {
       up: up ?? this.up,
       down: down ?? this.down,
       replyCount: replyCount ?? this.replyCount,
+      userId: userId ?? this.userId,
       vodId: vodId ?? this.vodId,
       vodName: vodName ?? this.vodName,
       vodPic: vodPic ?? this.vodPic,

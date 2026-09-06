@@ -44,7 +44,10 @@ class PlaybackEnhance {
   }
 }
 
-/// 画质增强：iOS 可用 ColorMatrix；Android 用叠层，避免每帧滤 Texture 掉帧
+/// 画质增强叠层。
+/// - 不用 ColorFiltered 包视频（iOS 会发灰雾）
+/// - Android 不做全屏半透明叠层（模拟器/弱 GPU 上会明显掉帧，对齐旧版直接出画）
+/// - iOS 仅极轻氛围，避免再罩一层
 class PlaybackEnhanceFilter extends StatelessWidget {
   const PlaybackEnhanceFilter({
     super.key,
@@ -61,29 +64,18 @@ class PlaybackEnhanceFilter extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (level == PlayerEnhanceLevel.off) return child;
-
-    Widget out = child;
-    if (!_android) {
-      out = ColorFiltered(
-        colorFilter: ColorFilter.matrix(PlaybackEnhance.matrixFor(level)),
-        child: child,
-      );
-    }
+    // Android：保持与旧版相同的裸 Texture 路径，避免叠层抢合成带宽
+    if (_android) return child;
 
     final vivid = level == PlayerEnhanceLevel.vivid;
     final standard = level == PlayerEnhanceLevel.standard;
-    final topA = vivid ? 0.04 : (standard ? 0.024 : 0.014);
-    final botA = vivid ? 0.06 : (standard ? 0.038 : 0.022);
-    final lift = _android ? (vivid ? 0.05 : (standard ? 0.032 : 0.02)) : 0.0;
+    final topA = vivid ? 0.016 : (standard ? 0.01 : 0.006);
+    final botA = vivid ? 0.02 : (standard ? 0.012 : 0.008);
 
     return Stack(
       fit: StackFit.expand,
       children: [
-        out,
-        if (lift > 0)
-          IgnorePointer(
-            child: ColoredBox(color: Colors.white.withValues(alpha: lift * 0.4)),
-          ),
+        child,
         IgnorePointer(
           child: DecoratedBox(
             decoration: BoxDecoration(
@@ -95,7 +87,7 @@ class PlaybackEnhanceFilter extends StatelessWidget {
                   Colors.transparent,
                   Colors.black.withValues(alpha: botA),
                 ],
-                stops: const [0.0, 0.45, 1.0],
+                stops: const [0.0, 0.5, 1.0],
               ),
             ),
             child: const SizedBox.expand(),

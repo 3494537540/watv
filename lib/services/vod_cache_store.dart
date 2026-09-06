@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -271,7 +272,7 @@ class VodCacheStore {
     return e?.localPath;
   }
 
-  /// 打开本地 m3u8 前：把仍指向远程的 KEY/MAP 拉到同目录，避免 iOS 离线卡死
+  /// 打开本地 m3u8 前：本地化 KEY/MAP；iOS 把相对路径改成绝对 file://（AVPlayer 相对路径易失败）
   Future<String> prepareLocalMediaPath(String rawPath) async {
     var path = rawPath.trim();
     if (path.startsWith('file:')) {
@@ -287,28 +288,60 @@ class VodCacheStore {
     } catch (_) {
       return path;
     }
-    if (!body.contains('http://') && !body.contains('https://')) {
-      return path;
-    }
     final dir = file.parent;
+    final absPlaylist = !kIsWeb && Platform.isIOS;
     final lines = body.split('\n');
     final out = StringBuffer();
     var changed = false;
+    var segCount = 0;
+    var missingSeg = 0;
     for (final raw in lines) {
       final trimmed = raw.trim();
       final upper = trimmed.toUpperCase();
       if (upper.startsWith('#EXT-X-KEY:') || upper.startsWith('#EXT-X-MAP:')) {
         final name =
             upper.startsWith('#EXT-X-MAP:') ? 'init.mp4' : 'key.key';
-        final next = await _localizeHlsAttrUriLine(
+        var next = await _localizeHlsAttrUriLine(
           trimmed,
-          // 用假基址解析绝对 URL；相对 URI 保持不动
           'https://local.invalid/',
           dir,
           fileName: name,
         );
         if (next != trimmed) changed = true;
+        // 密钥仍指向外网 → 离线必卡死
+        if (next.toUpperCase().contains('URI="HTTP')) {
+          throw StateError('缓存密钥未下载完成，请重新下载');
+        }
+        if (absPlaylist) {
+          final abs = _absolutizeHlsAttrUri(next, dir);
+          if (abs != next) {
+            next = abs;
+            changed = true;
+          }
+        }
         out.writeln(next);
+      } else if (trimmed.isNotEmpty && !trimmed.startsWith('#')) {
+        // 分片行：仍是 http(s) 的没法离线播；相对名则检查文件是否在
+        if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+          missingSeg++;
+          out.writeln(raw);
+        } else {
+          final localName = trimmed.startsWith('file:')
+              ? Uri.parse(trimmed).toFilePath().split(Platform.pathSeparator).last
+              : trimmed;
+          segCount++;
+          final seg = File('${dir.path}/$localName');
+          if (!await seg.exists() || await seg.length() == 0) {
+            missingSeg++;
+          }
+          if (absPlaylist) {
+            final absUri = Uri.file(seg.path).toString();
+            if (trimmed != absUri) changed = true;
+            out.writeln(absUri);
+          } else {
+            out.writeln(localName == trimmed ? raw : localName);
+          }
+        }
       } else {
         out.writeln(raw);
       }
@@ -318,7 +351,30 @@ class VodCacheStore {
         await file.writeAsString(out.toString());
       } catch (_) {}
     }
+    if (segCount == 0 || missingSeg > 0) {
+      throw StateError(
+        missingSeg > 0
+            ? '缓存不完整（缺少分片），请重新下载'
+            : '缓存播放列表无效，请重新下载',
+      );
+    }
     return path;
+  }
+
+  /// 把 KEY/MAP 里相对 URI 写成绝对 file://（仅 iOS 播放用）
+  static String _absolutizeHlsAttrUri(String line, Directory dir) {
+    final m = RegExp(r'URI="([^"]+)"', caseSensitive: false).firstMatch(line);
+    final raw = m?.group(1)?.trim() ?? '';
+    if (raw.isEmpty) return line;
+    if (raw.startsWith('http://') || raw.startsWith('https://')) return line;
+    final absPath = raw.startsWith('file:')
+        ? Uri.parse(raw).toFilePath()
+        : (raw.startsWith('/') ? raw : '${dir.path}/$raw');
+    final absUri = Uri.file(absPath).toString();
+    return line.replaceFirstMapped(
+      RegExp(r'URI="[^"]+"', caseSensitive: false),
+      (_) => 'URI="$absUri"',
+    );
   }
 
   Future<VodCacheItem> enqueueAndDownload({
@@ -703,6 +759,18 @@ class VodCacheStore {
     _upsert(item);
     await _persist();
 
+    // 通知栏进度（开始）
+    unawaited(
+      LocalNotificationService.showDownloadProgress(
+        cacheId: item.id,
+        title: item.title,
+        episodeLabel: item.episodeLabel,
+        progress: item.progress,
+        speedBps: 0,
+        force: true,
+      ),
+    );
+
     try {
       final dir = await getApplicationDocumentsDirectory();
       final cacheRoot = Directory('${dir.path}/vod_cache');
@@ -725,6 +793,15 @@ class VodCacheStore {
         );
         _upsert(item);
         _emit();
+        unawaited(
+          LocalNotificationService.showDownloadProgress(
+            cacheId: item.id,
+            title: item.title,
+            episodeLabel: item.episodeLabel,
+            progress: p,
+            speedBps: speed,
+          ),
+        );
       }
 
       if (isHls) {
@@ -767,6 +844,7 @@ class VodCacheStore {
     } on _CacheCancelled {
       final paused = _pauseInsteadOfFail;
       _pauseInsteadOfFail = false;
+      unawaited(LocalNotificationService.cancelDownloadProgress(item.id));
       item = item.copyWith(
         status: paused ? VodCacheStatus.paused : VodCacheStatus.failed,
         clearSpeed: true,
@@ -778,6 +856,7 @@ class VodCacheStore {
     } catch (_) {
       final paused = _pauseInsteadOfFail && _cancelledCurrent;
       _pauseInsteadOfFail = false;
+      unawaited(LocalNotificationService.cancelDownloadProgress(item.id));
       item = item.copyWith(
         status: paused ? VodCacheStatus.paused : VodCacheStatus.failed,
         clearSpeed: true,

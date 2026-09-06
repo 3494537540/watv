@@ -16,12 +16,16 @@ class DouyinLitePlayer extends StatefulWidget {
     this.active = true,
     this.coverUrl,
     this.bottomInset = 0,
+    this.rightInset = 0,
   });
 
   final String url;
   final bool active;
   final String? coverUrl;
+  /// 进度条距底边（避开标题文案等）
   final double bottomInset;
+  /// 进度条右侧留白（避开点赞/选集）
+  final double rightInset;
 
   @override
   State<DouyinLitePlayer> createState() => _DouyinLitePlayerState();
@@ -259,7 +263,7 @@ class _DouyinLitePlayerState extends State<DouyinLitePlayer> {
                 if (_ready && c != null)
                   Positioned(
                     left: 12,
-                    right: 12,
+                    right: 12 + widget.rightInset,
                     bottom: widget.bottomInset + 4,
                     child: ValueListenableBuilder<VideoPlayerValue>(
                       valueListenable: c,

@@ -75,13 +75,7 @@ class _PlayerLoadingHudState extends State<PlayerLoadingHud> {
     return s;
   }
 
-  Color get _speedColor {
-    final bps = widget.tracker?.displayBps ?? 0;
-    if (bps <= 0) return const Color(0xF2FFFFFF);
-    if (bps >= 120 * 1024) return const Color(0xFF34C759);
-    if (bps >= 40 * 1024) return const Color(0xFFFF9F0A);
-    return const Color(0xFFFF3B30);
-  }
+  Color get _speedColor => const Color(0xF2FFFFFF);
 
   @override
   Widget build(BuildContext context) {

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/cupertino.dart';
@@ -206,6 +207,27 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     _onInteract();
   }
 
+  Future<void> _pickSkip(BuildContext anchor) async {
+    final action = await showChromeSkipMenu(
+      anchor,
+      enabled: _skipPrefs.enabled,
+      introSec: _skipPrefs.introSeconds,
+      outroSec: _skipPrefs.outroSeconds,
+    );
+    if (!mounted || action == null) return;
+    switch (action) {
+      case 'toggle':
+        await _saveSkipPrefs(
+          _skipPrefs.copyWith(enabled: !_skipPrefs.enabled),
+        );
+      case 'intro':
+        await _markSkipAtCurrent(intro: true);
+      case 'outro':
+        await _markSkipAtCurrent(intro: false);
+    }
+    _onInteract();
+  }
+
   Future<void> _markSkipAtCurrent({required bool intro}) async {
     final c = _engine;
     if (c == null || !c.value.isInitialized) return;
@@ -214,11 +236,11 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     PlayerSkipPrefs next;
     if (intro) {
       next = _skipPrefs.copyWith(enabled: true, introSeconds: pos);
-      DialogX.showSuccess('??????? ${pos}s???????');
+      DialogX.showSuccess('已记录片头 ${pos}s，开播将自动跳过');
     } else {
       final remain = dur > 0 ? (dur - pos).clamp(0, 600) : 90;
       next = _skipPrefs.copyWith(enabled: true, outroSeconds: remain);
-      DialogX.showSuccess('?????????? ${remain}s???????');
+      DialogX.showSuccess('已记录片尾前 ${remain}s，临近将切下一集');
     }
     await _saveSkipPrefs(next);
   }
@@ -1303,7 +1325,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
         _activePlayUrl = path;
         final file = File(path);
         if (!await file.exists()) {
-          throw StateError('???????');
+          throw StateError('本地缓存文件不存在');
         }
       }
 
@@ -1315,11 +1337,14 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
       _initSpeedTimer = Timer.periodic(const Duration(milliseconds: 650), (_) {
         _onInitControllerTick();
       });
+      // iOS 必须用 PlatformView，否则 AVPictureInPicture / video_player_pip 无效；
+      // Android 用 TextureView，避免 PlatformView 合成开销。
       await engine.open(
         url: playUrl,
         httpHeaders: VodPlayback.httpHeaders,
         backBufferMs: isFile ? 15000 : profile.backBufferMs,
-        preferPlatformView: false,
+        preferPlatformView: !kIsWeb &&
+            defaultTargetPlatform == TargetPlatform.iOS,
       );
       if (!mounted || token != _initToken) {
         await _disposeController();
@@ -1328,8 +1353,18 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
 
       final start = resumeMs ?? widget.startPositionMs;
       final total = engine.value.duration.inMilliseconds;
-      if (start > 1500 && total > 0 && start < total - 2000) {
-        await engine.seekTo(Duration(milliseconds: start));
+      // 进度贴近片尾/越界时强制从头播，避免一直转圈（清历史又能播的常见原因）
+      var seekMs = start;
+      if (total > 0) {
+        if (seekMs < 0 || seekMs > total - 5000 || seekMs > total * 0.97) {
+          seekMs = 0;
+        }
+      } else if (seekMs > 30 * 60 * 1000) {
+        // 时长未知却带超长进度，不可信
+        seekMs = 0;
+      }
+      if (seekMs > 1500) {
+        await engine.seekTo(Duration(milliseconds: seekMs));
       }
       if (resumeMs == null) {
         await _applySkipIntro(engine);
@@ -1579,7 +1614,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         const Text(
-                          '????????????',
+                          '播放失败',
                           style: TextStyle(
                             fontFamily: 'AppSans',
                             color: Colors.white70,
@@ -1623,7 +1658,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                                   ),
                                 ),
                                 child: const Text(
-                                  '??',
+                                  '重试',
                                   style: TextStyle(
                                     fontFamily: 'AppSans',
                                     fontSize: 15,
@@ -1652,7 +1687,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                                   ),
                                 ),
                                 child: const Text(
-                                  '??',
+                                  '报错',
                                   style: TextStyle(
                                     fontFamily: 'AppSans',
                                     fontSize: 15,
@@ -1712,158 +1747,134 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                       ),
                     ),
                   ),
-                if (c != null && !_failed && !_locked) ...[
+                // 注意：不要在 Video Texture 上方盖全屏 AnimatedOpacity。
+                // iOS 上 Opacity 合成层会让画面发灰，像「套了一层」。
+                if (c != null && !_failed && !_locked && showChrome) ...[
                   Positioned(
                     right: lockRight,
                     top: 0,
                     bottom: 0,
-                    child: IgnorePointer(
-                      ignoring: !showChrome,
-                      child: AnimatedOpacity(
-                        opacity: showChrome ? 1 : 0,
-                        duration: const Duration(milliseconds: 220),
-                        curve: Curves.easeOutCubic,
-                        child: Center(
-                          child: PlayerCircleButton(
-                            icon: Icons.lock_open_rounded,
-                            onTap: _toggleLock,
-                            iconSize: 22,
-                          ),
-                        ),
+                    child: Center(
+                      child: PlayerCircleButton(
+                        icon: Icons.lock_open_rounded,
+                        onTap: _toggleLock,
+                        iconSize: 22,
                       ),
                     ),
                   ),
                   Positioned.fill(
-                    child: IgnorePointer(
-                      ignoring: !showChrome,
-                      child: AnimatedOpacity(
-                        opacity: showChrome ? 1 : 0,
-                        duration: const Duration(milliseconds: 240),
-                        curve: Curves.easeOutCubic,
-                        child: AnimatedSlide(
-                          offset: showChrome
-                              ? Offset.zero
-                              : const Offset(0, 0.06),
-                          duration: const Duration(milliseconds: 240),
-                          curve: Curves.easeOutCubic,
-                          child: _ThrottledChrome(
-                            controller: c,
-                            chromeVisible: showChrome,
-                            ready: _ready,
-                            holdEnterAheadMs:
-                                PlaybackProfile.of(_playerSettings).holdEnterAheadMs,
-                            holdResumeAheadMs:
-                                PlaybackProfile.of(_playerSettings).holdResumeAheadMs,
-                            speedTracker: _bufferSpeedTracker,
-                            showNetSpeed: _playerSettings.showNetSpeed,
-                            onLoadingChanged: (v) {
-                              void apply() {
-                                if (!mounted) return;
-                                if (_stallLoading.value != v) {
-                                  _stallLoading.value = v;
-                                }
-                              }
+                    child: _ThrottledChrome(
+                      controller: c,
+                      chromeVisible: showChrome,
+                      ready: _ready,
+                      holdEnterAheadMs:
+                          PlaybackProfile.of(_playerSettings).holdEnterAheadMs,
+                      holdResumeAheadMs:
+                          PlaybackProfile.of(_playerSettings).holdResumeAheadMs,
+                      speedTracker: _bufferSpeedTracker,
+                      showNetSpeed: _playerSettings.showNetSpeed,
+                      onLoadingChanged: (v) {
+                        void apply() {
+                          if (!mounted) return;
+                          if (_stallLoading.value != v) {
+                            _stallLoading.value = v;
+                          }
+                        }
 
-                              final phase =
-                                  SchedulerBinding.instance.schedulerPhase;
-                              if (phase == SchedulerPhase.idle ||
-                                  phase == SchedulerPhase.postFrameCallbacks) {
-                                apply();
-                              } else {
-                                WidgetsBinding.instance
-                                    .addPostFrameCallback((_) => apply());
-                              }
-                            },
-                            showBack:
-                                widget.showBack && widget.topOverlay == null,
-                            topInset:
-                                widget.showBack && widget.topOverlay == null
-                                    ? topInset
-                                    : 0.0,
-                            onBack: widget.onBack,
-                            showDanmakuToggle: widget.enableDanmaku &&
-                                widget.vodId?.trim().isNotEmpty == true,
-                            danmakuEnabled: _danmakuPrefs.enabled,
-                            onDanmakuToggle: () =>
-                                unawaited(_toggleDanmaku()),
-                            onDanmakuSend: () => unawaited(_sendDanmaku()),
-                            onFullscreen: () {
-                              widget.onFullscreen?.call();
+                        final phase =
+                            SchedulerBinding.instance.schedulerPhase;
+                        if (phase == SchedulerPhase.idle ||
+                            phase == SchedulerPhase.postFrameCallbacks) {
+                          apply();
+                        } else {
+                          WidgetsBinding.instance
+                              .addPostFrameCallback((_) => apply());
+                        }
+                      },
+                      showBack:
+                          widget.showBack && widget.topOverlay == null,
+                      topInset:
+                          widget.showBack && widget.topOverlay == null
+                              ? topInset
+                              : 0.0,
+                      onBack: widget.onBack,
+                      showDanmakuToggle: widget.enableDanmaku &&
+                          widget.vodId?.trim().isNotEmpty == true,
+                      danmakuEnabled: _danmakuPrefs.enabled,
+                      onDanmakuToggle: () => unawaited(_toggleDanmaku()),
+                      onDanmakuSend: () => unawaited(_sendDanmaku()),
+                      onFullscreen: () {
+                        widget.onFullscreen?.call();
+                        _onInteract();
+                      },
+                      onInteract: _onInteract,
+                      onNextEpisode: widget.showNextEpisode &&
+                              widget.onNextEpisode != null
+                          ? () {
+                              widget.onNextEpisode!();
                               _onInteract();
-                            },
-                            onInteract: _onInteract,
-                            onNextEpisode: widget.showNextEpisode &&
-                                    widget.onNextEpisode != null
-                                ? () {
-                                    widget.onNextEpisode!();
-                                    _onInteract();
-                                  }
-                                : null,
-                            onEpisodes: widget.episodes.length > 1 &&
-                                    widget.onEpisodeSelect != null
-                                ? (anchor) => unawaited(_openEpisodes(anchor))
-                                : null,
-                            // ???????????/??/??/??
-                            onSources: (widget.immersiveTop &&
-                                    MediaQuery.sizeOf(context).width >
-                                        MediaQuery.sizeOf(context).height &&
-                                    widget.sourceNames.length > 1 &&
-                                    widget.onSourceSelect != null)
-                                ? (anchor) => unawaited(_pickSource(anchor))
-                                : null,
-                            onAspect: (widget.immersiveTop &&
-                                    MediaQuery.sizeOf(context).width >
-                                        MediaQuery.sizeOf(context).height)
-                                ? (anchor) => unawaited(_pickAspect(anchor))
-                                : null,
-                            onSpeed: (widget.immersiveTop &&
-                                    MediaQuery.sizeOf(context).width >
-                                        MediaQuery.sizeOf(context).height)
-                                ? (anchor) =>
-                                    unawaited(_pickPlaybackSpeed(anchor))
-                                : null,
-                            onQuality: (widget.immersiveTop &&
-                                    MediaQuery.sizeOf(context).width >
-                                        MediaQuery.sizeOf(context).height)
-                                ? (anchor) => unawaited(_pickQuality(anchor))
-                                : null,
-                            aspectLabel: _playerSettings.aspect.label,
-                            speedLabel: VodPlayback.rateLabel(_playbackRate),
-                            qualityLabel: _currentVariant?.shortLabel ??
-                                _qualityPrefer.label,
-                            sourceLabel: _sourceChromeLabel,
-                            denseLandscape: widget.immersiveTop &&
-                                MediaQuery.sizeOf(context).width >
-                                    MediaQuery.sizeOf(context).height,
-                            introMs: _skipPrefs.enabled
-                                ? _skipPrefs.introSeconds * 1000
-                                : 0,
-                            outroMs: _skipPrefs.enabled
-                                ? _skipPrefs.outroSeconds * 1000
-                                : 0,
-                            onMarkIntro: () => unawaited(_markSkipAtCurrent(intro: true)),
-                            onMarkOutro: () =>
-                                unawaited(_markSkipAtCurrent(intro: false)),
-                            onSkip: (_) => _openSideSettings(page: 'skip'),
-                            skipEnabled: _skipPrefs.enabled,
-                            // ???/?????????
-                            onSettings: widget.immersiveTop &&
-                                    MediaQuery.sizeOf(context).width >
-                                        MediaQuery.sizeOf(context).height
-                                ? () => _openSideSettings()
-                                : null,
-                            onCast: widget.onCast != null &&
-                                    widget.immersiveTop &&
-                                    MediaQuery.sizeOf(context).width >
-                                        MediaQuery.sizeOf(context).height
-                                ? () {
-                                    openCast();
-                                    _onInteract();
-                                  }
-                                : null,
-                          ),
-                        ),
-                      ),
+                            }
+                          : null,
+                      onEpisodes: widget.episodes.length > 1 &&
+                              widget.onEpisodeSelect != null
+                          ? (anchor) => unawaited(_openEpisodes(anchor))
+                          : null,
+                      onSources: (widget.immersiveTop &&
+                              MediaQuery.sizeOf(context).width >
+                                  MediaQuery.sizeOf(context).height &&
+                              widget.sourceNames.length > 1 &&
+                              widget.onSourceSelect != null)
+                          ? (anchor) => unawaited(_pickSource(anchor))
+                          : null,
+                      onAspect: (widget.immersiveTop &&
+                              MediaQuery.sizeOf(context).width >
+                                  MediaQuery.sizeOf(context).height)
+                          ? (anchor) => unawaited(_pickAspect(anchor))
+                          : null,
+                      onSpeed: (widget.immersiveTop &&
+                              MediaQuery.sizeOf(context).width >
+                                  MediaQuery.sizeOf(context).height)
+                          ? (anchor) => unawaited(_pickPlaybackSpeed(anchor))
+                          : null,
+                      onQuality: (widget.immersiveTop &&
+                              MediaQuery.sizeOf(context).width >
+                                  MediaQuery.sizeOf(context).height)
+                          ? (anchor) => unawaited(_pickQuality(anchor))
+                          : null,
+                      aspectLabel: _playerSettings.aspect.label,
+                      speedLabel: VodPlayback.rateLabel(_playbackRate),
+                      qualityLabel: _currentVariant?.shortLabel ??
+                          _qualityPrefer.label,
+                      sourceLabel: _sourceChromeLabel,
+                      denseLandscape: widget.immersiveTop &&
+                          MediaQuery.sizeOf(context).width >
+                              MediaQuery.sizeOf(context).height,
+                      introMs: _skipPrefs.enabled
+                          ? _skipPrefs.introSeconds * 1000
+                          : 0,
+                      outroMs: _skipPrefs.enabled
+                          ? _skipPrefs.outroSeconds * 1000
+                          : 0,
+                      onMarkIntro: () =>
+                          unawaited(_markSkipAtCurrent(intro: true)),
+                      onMarkOutro: () =>
+                          unawaited(_markSkipAtCurrent(intro: false)),
+                      onSkip: (anchor) => unawaited(_pickSkip(anchor)),
+                      skipEnabled: _skipPrefs.enabled,
+                      onSettings: widget.immersiveTop &&
+                              MediaQuery.sizeOf(context).width >
+                                  MediaQuery.sizeOf(context).height
+                          ? () => _openSideSettings()
+                          : null,
+                      onCast: widget.onCast != null &&
+                              widget.immersiveTop &&
+                              MediaQuery.sizeOf(context).width >
+                                  MediaQuery.sizeOf(context).height
+                          ? () {
+                              openCast();
+                              _onInteract();
+                            }
+                          : null,
                     ),
                   ),
                 ],
@@ -1898,29 +1909,16 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                       ),
                     ),
                   ),
-                if (widget.topOverlay != null && !_locked)
+                if (widget.topOverlay != null &&
+                    !_locked &&
+                    showChrome &&
+                    !_failed &&
+                    !showSide)
                   Positioned(
                     top: 0,
                     left: 0,
                     right: 0,
-                    child: IgnorePointer(
-                      ignoring: !showChrome || _failed || showSide,
-                      child: AnimatedOpacity(
-                        opacity: showChrome && !_failed && !showSide
-                            ? 1
-                            : 0,
-                        duration: const Duration(milliseconds: 240),
-                        curve: Curves.easeOutCubic,
-                        child: AnimatedSlide(
-                          offset: showChrome && !showSide
-                              ? Offset.zero
-                              : const Offset(0, -0.15),
-                          duration: const Duration(milliseconds: 240),
-                          curve: Curves.easeOutCubic,
-                          child: widget.topOverlay,
-                        ),
-                      ),
-                    ),
+                    child: widget.topOverlay!,
                   ),
                 // ???????????/??????????????
                 if (!_failed && !_ready)
@@ -2133,11 +2131,15 @@ class _DanmakuOverlayState extends State<_DanmakuOverlay> {
       );
     }
 
-    return Positioned.fill(child: layer);
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: RepaintBoundary(child: layer),
+      ),
+    );
   }
 }
 
-/// ??????????/???????
+/// 画面表面：按比例裁剪/适应；裁剪铺满用显式宽高，避免 FittedBox+Texture 底边黑条
 class _StableVideoSurface extends StatelessWidget {
   const _StableVideoSurface({
     required this.controller,
@@ -2158,7 +2160,6 @@ class _StableVideoSurface extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (!controller.value.isInitialized) return const SizedBox.shrink();
-    // 对齐 git 上传版画面路径：直接 VideoPlayer + FittedBox（功能层 enhance 另包）
     final effectiveAspect = aspect;
     final rawRatio =
         controller.value.aspectRatio == 0 ? 16 / 9 : controller.value.aspectRatio;
@@ -2176,7 +2177,6 @@ class _StableVideoSurface extends StatelessWidget {
         BoxFit.contain,
     };
 
-    // 与 git 一致：优先裸 VideoPlayer，避免多余包装
     final raw = controller.rawVideoPlayer;
     Widget player = raw != null
         ? VideoPlayer(raw)
@@ -2193,55 +2193,110 @@ class _StableVideoSurface extends StatelessWidget {
       );
     }
 
-    final sz = controller.value.size;
-    final logicalW =
-        sz.width > 1 ? sz.width : (forcedRatio >= 1 ? 1920.0 : 1080.0);
-    final logicalH = sz.height > 1 ? sz.height : (logicalW / forcedRatio);
-
-    Widget fittedFor(BoxFit fit, Alignment align) {
-      return ClipRect(
-        child: FittedBox(
-          fit: fit,
-          alignment: align,
-          clipBehavior: Clip.hardEdge,
-          child: SizedBox(
-            width: logicalW,
-            height: logicalH,
-            child: player,
-          ),
+    // media_kit 等：内核自己处理 BoxFit
+    if (controller.prefersIntrinsicFit) {
+      final align = effectiveAspect == PlayerAspectMode.cover
+          ? const Alignment(0, 0.18)
+          : Alignment.center;
+      return PlaybackEnhanceFilter(
+        level: enhanceLevel,
+        child: SizedBox.expand(
+          child: controller.buildSurface(fit: boxFit, alignment: align),
         ),
       );
     }
 
-    Widget fitted;
-    if (effectiveAspect == PlayerAspectMode.cover) {
-      // git 原版 cover：底边留白 + bottomCenter（不是自定义 alignY）
-      fitted = LayoutBuilder(
+    return PlaybackEnhanceFilter(
+      level: enhanceLevel,
+      child: LayoutBuilder(
         builder: (context, constraints) {
-          final guard = (constraints.maxHeight * 0.05).clamp(10.0, 36.0);
-          return Padding(
-            padding: EdgeInsets.only(bottom: guard),
-            child: fittedFor(BoxFit.cover, Alignment.bottomCenter),
-          );
-        },
-      );
-    } else {
-      fitted = fittedFor(boxFit, Alignment.center);
-      if (!(immersiveTop ||
-          effectiveAspect == PlayerAspectMode.fill ||
-          effectiveAspect == PlayerAspectMode.ratio16x9 ||
-          effectiveAspect == PlayerAspectMode.ratio4x3)) {
-        fitted = Center(
-          child: AspectRatio(
-            aspectRatio: forcedRatio,
-            child: fitted,
-          ),
-        );
-      }
-    }
+          final maxW = constraints.maxWidth;
+          final maxH = constraints.maxHeight <= 0 ? 1.0 : constraints.maxHeight;
+          if (!(maxW.isFinite && maxH.isFinite) || maxW <= 0 || maxH <= 0) {
+            return const SizedBox.shrink();
+          }
+          final videoRatio = forcedRatio <= 0 ? (16 / 9) : forcedRatio;
+          final screenRatio = maxW / maxH;
 
-    // 功能保留：鲜明等画质增强仍可用，但不改底层 Texture 挂载方式
-    return PlaybackEnhanceFilter(level: enhanceLevel, child: fitted);
+          // 「适应」基准尺寸（contain）
+          late final double baseW;
+          late final double baseH;
+          if (screenRatio > videoRatio) {
+            baseH = maxH;
+            baseW = maxH * videoRatio;
+          } else {
+            baseW = maxW;
+            baseH = maxW / videoRatio;
+          }
+
+          switch (effectiveAspect) {
+            case PlayerAspectMode.fill:
+              return ClipRect(
+                child: SizedBox(
+                  width: maxW,
+                  height: maxH,
+                  child: FittedBox(
+                    fit: BoxFit.fill,
+                    child: SizedBox(
+                      width: videoRatio * 100,
+                      height: 100,
+                      child: player,
+                    ),
+                  ),
+                ),
+              );
+            case PlayerAspectMode.cover:
+              // 先按 contain 排好，再 scale 放大到真正铺满（吃掉上下/左右黑边）
+              // VideoPlayer 自身按 contain 画纹理，不能只靠外层 SizedBox。
+              final scale = math.max(maxW / baseW, maxH / baseH) * 1.03;
+              final alignY =
+                  screenRatio < videoRatio * 0.98 ? 0.18 : 0.10;
+              return ClipRect(
+                child: SizedBox(
+                  width: maxW,
+                  height: maxH,
+                  child: Center(
+                    child: Transform.scale(
+                      scale: scale,
+                      alignment: Alignment(0, alignY),
+                      child: SizedBox(
+                        width: baseW,
+                        height: baseH,
+                        child: player,
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            case PlayerAspectMode.fit:
+            case PlayerAspectMode.ratio16x9:
+            case PlayerAspectMode.ratio4x3:
+              if (!immersiveTop &&
+                  effectiveAspect == PlayerAspectMode.fit) {
+                return Center(
+                  child: AspectRatio(
+                    aspectRatio: videoRatio,
+                    child: player,
+                  ),
+                );
+              }
+              return ClipRect(
+                child: SizedBox(
+                  width: maxW,
+                  height: maxH,
+                  child: Center(
+                    child: SizedBox(
+                      width: baseW,
+                      height: baseH,
+                      child: player,
+                    ),
+                  ),
+                ),
+              );
+          }
+        },
+      ),
+    );
   }
 }
 

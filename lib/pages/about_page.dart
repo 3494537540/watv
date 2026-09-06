@@ -24,69 +24,77 @@ class AboutPage extends StatelessWidget {
     final surface = AppPalette.surface(context);
     final line = AppPalette.line(context);
 
-    return CupertinoPageScaffold(
-      backgroundColor: page,
-      navigationBar: CupertinoNavigationBar(
-        backgroundColor: surface,
-        border: Border(bottom: BorderSide(color: line, width: 0.5)),
-        middle: Text(
-          '关于哇TV',
-          style: TextStyle(
-            fontFamily: 'AppSans',
-            fontWeight: FontWeight.w600,
-            color: text,
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle(
+        statusBarColor: page,
+        statusBarIconBrightness: Brightness.dark,
+        statusBarBrightness: Brightness.light,
+        systemNavigationBarColor: page,
+        systemNavigationBarIconBrightness: Brightness.dark,
+      ),
+      child: CupertinoPageScaffold(
+        backgroundColor: page,
+        navigationBar: CupertinoNavigationBar(
+          backgroundColor: page,
+          border: Border(bottom: BorderSide(color: line, width: 0.5)),
+          middle: Text(
+            '关于哇TV',
+            style: TextStyle(
+              fontFamily: 'AppSans',
+              fontWeight: FontWeight.w600,
+              color: text,
+            ),
           ),
         ),
-      ),
-      child: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 28, 20, 40),
-          children: [
-            Center(
-              child: Column(
-                children: [
-                  Text(
-                    '哇TV',
-                    style: TextStyle(
-                      fontFamily: 'AppSans',
-                      fontSize: 24,
-                      fontWeight: FontWeight.w800,
-                      color: text,
+        child: SafeArea(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(20, 28, 20, 40),
+            children: [
+              Center(
+                child: Column(
+                  children: [
+                    Text(
+                      '哇TV',
+                      style: TextStyle(
+                        fontFamily: 'AppSans',
+                        fontSize: 24,
+                        fontWeight: FontWeight.w800,
+                        color: text,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    '版本 ${ApiConfig.appVersionName}（${ApiConfig.appVersionCode}）',
-                    style: TextStyle(
-                      fontFamily: 'AppSans',
-                      fontSize: 13,
-                      color: hint,
+                    const SizedBox(height: 6),
+                    Text(
+                      '版本 ${ApiConfig.appVersionName}（${ApiConfig.appVersionCode}）',
+                      style: TextStyle(
+                        fontFamily: 'AppSans',
+                        fontSize: 13,
+                        color: hint,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(height: 28),
-            _Block(
-              title: '软件简介',
-              body:
-                  '哇TV 是一款面向影视内容的移动端点播应用，支持浏览、搜索、收藏、播放历史、片单分类与缓存等能力，'
-                  '帮助你更轻松地发现和追完喜欢的影视作品。',
-              text: text,
-              secondary: secondary,
-              surface: surface,
-            ),
-            const SizedBox(height: 12),
-            _DeveloperCard(
-              avatarAsset: _avatar,
-              name: 'stewie',
-              subtitle: '点按查看抖音二维码',
-              text: text,
-              secondary: secondary,
-              hint: hint,
-              surface: surface,
-              onTap: () => _showDouyinQr(context),
-            ),
+              const SizedBox(height: 28),
+              _Block(
+                title: '软件简介',
+                body:
+                    '哇TV 是一款面向影视内容的移动端点播应用，支持浏览、搜索、收藏、播放历史、片单分类与缓存等能力，'
+                    '帮助你更轻松地发现和追完喜欢的影视作品。',
+                text: text,
+                secondary: secondary,
+                surface: surface,
+              ),
+              const SizedBox(height: 12),
+              _DeveloperCard(
+                avatarAsset: _avatar,
+                name: 'stewie',
+                subtitle: '点按查看抖音二维码',
+                text: text,
+                secondary: secondary,
+                hint: hint,
+                surface: surface,
+                onTap: () => _showDouyinQr(context),
+              ),
             const SizedBox(height: 12),
             _TechStackCard(
               text: text,
@@ -105,9 +113,8 @@ class AboutPage extends StatelessWidget {
               surface: surface,
             ),
             const SizedBox(height: 12),
-            Material(
-              color: surface,
-              borderRadius: BorderRadius.circular(14),
+            DecoratedBox(
+              decoration: _infoCardDecoration(surface: surface, line: line),
               child: Column(
                 children: [
                   ListTile(
@@ -175,86 +182,132 @@ class AboutPage extends StatelessWidget {
           ],
         ),
       ),
+      ),
     );
   }
 
   void _showDouyinQr(BuildContext context) {
     HapticFeedback.selectionClick();
-    showCupertinoDialog<void>(
+    // 与遮罩同色，避免状态栏留白条
+    const barrier = Color(0x66000000);
+    showGeneralDialog<void>(
       context: context,
       barrierDismissible: true,
-      builder: (ctx) {
+      barrierLabel: 'dismiss',
+      barrierColor: barrier,
+      transitionDuration: const Duration(milliseconds: 200),
+      pageBuilder: (ctx, animation, secondaryAnimation) {
         final text = AppPalette.text(ctx);
         final hint = AppPalette.textHint(ctx);
-        return Center(
-          child: Material(
-            color: Colors.transparent,
-            child: Container(
-              margin: const EdgeInsets.symmetric(horizontal: 28),
-              padding: const EdgeInsets.fromLTRB(16, 18, 16, 14),
-              decoration: BoxDecoration(
-                color: AppPalette.surface(ctx),
-                borderRadius: BorderRadius.circular(18),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    '@stewie',
-                    style: TextStyle(
-                      fontFamily: 'AppSans',
-                      fontSize: 17,
-                      fontWeight: FontWeight.w800,
-                      color: text,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '抖音号 93880217302',
-                    style: TextStyle(
-                      fontFamily: 'AppSans',
-                      fontSize: 12,
-                      color: hint,
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: Image.asset(
-                      _qr,
-                      fit: BoxFit.contain,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    '打开抖音扫一扫加我',
-                    style: TextStyle(
-                      fontFamily: 'AppSans',
-                      fontSize: 13,
-                      color: hint,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  CupertinoButton(
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    onPressed: () => Navigator.of(ctx).pop(),
-                    child: Text(
-                      '关闭',
+        return AnnotatedRegion<SystemUiOverlayStyle>(
+          value: const SystemUiOverlayStyle(
+            // 透明状态栏，让弹窗 barrier 铺满顶底，与遮罩同色
+            statusBarColor: Colors.transparent,
+            statusBarIconBrightness: Brightness.light,
+            statusBarBrightness: Brightness.dark,
+            systemNavigationBarColor: Colors.transparent,
+            systemNavigationBarIconBrightness: Brightness.light,
+            systemNavigationBarContrastEnforced: false,
+            systemStatusBarContrastEnforced: false,
+          ),
+          child: Center(
+            child: Material(
+              color: Colors.transparent,
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 28),
+                padding: const EdgeInsets.fromLTRB(16, 18, 16, 14),
+                decoration: BoxDecoration(
+                  color: AppPalette.surface(ctx),
+                  borderRadius: BorderRadius.circular(18),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '@stewie',
                       style: TextStyle(
                         fontFamily: 'AppSans',
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.brand,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w800,
+                        color: text,
                       ),
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 4),
+                    Text(
+                      '抖音号 93880217302',
+                      style: TextStyle(
+                        fontFamily: 'AppSans',
+                        fontSize: 12,
+                        color: hint,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.asset(
+                        _qr,
+                        fit: BoxFit.contain,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      '打开抖音扫一扫加我',
+                      style: TextStyle(
+                        fontFamily: 'AppSans',
+                        fontSize: 13,
+                        color: hint,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    CupertinoButton(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      onPressed: () => Navigator.of(ctx).pop(),
+                      child: Text(
+                        '关闭',
+                        style: TextStyle(
+                          fontFamily: 'AppSans',
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.brand,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
         );
       },
+      transitionBuilder: (ctx, anim, _, child) {
+        final t = CurvedAnimation(parent: anim, curve: Curves.easeOutCubic);
+        return FadeTransition(
+          opacity: t,
+          child: ScaleTransition(
+            scale: Tween<double>(begin: 0.94, end: 1).animate(t),
+            child: child,
+          ),
+        );
+      },
     );
   }
+}
+
+BoxDecoration _infoCardDecoration({
+  required Color surface,
+  required Color line,
+}) {
+  return BoxDecoration(
+    color: surface,
+    borderRadius: BorderRadius.circular(14),
+    border: Border.all(color: line, width: 0.8),
+    boxShadow: const [
+      BoxShadow(
+        color: Color(0x14000000),
+        blurRadius: 14,
+        offset: Offset(0, 4),
+      ),
+    ],
+  );
 }
 
 class _DeveloperCard extends StatelessWidget {
@@ -280,86 +333,90 @@ class _DeveloperCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: surface,
-      borderRadius: BorderRadius.circular(14),
-      child: InkWell(
-        onTap: onTap,
+    final line = AppPalette.line(context);
+    return DecoratedBox(
+      decoration: _infoCardDecoration(surface: surface, line: line),
+      child: Material(
+        color: Colors.transparent,
         borderRadius: BorderRadius.circular(14),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 14, 14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '开发者',
-                style: TextStyle(
-                  fontFamily: 'AppSans',
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
-                  color: text,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(14),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 14, 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '开发者',
+                  style: TextStyle(
+                    fontFamily: 'AppSans',
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: text,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  ClipOval(
-                    child: Image.asset(
-                      avatarAsset,
-                      width: 56,
-                      height: 56,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, _, _) => Container(
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    ClipOval(
+                      child: Image.asset(
+                        avatarAsset,
                         width: 56,
                         height: 56,
-                        color: AppColors.brand.withValues(alpha: 0.2),
-                        alignment: Alignment.center,
-                        child: Text(
-                          'S',
-                          style: TextStyle(
-                            fontFamily: 'AppSans',
-                            fontWeight: FontWeight.w800,
-                            color: AppColors.brand,
-                            fontSize: 22,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => Container(
+                          width: 56,
+                          height: 56,
+                          color: AppColors.brand.withValues(alpha: 0.2),
+                          alignment: Alignment.center,
+                          child: Text(
+                            'S',
+                            style: TextStyle(
+                              fontFamily: 'AppSans',
+                              fontWeight: FontWeight.w800,
+                              color: AppColors.brand,
+                              fontSize: 22,
+                            ),
                           ),
                         ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          name,
-                          style: TextStyle(
-                            fontFamily: 'AppSans',
-                            fontSize: 17,
-                            fontWeight: FontWeight.w800,
-                            color: text,
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            name,
+                            style: TextStyle(
+                              fontFamily: 'AppSans',
+                              fontSize: 17,
+                              fontWeight: FontWeight.w800,
+                              color: text,
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          subtitle,
-                          style: TextStyle(
-                            fontFamily: 'AppSans',
-                            fontSize: 13,
-                            color: hint,
+                          const SizedBox(height: 4),
+                          Text(
+                            subtitle,
+                            style: TextStyle(
+                              fontFamily: 'AppSans',
+                              fontSize: 13,
+                              color: hint,
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                  Icon(
-                    CupertinoIcons.chevron_right,
-                    size: 18,
-                    color: secondary.withValues(alpha: 0.7),
-                  ),
-                ],
-              ),
-            ],
+                    Icon(
+                      CupertinoIcons.chevron_right,
+                      size: 18,
+                      color: secondary.withValues(alpha: 0.7),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -384,9 +441,9 @@ class _Block extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: surface,
-      borderRadius: BorderRadius.circular(14),
+    final line = AppPalette.line(context);
+    return DecoratedBox(
+      decoration: _infoCardDecoration(surface: surface, line: line),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
         child: Column(
@@ -462,9 +519,8 @@ class _TechStackCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final security = AppSecurity.instance.securitySummary;
-    return Material(
-      color: surface,
-      borderRadius: BorderRadius.circular(14),
+    return DecoratedBox(
+      decoration: _infoCardDecoration(surface: surface, line: line),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
         child: Column(

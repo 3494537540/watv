@@ -12,14 +12,22 @@ class ApiConfig {
   static const String _envBase = String.fromEnvironment('API_BASE');
   static const String _envSite = String.fromEnvironment('SITE_ROOT');
 
-  /// 线上 MacCMS 根（APK / IPA / 正式 H5）
+  /// 线上 MacCMS 根（APK / IPA / 正式 H5）—— 启动后会被微云分享解析结果覆盖
   static const String productionMacCms = 'https://154.12.29.28';
+
+  /// QQ/微云分享页解析出的 CMS（低于设置页自定义，高于编译默认）
+  static String? _shareResolvedMacCms;
+
+  static void applyShareResolvedMacCms(String? url) {
+    final t = (url ?? '').trim().replaceAll(RegExp(r'/+$'), '');
+    _shareResolvedMacCms = t.isEmpty ? null : t;
+  }
 
   static String get baseUrl {
     if (_envBase.isNotEmpty) return _envBase;
     // 真机不再使用模拟器回环地址；与 CMS 同域下的 admin 接口（若无则相关页会失败）
     if (kIsWeb && kDebugMode) return 'http://127.0.0.1/admin/api.php';
-    return '$productionMacCms/admin/api.php';
+    return '$macCmsBase/admin/api.php';
   }
 
   /// 站点根，用于 `api.php`（扫码/网页 Cookie）
@@ -50,11 +58,12 @@ class ApiConfig {
     return kIsWeb && kReleaseMode;
   }
 
-  /// APK/IPA → 线上；Web 调试 → 本机代理；Web 正式 → 线上
-  /// 设置页自定义地址优先
+  /// 优先级：设置页自定义 > 微云分享解析 > 编译期 > 内置默认
   static String get macCmsBase {
     final runtime = _runtimeMacCms;
     if (runtime != null && runtime.isNotEmpty) return runtime;
+    final share = _shareResolvedMacCms;
+    if (share != null && share.isNotEmpty) return share;
     if (_envMacCms.isNotEmpty) {
       return _envMacCms.replaceAll(RegExp(r'/+$'), '');
     }

@@ -26,6 +26,14 @@ abstract final class LocalNotificationService {
   static const _dlChannelName = '下载完成';
   static const _dlChannelDesc = '缓存下载完成后提醒';
 
+  /// 下载进行中（进度条）；v2 提高 importance，避免旧 low 通道被系统锁死
+  static const _dlProgressChannelId = 'download_progress_v2';
+  static const _dlProgressChannelName = '下载进度';
+  static const _dlProgressChannelDesc = '缓存下载进度（通知栏进度条）';
+
+  /// 品牌青，Android 进度条强调色
+  static const _progressAccent = Color(0xFF1ECAD3);
+
   static const _inboxChannelId = 'inbox';
   static const _inboxChannelName = '消息通知';
   static const _inboxChannelDesc = '站内信与公告提醒';
@@ -36,6 +44,10 @@ abstract final class LocalNotificationService {
 
   /// Android 状态栏小图标须为白色剪影 drawable，不能用彩色 launcher
   static const _androidIcon = '@drawable/ic_stat_wa';
+
+  /// 进度通知节流：同一任务最近一次更新
+  static final Map<String, int> _dlProgressLastMs = {};
+  static final Map<String, int> _dlProgressLastPct = {};
 
   static Future<void> init() async {
     if (kIsWeb || _ready) return;
@@ -66,6 +78,18 @@ abstract final class LocalNotificationService {
           _dlChannelName,
           description: _dlChannelDesc,
           importance: Importance.high,
+        ),
+      );
+      await androidPlugin?.createNotificationChannel(
+        AndroidNotificationChannel(
+          _dlProgressChannelId,
+          _dlProgressChannelName,
+          description: _dlProgressChannelDesc,
+          // default：进度通知能进通知栏；low 在部分机型会被静默掉
+          importance: Importance.defaultImportance,
+          playSound: false,
+          enableVibration: false,
+          showBadge: false,
         ),
       );
       await androidPlugin?.createNotificationChannel(
@@ -299,6 +323,8 @@ abstract final class LocalNotificationService {
     required String title,
     required String episodeLabel,
   }) async {
+    // 先清掉进行中进度通知
+    await cancelDownloadProgress(cacheId);
     if (!await isDownloadNotifyEnabled()) return;
     if (!await _canShow()) {
       debugPrint('skip download notify: permission off');
@@ -308,7 +334,7 @@ abstract final class LocalNotificationService {
         ? '已下载完成，可离线观看'
         : '$episodeLabel 已下载完成，可离线观看';
     await _showSafe(
-      id: ('dl_$cacheId').hashCode & 0x7fffffff,
+      id: _downloadDoneId(cacheId),
       title: title,
       body: body,
       details: NotificationDetails(
@@ -321,6 +347,114 @@ abstract final class LocalNotificationService {
       ),
       payload: 'download:$cacheId',
     );
+  }
+
+  /// 通知栏下载进度（Android 原生进度条 + 品牌色；iOS 用等宽进度条文案，体验对齐）
+  static Future<void> showDownloadProgress({
+    required String cacheId,
+    required String title,
+    required String episodeLabel,
+    required double progress,
+    double speedBps = 0,
+    bool force = false,
+  }) async {
+    if (kIsWeb) return;
+    if (!await isDownloadNotifyEnabled()) return;
+    if (!await _canShow()) return;
+
+    final pct = (progress.clamp(0.0, 1.0) * 100).round();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final lastMs = _dlProgressLastMs[cacheId] ?? 0;
+    final lastPct = _dlProgressLastPct[cacheId] ?? -1;
+    // 节流：至少隔 450ms，或进度跳变 ≥2%，或强制（开始/结束）
+    if (!force &&
+        pct != 100 &&
+        (now - lastMs) < 450 &&
+        (pct - lastPct).abs() < 2) {
+      return;
+    }
+    _dlProgressLastMs[cacheId] = now;
+    _dlProgressLastPct[cacheId] = pct;
+
+    final ep = episodeLabel.trim();
+    final name = title.trim().isEmpty ? '正在下载' : title.trim();
+    final head = ep.isEmpty ? name : '$name · $ep';
+    final speed = _formatSpeed(speedBps);
+    final bar = _textProgressBar(pct);
+    // iOS 无系统进度条：正文用色块条 + 百分比，和 Android 信息对齐
+    final body = speed.isEmpty ? '$bar  $pct%' : '$bar  $pct% · $speed';
+
+    final android = AndroidNotificationDetails(
+      _dlProgressChannelId,
+      _dlProgressChannelName,
+      channelDescription: _dlProgressChannelDesc,
+      importance: Importance.defaultImportance,
+      priority: Priority.defaultPriority,
+      icon: _androidIcon,
+      color: _progressAccent,
+      colorized: false,
+      onlyAlertOnce: true,
+      playSound: false,
+      enableVibration: false,
+      channelShowBadge: false,
+      ongoing: true,
+      autoCancel: false,
+      showProgress: true,
+      maxProgress: 100,
+      progress: pct,
+      indeterminate: false,
+      category: AndroidNotificationCategory.progress,
+      visibility: NotificationVisibility.public,
+    );
+    const ios = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: false,
+      presentSound: false,
+      presentBanner: true,
+      presentList: true,
+      interruptionLevel: InterruptionLevel.passive,
+    );
+
+    await _showSafe(
+      id: _downloadProgressId(cacheId),
+      title: '下载中 · $head',
+      body: body,
+      details: NotificationDetails(android: android, iOS: ios),
+      payload: 'download:$cacheId',
+    );
+  }
+
+  static Future<void> cancelDownloadProgress(String cacheId) async {
+    _dlProgressLastMs.remove(cacheId);
+    _dlProgressLastPct.remove(cacheId);
+    try {
+      await init();
+      await _plugin.cancel(id: _downloadProgressId(cacheId));
+    } catch (_) {}
+  }
+
+  static int _downloadProgressId(String cacheId) =>
+      ('dlp_$cacheId').hashCode & 0x7fffffff;
+
+  static int _downloadDoneId(String cacheId) =>
+      ('dl_$cacheId').hashCode & 0x7fffffff;
+
+  /// iOS / 展开区共用的文本进度条（10 格）
+  static String _textProgressBar(int pct) {
+    const total = 10;
+    final filled = ((pct.clamp(0, 100) / 100) * total).round().clamp(0, total);
+    return '${'▓' * filled}${'░' * (total - filled)}';
+  }
+
+  static String _formatSpeed(double bps) {
+    if (bps <= 0) return '';
+    if (bps >= 1024 * 1024) {
+      return '${(bps / (1024 * 1024)).toStringAsFixed(1)} MB/s';
+    }
+    if (bps >= 1024) {
+      return '${(bps / 1024).toStringAsFixed(0)} KB/s';
+    }
+    return '${bps.toStringAsFixed(0)} B/s';
   }
 
   static Future<void> showInboxMessage({

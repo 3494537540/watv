@@ -1,5 +1,6 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../theme/app_colors.dart';
 
@@ -188,108 +189,127 @@ class OpenSourceLicensesPage extends StatelessWidget {
     final surface = AppPalette.surface(context);
     final line = AppPalette.line(context);
 
-    return CupertinoPageScaffold(
-      backgroundColor: page,
-      navigationBar: CupertinoNavigationBar(
-        backgroundColor: surface,
-        border: Border(bottom: BorderSide(color: line, width: 0.5)),
-        middle: Text(
-          '开源协议',
-          style: TextStyle(
-            fontFamily: 'AppSans',
-            fontWeight: FontWeight.w600,
-            color: text,
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle(
+        statusBarColor: page,
+        statusBarIconBrightness: Brightness.dark,
+        statusBarBrightness: Brightness.light,
+        systemNavigationBarColor: page,
+        systemNavigationBarIconBrightness: Brightness.dark,
+      ),
+      child: CupertinoPageScaffold(
+        backgroundColor: page,
+        navigationBar: CupertinoNavigationBar(
+          backgroundColor: page,
+          border: Border(bottom: BorderSide(color: line, width: 0.5)),
+          middle: Text(
+            '开源协议',
+            style: TextStyle(
+              fontFamily: 'AppSans',
+              fontWeight: FontWeight.w600,
+              color: text,
+            ),
           ),
         ),
-      ),
-      child: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 40),
-          children: [
-            Text(
-              '哇TV 基于 Flutter 构建，并使用了以下开源库。感谢各位维护者。'
-              '下列说明供查阅，具体权利义务以各库官方许可证原文为准。',
-              style: TextStyle(
-                fontFamily: 'AppSans',
-                fontSize: 13,
-                height: 1.5,
-                color: secondary,
+        child: SafeArea(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 40),
+            children: [
+              Text(
+                '哇TV 基于 Flutter 构建，并使用了以下开源库。感谢各位维护者。'
+                '下列说明供查阅，具体权利义务以各库官方许可证原文为准。',
+                style: TextStyle(
+                  fontFamily: 'AppSans',
+                  fontSize: 13,
+                  height: 1.5,
+                  color: secondary,
+                ),
               ),
-            ),
-            const SizedBox(height: 14),
-            for (final lib in _libs) ...[
-              Material(
-                color: surface,
-                borderRadius: BorderRadius.circular(14),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: Text(
-                              lib.name,
-                              style: TextStyle(
-                                fontFamily: 'AppSans',
-                                fontSize: 15,
-                                fontWeight: FontWeight.w700,
-                                color: text,
+              const SizedBox(height: 14),
+              for (final lib in _libs) ...[
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: surface,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: line, width: 0.8),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x14000000),
+                        blurRadius: 14,
+                        offset: Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                lib.name,
+                                style: TextStyle(
+                                  fontFamily: 'AppSans',
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w700,
+                                  color: text,
+                                ),
                               ),
                             ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 3,
+                              ),
+                              decoration: BoxDecoration(
+                                color: AppColors.brand.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                lib.license,
+                                style: TextStyle(
+                                  fontFamily: 'AppSans',
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.brand,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          lib.desc,
+                          style: TextStyle(
+                            fontFamily: 'AppSans',
+                            fontSize: 13,
+                            height: 1.45,
+                            color: secondary,
                           ),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 3,
-                            ),
-                            decoration: BoxDecoration(
-                              color: AppColors.brand.withValues(alpha: 0.12),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Text(
-                              lib.license,
-                              style: TextStyle(
-                                fontFamily: 'AppSans',
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: AppColors.brand,
-                              ),
+                        ),
+                        if (lib.usage.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            '本应用用途：${lib.usage}',
+                            style: TextStyle(
+                              fontFamily: 'AppSans',
+                              fontSize: 12,
+                              height: 1.4,
+                              color: hint,
                             ),
                           ),
                         ],
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        lib.desc,
-                        style: TextStyle(
-                          fontFamily: 'AppSans',
-                          fontSize: 13,
-                          height: 1.45,
-                          color: secondary,
-                        ),
-                      ),
-                      if (lib.usage.isNotEmpty) ...[
-                        const SizedBox(height: 8),
-                        Text(
-                          '本应用用途：${lib.usage}',
-                          style: TextStyle(
-                            fontFamily: 'AppSans',
-                            fontSize: 12,
-                            height: 1.4,
-                            color: hint,
-                          ),
-                        ),
                       ],
-                    ],
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 10),
+                const SizedBox(height: 10),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );

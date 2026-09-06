@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import 'services/app_security.dart';
+import 'services/cms_endpoint_bootstrap.dart';
 import 'state/app_settings_controller.dart';
 import 'state/auth_controller.dart';
 import 'state/cms_auth_controller.dart';
@@ -67,6 +68,8 @@ Future<bool> _initApp() async {
     AppSettingsController.instance.bootstrap(),
     ThemeController.instance.bootstrap(),
     AuthController.instance.bootstrap(),
+    // 从 QQ 微云收藏分享解析当前服务器（失败则用缓存/内置默认）
+    CmsEndpointBootstrap.bootstrap(),
   ]);
 
   await CmsAuthController.instance.bootstrap(

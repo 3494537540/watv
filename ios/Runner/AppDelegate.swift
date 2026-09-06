@@ -39,8 +39,8 @@ import flutter_local_notifications
     let channel = FlutterMethodChannel(name: "watv/cast", binaryMessenger: messenger)
     channel.setMethodCallHandler { [weak self] call, result in
       switch call.method {
-      case "showAirPlayPicker":
-        self?.showAirPlayPicker(result: result)
+      case "showAirPlayPicker", "showAirPlayVideoPicker":
+        self?.showAirPlayVideoPicker(result: result)
       case "isAirPlayAvailable":
         result(true)
       default:
@@ -71,8 +71,8 @@ import flutter_local_notifications
     }
   }
 
-  /// 弹出系统 AirPlay 路由选择器（投视频/音频，非控制中心「屏幕镜像」）
-  private func showAirPlayPicker(result: @escaping FlutterResult) {
+  /// 弹出 AirPlay「视频」路由选择器（优先 Apple TV，避免只出音箱列表）
+  private func showAirPlayVideoPicker(result: @escaping FlutterResult) {
     DispatchQueue.main.async {
       guard let root = self.keyWindowRootView() else {
         result(FlutterError(code: "NO_VIEW", message: "无法获取根视图", details: nil))
@@ -80,51 +80,59 @@ import flutter_local_notifications
       }
       do {
         let session = AVAudioSession.sharedInstance()
+        // 电影播放模式 + 允许 AirPlay，便于列出视频接收端
         try session.setCategory(.playback, mode: .moviePlayback, options: [.allowAirPlay])
         try session.setActive(true)
       } catch {
         NSLog("[watv] AirPlay session: \(error)")
       }
 
-      let picker = self.routePickerView ?? AVRoutePickerView(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
+      let picker = self.routePickerView ?? AVRoutePickerView(frame: CGRect(x: 0, y: 0, width: 44, height: 44))
       if #available(iOS 13.0, *) {
+        // 关键：优先视频设备，减少「纯音频/音箱」面板
         picker.prioritizesVideoDevices = true
       }
+      picker.tintColor = .clear
+      picker.activeTintColor = .clear
       picker.isHidden = true
+      picker.alpha = 0.01
       if picker.superview == nil {
+        // 放在可见层级，部分 iOS 版本隐藏控件点不出来
         root.addSubview(picker)
+        picker.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+          picker.widthAnchor.constraint(equalToConstant: 44),
+          picker.heightAnchor.constraint(equalToConstant: 44),
+          picker.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: -80),
+          picker.topAnchor.constraint(equalTo: root.topAnchor, constant: 80),
+        ])
       }
       self.routePickerView = picker
+      // 强制布局后再点，避免子按钮尚未生成
+      picker.setNeedsLayout()
+      picker.layoutIfNeeded()
 
-      func fire(_ btn: UIButton) {
-        btn.sendActions(for: .touchUpInside)
-        result(true)
+      func fireButton(in view: UIView) -> Bool {
+        if let btn = view as? UIButton {
+          btn.sendActions(for: .touchUpInside)
+          return true
+        }
+        for sub in view.subviews {
+          if fireButton(in: sub) { return true }
+        }
+        return false
       }
 
-      // 优先找内部 UIButton 触发系统面板
-      if let btn = picker.subviews.compactMap({ $0 as? UIButton }).first {
-        fire(btn)
+      if fireButton(in: picker) {
+        result(true)
         return
       }
-      for sub in picker.subviews {
-        if let btn = sub as? UIButton {
-          fire(btn)
-          return
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+        if fireButton(in: picker) {
+          result(true)
+        } else {
+          result(FlutterError(code: "NO_BUTTON", message: "无法唤起 AirPlay 视频面板", details: nil))
         }
-        for nested in sub.subviews {
-          if let btn = nested as? UIButton {
-            fire(btn)
-            return
-          }
-        }
-      }
-      // 再兜底：延迟一帧后重试（部分 iOS 子视图懒加载）
-      DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-        if let btn = picker.subviews.compactMap({ $0 as? UIButton }).first {
-          fire(btn)
-          return
-        }
-        result(FlutterError(code: "NO_BUTTON", message: "无法唤起 AirPlay 面板", details: nil))
       }
     }
   }

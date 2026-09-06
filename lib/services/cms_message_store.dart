@@ -315,9 +315,20 @@ class CmsMessageStore extends ChangeNotifier {
 
     var changed = false;
     for (final m in candidates) {
-      final body = m.content.trim().isNotEmpty
-          ? m.content.trim()
-          : (m.subtitle.trim().isNotEmpty ? m.subtitle.trim() : '点击查看详情');
+      // 片库/剧集类：系统通知不推具体片名（站内信仍保留全文）
+      final isVodDigest = m.tag.contains('片库') ||
+          m.tag.contains('剧集') ||
+          m.title.contains('片库更新') ||
+          m.title.contains('今日新增') ||
+          m.title.contains('今日更新') ||
+          RegExp(r'^\d+\.\s').hasMatch(m.content.trim());
+      final body = isVodDigest
+          ? '打开 App 查看详情'
+          : (m.content.trim().isNotEmpty
+              ? m.content.trim()
+              : (m.subtitle.trim().isNotEmpty
+                  ? m.subtitle.trim()
+                  : '点击查看详情'));
       try {
         await LocalNotificationService.showInboxMessage(
           messageId: m.id,

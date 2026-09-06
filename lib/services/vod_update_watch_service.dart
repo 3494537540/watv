@@ -71,7 +71,8 @@ abstract final class VodUpdateWatchService {
       final movies = await MacCmsApi().fetchMoviesByIds(ids);
       final fps = await _loadFingerprints(prefs);
       final isBaseline = fps.isEmpty;
-      var changed = false;
+      final updatedTitles = <String>[];
+      final updatedBodies = <String>[];
 
       for (final movie in movies) {
         final id = movie.id.trim();
@@ -84,31 +85,34 @@ abstract final class VodUpdateWatchService {
         if (!_isUpdate(prev, next)) continue;
         if (!_looksLikeSeries(movie, next)) continue;
 
-        changed = true;
         final body = next.remarks.isNotEmpty
             ? '已更新：${next.remarks}'
             : (next.epCount > prev.epCount
                 ? '更新至第 ${next.epCount} 集'
                 : '内容有更新，快来看看');
-        await LocalNotificationService.showVodUpdate(
-          vodId: id,
-          title: movie.title,
-          body: body,
-        );
-        // 同步写入软件内「公告/通知」列表
+        updatedTitles.add(movie.title.trim().isEmpty ? id : movie.title.trim());
+        updatedBodies.add('${movie.title}：$body');
+        // 公告仍按单部剧写入，便于在消息中心点开
         await CmsMessageStore.instance.pushLocalNotice(
           id: 'vod_up_$id',
           title: movie.title,
           content: body,
           tag: '剧集更新',
-          systemNotify: false, // 系统栏已由 showVodUpdate 发送
+          systemNotify: false,
         );
       }
 
       await _saveFingerprints(prefs, fps);
       await prefs.setInt(_lastCheckKey, now);
-      if (changed) {
-        // no-op: notifications already posted
+
+      // 系统通知汇总：只报数量，不带具体片名
+      if (updatedTitles.isNotEmpty) {
+        final n = updatedTitles.length;
+        await LocalNotificationService.showVodUpdate(
+          vodId: 'batch_$now',
+          title: '今日更新 $n 部剧',
+          body: '打开 App 查看详情',
+        );
       }
     } catch (e, st) {
       debugPrint('VodUpdateWatchService.check failed: $e\n$st');
