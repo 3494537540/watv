@@ -5,8 +5,10 @@ import 'dart:typed_data';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config/api_config.dart';
+import '../utils/qq_avatar.dart';
 import '../utils/relative_time.dart';
 import 'app_security.dart';
+import 'huihuo_http.dart';
 
 /// CMS 站内消息条目
 class CmsMessageItem {
@@ -111,6 +113,8 @@ class CmsUser {
     this.extend = 0,
     this.groupName = '',
     this.endTime = '',
+    this.loginTime = '',
+    this.loginIp = '',
   });
 
   final int userId;
@@ -125,6 +129,10 @@ class CmsUser {
   final int extend;
   final String groupName;
   final String endTime;
+  /// 上次登录时间（展示文案或时间戳）
+  final String loginTime;
+  /// 上次登录 IP
+  final String loginIp;
 
   String get displayName {
     final n = nickName.trim();
@@ -134,22 +142,141 @@ class CmsUser {
     return u.isEmpty ? '会员' : u;
   }
 
+  /// 是否有效会员（等级名 / 到期时间）
+  bool get isVip {
+    final group = groupName.trim();
+    final looksVip = group.contains('VIP') ||
+        group.contains('vip') ||
+        group.contains('黄金') ||
+        group.contains('钻石') ||
+        group.contains('至尊') ||
+        (group.contains('会员') &&
+            !group.contains('游客') &&
+            !group.contains('注册'));
+
+    final raw = endTime.trim();
+    if (raw.isEmpty || raw == '0' || raw == '0000-00-00') {
+      return looksVip;
+    }
+    if (raw.contains('永久')) return true;
+
+    final ts = int.tryParse(raw);
+    if (ts != null && ts > 1000000000) {
+      final sec = ts > 9999999999 ? ts ~/ 1000 : ts;
+      if (sec >= 4102444800) return true;
+      final dt = DateTime.fromMillisecondsSinceEpoch(sec * 1000);
+      return dt.isAfter(DateTime.now());
+    }
+
+    final m = RegExp(r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})').firstMatch(raw);
+    if (m != null) {
+      final y = int.parse(m.group(1)!);
+      final mo = int.parse(m.group(2)!);
+      final d = int.parse(m.group(3)!);
+      if (y >= 2099) return true;
+      return DateTime(y, mo, d).isAfter(DateTime.now());
+    }
+
+    return looksVip;
+  }
+
+  /// 个人页 VIP 条：只显示到期日期
+  String get vipExpireOnlyLabel {
+    if (!isVip) return '点击开通';
+    final expire = formatVipEndDate(endTime);
+    if (expire == null) return '已开通';
+    if (expire == 'permanent') return '永久';
+    if (expire == 'expired') return '已过期';
+    return expire;
+  }
+
+  /// 个人页 / 会员入口展示文案（严格按后台组名+到期，不臆造「永久」）
+  String get vipStatusLabel {
+    final group = groupName.trim();
+    final expire = formatVipEndDate(endTime);
+    if (!isVip) {
+      if (group.isEmpty) return '未开通';
+      if (group.contains('游客') || group.contains('注册')) return group;
+      return group;
+    }
+    final name = group.isEmpty ? 'VIP会员' : group;
+    if (expire == null) return name;
+    if (expire == 'permanent') return '$name · 永久';
+    if (expire == 'expired') return '$name · 已过期';
+    return '$name · 至 $expire';
+  }
+
+  /// 设置页：格式化上次登录时间
+  String get loginTimeLabel {
+    final raw = loginTime.trim();
+    if (raw.isEmpty || raw == '0') return '';
+    final ts = int.tryParse(raw);
+    if (ts != null && ts > 1000000000) {
+      final sec = ts > 9999999999 ? ts ~/ 1000 : ts;
+      final dt = DateTime.fromMillisecondsSinceEpoch(sec * 1000);
+      return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} '
+          '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    }
+    return raw;
+  }
+
+  /// 解析到期展示：日期 / permanent / expired；解析失败返回 null
+  static String? formatVipEndDate(String rawEnd) {
+    final raw = rawEnd.trim();
+    if (raw.isEmpty || raw == '0' || raw == '0000-00-00') return null;
+    if (raw.contains('永久')) return 'permanent';
+
+    final ts = int.tryParse(raw);
+    if (ts != null && ts > 1000000000) {
+      final sec = ts > 9999999999 ? ts ~/ 1000 : ts;
+      if (sec >= 4102444800) return 'permanent';
+      final dt = DateTime.fromMillisecondsSinceEpoch(sec * 1000);
+      if (dt.isBefore(DateTime.now())) return 'expired';
+      return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+    }
+
+    final m = RegExp(r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})').firstMatch(raw);
+    if (m != null) {
+      final y = int.parse(m.group(1)!);
+      final mo = int.parse(m.group(2)!);
+      final d = int.parse(m.group(3)!);
+      if (y >= 2099) return 'permanent';
+      final dt = DateTime(y, mo, d);
+      if (dt.isBefore(DateTime.now())) return 'expired';
+      return '${y.toString().padLeft(4, '0')}-${mo.toString().padLeft(2, '0')}-${d.toString().padLeft(2, '0')}';
+    }
+    return null;
+  }
+
   String? get avatarUrl {
     final p = portrait.trim();
-    if (p.isEmpty) return null;
-    if (p.startsWith('http://') || p.startsWith('https://')) return p;
-    // 本机绝对路径：Windows盘符 / Android/iOS 文档目录选图
-    final isLocal = (p.length > 2 && p[1] == ':') ||
-        p.contains('\\') ||
-        p.contains('/cms_avatar_') ||
-        p.startsWith('/data/') ||
-        p.startsWith('/var/') ||
-        p.startsWith('/Users/') ||
-        p.startsWith('/home/') ||
-        p.startsWith('/private/var/');
-    if (isLocal) return p;
-    if (p.startsWith('/')) return '${ApiConfig.macCmsBase}$p';
-    return '${ApiConfig.macCmsBase}/$p';
+    if (p.isNotEmpty) {
+      final low = p.toLowerCase();
+      final placeholder = low.contains('duface') ||
+          low.contains('touxiang') ||
+          low.contains('nopic') ||
+          low.contains('noavatar') ||
+          low.contains('default_avatar') ||
+          low.endsWith('/avatar.png') ||
+          low.endsWith('/avatar.gif');
+      if (!placeholder) {
+        if (p.startsWith('http://') || p.startsWith('https://')) return p;
+        // 本机绝对路径：Windows盘符 / Android/iOS 文档目录选图
+        final isLocal = (p.length > 2 && p[1] == ':') ||
+            p.contains('\\') ||
+            p.contains('/cms_avatar_') ||
+            p.startsWith('/data/') ||
+            p.startsWith('/var/') ||
+            p.startsWith('/Users/') ||
+            p.startsWith('/home/') ||
+            p.startsWith('/private/var/');
+        if (isLocal) return p;
+        if (p.startsWith('/')) return '${ApiConfig.macCmsBase}$p';
+        return '${ApiConfig.macCmsBase}/$p';
+      }
+    }
+    // 登录账号当 QQ 号拉头像
+    return QqAvatar.urlFromCandidates([qq, userName, nickName, '$userId']);
   }
 
   CmsUser copyWith({
@@ -164,6 +291,8 @@ class CmsUser {
     int? extend,
     String? groupName,
     String? endTime,
+    String? loginTime,
+    String? loginIp,
   }) {
     return CmsUser(
       userId: userId ?? this.userId,
@@ -177,6 +306,8 @@ class CmsUser {
       extend: extend ?? this.extend,
       groupName: groupName ?? this.groupName,
       endTime: endTime ?? this.endTime,
+      loginTime: loginTime ?? this.loginTime,
+      loginIp: loginIp ?? this.loginIp,
     );
   }
 
@@ -195,6 +326,8 @@ class CmsUser {
       extend: _preferStat(extend, other.extend),
       groupName: groupName.trim().isNotEmpty ? groupName : other.groupName,
       endTime: endTime.trim().isNotEmpty ? endTime : other.endTime,
+      loginTime: loginTime.trim().isNotEmpty ? loginTime : other.loginTime,
+      loginIp: loginIp.trim().isNotEmpty ? loginIp : other.loginIp,
     );
   }
 
@@ -224,6 +357,8 @@ class CmsUser {
         'user_extend': extend,
         'group_name': groupName,
         'user_end_time': endTime,
+        'user_login_time': loginTime,
+        'user_login_ip': loginIp,
       };
 
   factory CmsUser.fromJson(Map<String, dynamic> json) {
@@ -245,6 +380,8 @@ class CmsUser {
           0,
       groupName: '${json['group_name'] ?? json['user_group_name'] ?? ''}',
       endTime: '${json['user_end_time'] ?? ''}',
+      loginTime: '${json['user_login_time'] ?? json['user_login_time_text'] ?? ''}',
+      loginIp: '${json['user_login_ip'] ?? ''}',
     );
   }
 }
@@ -315,6 +452,38 @@ class CmsUserException implements Exception {
   String toString() => message;
 }
 
+/// CMS 会员升级套餐（user/upgrade）
+class CmsVipPlan {
+  const CmsVipPlan({
+    required this.groupId,
+    required this.groupName,
+    required this.long,
+    required this.points,
+    this.label = '',
+  });
+
+  final int groupId;
+  final String groupName;
+  /// day / week / month / year
+  final String long;
+  final int points;
+  final String label;
+
+  String get longLabel => switch (long) {
+        'day' => '包天',
+        'week' => '包周',
+        'month' => '包月',
+        'year' => '包年',
+        _ => long,
+      };
+
+  String get displayName {
+    final t = label.trim();
+    if (t.isNotEmpty) return t;
+    return '$groupName · $longLabel';
+  }
+}
+
 class _CmsHttpResult {
   _CmsHttpResult({
     required this.statusCode,
@@ -363,6 +532,17 @@ class MacCmsUserApi {
     } else {
       await prefs.setString(_cookieKey, c);
     }
+  }
+
+  /// 注入面板/OAuth 签发的会话 Cookie（覆盖本地旧会话）
+  Future<void> applySessionCookies(String header) async {
+    final raw = header.trim();
+    if (raw.isEmpty) {
+      throw CmsUserException('会话 Cookie 为空');
+    }
+    _cookieMap.clear();
+    _applyCookieHeader(raw);
+    await _persistCookie();
   }
 
   void _applyCookieHeader(String raw) {
@@ -574,6 +754,33 @@ class MacCmsUserApi {
         .merge(fromHtml)
         .merge(fromInfo ?? const CmsUser(userId: 0, userName: ''));
 
+    // 面板直查 DB：补全 group_name / user_end_time（主题 HTML 常缺到期字段）
+    final uid = user.userId > 0
+        ? user.userId
+        : (int.tryParse(_cookieMap['user_id'] ?? '') ?? 0);
+    if (uid > 0) {
+      final fromPanel = await _tryFetchPanelVip(uid);
+      if (fromPanel != null) {
+        user = user.merge(fromPanel);
+        // 到期时间与组名以面板为准（避免空/错误本地覆盖）
+        if (fromPanel.endTime.trim().isNotEmpty) {
+          user = user.copyWith(endTime: fromPanel.endTime);
+        }
+        if (fromPanel.groupName.trim().isNotEmpty) {
+          user = user.copyWith(groupName: fromPanel.groupName);
+        }
+        if (fromPanel.points > 0 || user.points == 0) {
+          user = user.copyWith(points: fromPanel.points);
+        }
+        if (fromPanel.loginTime.trim().isNotEmpty) {
+          user = user.copyWith(loginTime: fromPanel.loginTime);
+        }
+        if (fromPanel.loginIp.trim().isNotEmpty) {
+          user = user.copyWith(loginIp: fromPanel.loginIp);
+        }
+      }
+    }
+
     if (user.userName.trim().isEmpty || user.userName == '会员') {
       if (fromCookie != null && fromCookie.userName.isNotEmpty) {
         user = user.copyWith(userName: fromCookie.userName);
@@ -592,6 +799,95 @@ class MacCmsUserApi {
     return user;
   }
 
+  /// 拉取 CMS 会员升级套餐（解析 /user/upgrade.html）
+  Future<List<CmsVipPlan>> fetchVipPlans() async {
+    await loadCookie();
+    final res = await _request(
+      'GET',
+      _uri('/index.php/user/upgrade.html'),
+      asAjax: false,
+    );
+    return _parseUpgradePlans(res.body);
+  }
+
+  List<CmsVipPlan> _parseUpgradePlans(String html) {
+    final out = <CmsVipPlan>[];
+    final seen = <String>{};
+    // 匹配含 data-id 的升级卡片片段
+    final blocks = RegExp(
+      r'''<[^>]+data-id=["'](\d+)["'][^>]*>''',
+      caseSensitive: false,
+    ).allMatches(html);
+    for (final bm in blocks) {
+      final start = bm.start;
+      final end = (start + 280).clamp(0, html.length);
+      final chunk = html.substring(start, end);
+      final groupId = int.tryParse(bm.group(1) ?? '') ?? 0;
+      if (groupId <= 2) continue;
+      final long = RegExp(
+        r'''data-long=["'](day|week|month|year)["']''',
+        caseSensitive: false,
+      ).firstMatch(chunk)?.group(1)?.toLowerCase();
+      if (long == null) continue;
+      final name = RegExp(r'''data-name=["']([^"']+)["']''')
+              .firstMatch(chunk)
+              ?.group(1)
+              ?.trim() ??
+          '';
+      if (name.isEmpty) continue;
+      final points = int.tryParse(
+            RegExp(r'''data-points=["'](\d+)["']''')
+                    .firstMatch(chunk)
+                    ?.group(1) ??
+                '0',
+          ) ??
+          0;
+      final key = '$groupId|$long';
+      if (!seen.add(key)) continue;
+      out.add(
+        CmsVipPlan(
+          groupId: groupId,
+          groupName: name,
+          long: long,
+          points: points,
+        ),
+      );
+    }
+    return out;
+  }
+
+  /// CMS 积分升级会员组：POST /index.php/user/upgrade
+  Future<String> upgradeVip({
+    required int groupId,
+    required String long,
+  }) async {
+    await loadCookie();
+    final res = await _request(
+      'POST',
+      _uri('/index.php/user/upgrade'),
+      form: {
+        'group_id': '$groupId',
+        'long': long,
+      },
+    );
+    final raw = res.body.trim();
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) {
+        final code = (decoded['code'] as num?)?.toInt() ?? 0;
+        final msg = '${decoded['msg'] ?? ''}'.trim();
+        if (code == 1) return msg.isEmpty ? '升级成功' : msg;
+        throw CmsUserException(msg.isEmpty ? '升级失败' : msg, code: code);
+      }
+    } catch (e) {
+      if (e is CmsUserException) rethrow;
+    }
+    if (raw.contains('成功') || raw.contains('"code":1')) {
+      return '升级成功';
+    }
+    throw CmsUserException('升级失败，请确认积分是否足够');
+  }
+
   Future<CmsUser?> _tryFetchInfoHtml() async {
     try {
       final res = await _request(
@@ -602,6 +898,57 @@ class MacCmsUserApi {
       final raw = res.body.trim();
       if (raw.contains('"code":0') && raw.contains('未登录')) return null;
       return _parseUserHtml(raw);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 面板 DB 直查会员组 / 到期（补全主题 HTML 缺字段）
+  Future<CmsUser?> _tryFetchPanelVip(int userId) async {
+    if (userId <= 0) return null;
+    try {
+      final res = await huihuoHttpGet(
+        ApiConfig.huihuoPanelUserVipUrl(userId),
+        timeout: const Duration(seconds: 8),
+      );
+      if (res.status < 200 || res.status >= 300) return null;
+      final body = res.body.trim();
+      if (!body.startsWith('{')) return null;
+      final decoded = jsonDecode(body);
+      if (decoded is! Map) return null;
+      final map = Map<String, dynamic>.from(decoded);
+      if (map['code'] != 1 && map['code'] != '1') return null;
+      final data = map['data'];
+      if (data is! Map) return null;
+      final d = Map<String, dynamic>.from(data);
+      final endRaw = '${d['user_end_time'] ?? ''}'.trim();
+      final endTs = int.tryParse('${d['user_end_ts'] ?? ''}') ?? 0;
+      final endText = '${d['user_end_text'] ?? ''}'.trim();
+      // 优先用时间戳（稳定），其次后台格式化日期，再次原始字段
+      String end = '';
+      if (endTs > 1000000000) {
+        end = '$endTs';
+      } else if (endText.isNotEmpty && endText != '永久') {
+        end = endText;
+      } else if (endText == '永久') {
+        end = '永久';
+      } else {
+        end = endRaw;
+      }
+      return CmsUser(
+        userId: int.tryParse('${d['user_id'] ?? userId}') ?? userId,
+        userName: '${d['user_name'] ?? ''}',
+        nickName: '${d['user_nick_name'] ?? ''}',
+        points: int.tryParse('${d['user_points'] ?? 0}') ?? 0,
+        groupName: '${d['group_name'] ?? ''}'.trim(),
+        endTime: end,
+        loginTime: () {
+          final text = '${d['user_login_time_text'] ?? ''}'.trim();
+          if (text.isNotEmpty) return text;
+          return '${d['user_login_time'] ?? ''}'.trim();
+        }(),
+        loginIp: '${d['user_login_ip'] ?? ''}'.trim(),
+      );
     } catch (_) {
       return null;
     }
@@ -934,12 +1281,14 @@ class MacCmsUserApi {
     final name = dec(_cookieMap['user_name']);
     final group = dec(_cookieMap['group_name']);
     final portrait = dec(_cookieMap['user_portrait']);
+    final end = dec(_cookieMap['user_end_time']);
     if (id == 0 && name.isEmpty) return null;
     return CmsUser(
       userId: id,
       userName: name.isEmpty ? '会员' : name,
       groupName: group,
       portrait: portrait,
+      endTime: end,
     );
   }
 
@@ -1091,6 +1440,27 @@ class MacCmsUserApi {
         ], '0')) ??
         0;
 
+    // 会员期限 / user_end_time（主题常显示为 YYYY-MM-DD 或时间戳）
+    var endTime = pick([
+      r'会员期限[：:]\s*(?:<[^>]+>\s*)*([^<\s]{4,32})',
+      r'到期时间[：:]\s*(?:<[^>]+>\s*)*([^<\s]{4,32})',
+      r'会员到期[：:]\s*(?:<[^>]+>\s*)*([^<\s]{4,32})',
+      r'VIP期限[：:]\s*(?:<[^>]+>\s*)*([^<\s]{4,32})',
+      r'''user_end_time["']?\s*[:=]\s*["']?(\d{9,13})''',
+      r'''user_end_time["'][^>]*>\s*([^<\s]{4,32})''',
+    ]);
+    if (endTime.contains('永久')) {
+      endTime = '永久';
+    } else {
+      final date = RegExp(r'(\d{4}[-/]\d{1,2}[-/]\d{1,2})').firstMatch(endTime);
+      if (date != null) {
+        endTime = date.group(1)!.replaceAll('/', '-');
+      } else {
+        final ts = RegExp(r'(\d{10,13})').firstMatch(endTime)?.group(1);
+        if (ts != null) endTime = ts;
+      }
+    }
+
     return CmsUser(
       userId: id,
       userName: name,
@@ -1100,6 +1470,7 @@ class MacCmsUserApi {
       points: points,
       extend: extend,
       groupName: group,
+      endTime: endTime,
     );
   }
 

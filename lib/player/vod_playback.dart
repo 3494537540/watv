@@ -2,6 +2,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config/api_config.dart';
+import 'player_settings_store.dart';
 
 /// HLS 清晰度档位
 enum VodQualityTier {
@@ -112,6 +113,17 @@ class VodPlayback {
 
   static const playbackRates = <double>[0.75, 1.0, 1.25, 1.5, 2.0];
 
+  /// 本机路径 / file://（缓存播放）
+  static bool isLocalMediaPath(String raw) {
+    final u = raw.trim();
+    if (u.isEmpty) return false;
+    if (u.startsWith('file:')) return true;
+    if (u.contains('://')) return false;
+    if (u.startsWith('/')) return true;
+    if (RegExp(r'^[A-Za-z]:[\\/]').hasMatch(u)) return true;
+    return false;
+  }
+
   static String rateLabel(double rate) {
     if (rate == rate.roundToDouble()) {
       return '${rate.toInt().toString()}x';
@@ -129,12 +141,18 @@ class VodPlayback {
   static Future<VodResolvedStream> resolveStream(
     String raw, {
     VodQualityTier? prefer,
+    PlayerPlayMode? playMode,
   }) async {
     final url = raw.trim();
     if (url.isEmpty) {
       return const VodResolvedStream(playUrl: '');
     }
+    // 本地缓存文件：禁止再走 HTTP 拉清单
+    if (isLocalMediaPath(url)) {
+      return VodResolvedStream(playUrl: url);
+    }
     final tier = prefer ?? await VodQualityStore.load();
+    final mode = playMode ?? PlayerSettingsStore.cached.playMode;
     final lower = url.toLowerCase();
     final maybeHls = lower.contains('.m3u8') || lower.contains('m3u8?');
     if (!maybeHls) {
@@ -156,7 +174,7 @@ class VodPlayback {
       if (variants.isEmpty) {
         return VodResolvedStream(playUrl: url, masterUrl: url);
       }
-      final picked = pickVariant(variants, tier);
+      final picked = pickVariant(variants, tier, playMode: mode);
       return VodResolvedStream(
         playUrl: picked?.url ?? variants.last.url,
         variants: variants,
@@ -215,22 +233,42 @@ class VodPlayback {
     return out;
   }
 
-  /// 按偏好选档；自动档优先 720（更稳），再 1080，避免弱网一上来就卡
+  /// 按偏好选档；自动档受播放模式影响（流畅偏 480，标准偏 720，高画质偏 1080）
   static VodHlsVariant? pickVariant(
     List<VodHlsVariant> variants,
-    VodQualityTier prefer,
-  ) {
+    VodQualityTier prefer, {
+    PlayerPlayMode playMode = PlayerPlayMode.standard,
+  }) {
     if (variants.isEmpty) return null;
     if (prefer == VodQualityTier.auto) {
-      VodHlsVariant? best720;
-      VodHlsVariant? best1080;
-      for (final v in variants) {
-        if (v.tier == VodQualityTier.q720) best720 = v;
-        if (v.tier == VodQualityTier.q1080) best1080 = v;
+      final order = switch (playMode) {
+        PlayerPlayMode.smooth => const [
+            VodQualityTier.q480,
+            VodQualityTier.q720,
+            VodQualityTier.q360,
+            VodQualityTier.q1080,
+          ],
+        PlayerPlayMode.standard => const [
+            VodQualityTier.q720,
+            VodQualityTier.q1080,
+            VodQualityTier.q480,
+          ],
+        PlayerPlayMode.high => const [
+            VodQualityTier.q1080,
+            VodQualityTier.q4k,
+            VodQualityTier.q720,
+            VodQualityTier.q480,
+          ],
+      };
+      for (final tier in order) {
+        for (final v in variants) {
+          if (v.tier == tier) return v;
+        }
       }
-      if (best720 != null) return best720;
-      if (best1080 != null) return best1080;
-      // 没有 720/1080 时取中档，避免直接飙最高
+      if (playMode == PlayerPlayMode.high) return variants.last;
+      if (playMode == PlayerPlayMode.smooth) {
+        return variants.length >= 2 ? variants[1] : variants.first;
+      }
       if (variants.length >= 3) {
         return variants[variants.length ~/ 2];
       }
@@ -250,27 +288,6 @@ class VodPlayback {
       }
     }
     return exact ?? above ?? below ?? variants.last;
-  }
-
-  /// 自动降档：当前档的下一低档
-  static VodHlsVariant? lowerThan(
-    List<VodHlsVariant> variants,
-    VodHlsVariant current,
-  ) {
-    if (variants.length < 2) return null;
-    final sorted = [...variants]
-      ..sort((a, b) => a.height.compareTo(b.height));
-    final i = sorted.indexWhere((e) => e.url == current.url);
-    if (i > 0) return sorted[i - 1];
-    // 按高度找严格更低
-    for (var j = sorted.length - 1; j >= 0; j--) {
-      if (sorted[j].height < current.height ||
-          (sorted[j].height == current.height &&
-              sorted[j].bandwidth < current.bandwidth)) {
-        return sorted[j];
-      }
-    }
-    return null;
   }
 
   static String _resolveUrl(String base, String ref) {

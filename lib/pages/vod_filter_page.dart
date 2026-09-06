@@ -7,11 +7,14 @@ import 'package:flutter/services.dart';
 import '../config/api_config.dart';
 import '../models/movie_models.dart';
 import '../services/maccms_api.dart';
+import '../state/theme_controller.dart';
 import '../theme/app_colors.dart';
+import '../widgets/app_page_route.dart';
+import '../widgets/app_pull_refresh.dart';
 import '../widgets/figma_loading.dart';
 import '../widgets/movie_poster_card.dart';
+import '../widgets/press_scale.dart';
 import 'movie_detail_page.dart';
-import '../widgets/app_page_route.dart';
 
 class _FilterChannel {
   const _FilterChannel({required this.name, this.typeId});
@@ -308,9 +311,9 @@ class _VodFilterPageState extends State<VodFilterPage> {
       ),
       child: ColoredBox(
         color: _pageBg,
-        child: RefreshIndicator(
-          color: AppColors.iosBlue,
-          displacement: top + 48,
+        child: AppPullRefresh(
+          color: AppColors.brand,
+          edgeOffset: top,
           onRefresh: _reload,
           child: CustomScrollView(
             controller: _scroll,
@@ -360,8 +363,8 @@ class _VodFilterPageState extends State<VodFilterPage> {
               if (!_typesReady)
                 const SliverToBoxAdapter(
                   child: Padding(
-                    padding: EdgeInsets.all(40),
-                    child: Center(child: FigmaMetaballLoader(size: 40)),
+                    padding: EdgeInsets.symmetric(vertical: 48),
+                    child: WatvPageLoader(size: 48),
                   ),
                 )
               else ...[
@@ -440,9 +443,9 @@ class _VodFilterPageState extends State<VodFilterPage> {
     if (_loading && _movies.isEmpty) {
       return [
         const SliverPadding(
-          padding: EdgeInsets.fromLTRB(0, 4, 0, 40),
+          padding: EdgeInsets.fromLTRB(0, 24, 0, 40),
           sliver: SliverToBoxAdapter(
-            child: HomePosterGridSkeleton(count: 9),
+            child: WatvPageLoader(size: 48),
           ),
         ),
       ];
@@ -572,7 +575,7 @@ class _FilterTextRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 30,
+      height: 34,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         physics: const BouncingScrollPhysics(),
@@ -581,18 +584,39 @@ class _FilterTextRow extends StatelessWidget {
         itemBuilder: (context, i) {
           final name = labels[i];
           final on = name == selected;
-          return GestureDetector(
+          return PressScale(
+            scale: 0.94,
             onTap: () => onSelected(name),
-            behavior: HitTestBehavior.opaque,
-            child: Text(
-              name,
-              textAlign: TextAlign.left,
+            child: AnimatedDefaultTextStyle(
+              duration: ThemeController.instance.scaled(
+                const Duration(milliseconds: 160),
+              ),
+              curve: Curves.easeOutCubic,
               style: TextStyle(
                 fontFamily: 'AppSans',
                 fontSize: 14,
                 fontWeight: on ? FontWeight.w700 : FontWeight.w500,
                 color: on ? accent : AppPalette.text(context),
                 decoration: TextDecoration.none,
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(name, textAlign: TextAlign.left),
+                  const SizedBox(height: 3),
+                  AnimatedContainer(
+                    duration: ThemeController.instance.scaled(
+                      const Duration(milliseconds: 180),
+                    ),
+                    curve: Curves.easeOutCubic,
+                    height: 2.5,
+                    width: on ? 16 : 0,
+                    decoration: BoxDecoration(
+                      color: accent,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ],
               ),
             ),
           );

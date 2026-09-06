@@ -28,11 +28,11 @@ enum AppUiStyle {
 
 /// 全局加载动画风格
 enum AppLoadingStyle {
-  spinner('旋转环', 'Lottie 品牌色旋转'),
-  ring('圆环', 'Material 进度环'),
+  spinner('旋转环', '品牌色旋转动效'),
+  ring('圆环', '环形进度指示'),
   dots('三点', '三点弹跳动效'),
   pulse('呼吸', '圆点呼吸缩放'),
-  cupertino('系统转圈', 'iOS 风格转圈');
+  cupertino('系统转圈', '系统风格转圈');
 
   const AppLoadingStyle(this.label, this.subtitle);
   final String label;

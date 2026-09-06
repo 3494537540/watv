@@ -34,11 +34,24 @@ class DialogX {
   static OverlayState? get _overlay =>
       dialogXNavigatorKey.currentState?.overlay;
 
+  static int _waitGen = 0;
+
   static void showWait([String message = '请稍候']) {
     HapticFeedback.lightImpact();
-    _ensureWaitHostThen((host) => host.show(message));
+    final gen = ++_waitGen;
+    _ensureWaitHostThen((host) {
+      // 若在 host 就绪前已被 dismiss / 新 showWait，则丢弃本次
+      if (gen != _waitGen) return;
+      host.show(message);
+    });
   }
 
+  static void dismiss() {
+    _waitGen++;
+    _waitHost?.hide();
+    _removeWaitSoon();
+    _tipQueue?.clearAll();
+  }
   static void showSuccess(
     String message, {
     Duration duration = const Duration(milliseconds: 2600),
@@ -229,18 +242,13 @@ class DialogX {
     _mailTimer = null;
   }
 
-  static void dismiss() {
-    _waitHost?.hide();
-    _removeWaitSoon();
-    _tipQueue?.clearAll();
-  }
-
   static void _pushToast({
     required String message,
     required DialogXTipType type,
     required Duration duration,
     DialogXTipAction? action,
   }) {
+    _waitGen++;
     _waitHost?.hide();
     _removeWaitSoon();
 
@@ -558,8 +566,8 @@ class _QueuedTipState extends State<_QueuedTip>
             : 1.0;
         return Positioned(
           top: _y.value,
-          left: 20,
-          right: 20,
+          left: 28,
+          right: 28,
           child: Opacity(
             opacity: opacity,
             child: child,
@@ -568,16 +576,19 @@ class _QueuedTipState extends State<_QueuedTip>
       },
       child: Align(
         alignment: Alignment.topCenter,
-        child: GestureDetector(
-          onVerticalDragEnd: (d) {
-            if ((d.primaryVelocity ?? 0) < -180) {
-              unawaited(flyOut());
-            }
-          },
-          child: _SolidTipCapsule(
-            message: widget.item.message,
-            type: widget.item.type,
-            action: widget.item.action,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 300),
+          child: GestureDetector(
+            onVerticalDragEnd: (d) {
+              if ((d.primaryVelocity ?? 0) < -180) {
+                unawaited(flyOut());
+              }
+            },
+            child: _SolidTipCapsule(
+              message: widget.item.message,
+              type: widget.item.type,
+              action: widget.item.action,
+            ),
           ),
         ),
       ),
@@ -585,7 +596,7 @@ class _QueuedTipState extends State<_QueuedTip>
   }
 }
 
-/// 纯灰底圆角提示：无图标，字色与背景融洽
+/// 纯灰底圆角提示：胶囊形，偏灰底 + 浅字
 class _SolidTipCapsule extends StatelessWidget {
   const _SolidTipCapsule({
     required this.message,
@@ -599,58 +610,71 @@ class _SolidTipCapsule extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 灰底 + 同色系文字，不抢戏
-    const bg = Color(0xFFE5E5EA);
-    const fg = Color(0xFF6C6C70);
+    // 偏灰胶囊：不要拉满宽，圆角要够
+    const bg = Color(0xFF6B6B70);
+    const fg = Color(0xFFF2F2F7);
     return Material(
       color: Colors.transparent,
       elevation: 0,
-      child: Container(
-        constraints: const BoxConstraints(minHeight: 44, maxWidth: 320),
-        padding: EdgeInsets.fromLTRB(16, 11, action == null ? 16 : 8, 11),
+      child: DecoratedBox(
         decoration: BoxDecoration(
           color: bg,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Flexible(
-              child: Text(
-                message,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontFamily: 'AppSans',
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                  color: fg,
-                  decoration: TextDecoration.none,
-                  height: 1.25,
-                ),
-              ),
+          borderRadius: BorderRadius.circular(999),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x33000000),
+              blurRadius: 12,
+              offset: Offset(0, 4),
             ),
-            if (action != null) ...[
-              const SizedBox(width: 6),
-              CupertinoButton(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                minimumSize: Size.zero,
-                onPressed: action!.onPressed,
-                child: Text(
-                  action!.label,
-                  style: const TextStyle(
-                    fontFamily: 'AppSans',
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: fg,
-                    decoration: TextDecoration.none,
+          ],
+        ),
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(18, 12, action == null ? 18 : 10, 12),
+          child: IntrinsicWidth(
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 240),
+                  child: Text(
+                    message,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontFamily: 'AppSans',
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: fg,
+                      decoration: TextDecoration.none,
+                      height: 1.25,
+                    ),
                   ),
                 ),
-              ),
-            ],
-          ],
+                if (action != null) ...[
+                  const SizedBox(width: 6),
+                  CupertinoButton(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
+                    minimumSize: Size.zero,
+                    onPressed: action!.onPressed,
+                    child: Text(
+                      action!.label,
+                      style: const TextStyle(
+                        fontFamily: 'AppSans',
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFFFFFFFF),
+                        decoration: TextDecoration.none,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
         ),
       ),
     );

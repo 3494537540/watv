@@ -23,6 +23,7 @@ import java.io.File
  */
 class MainActivity : FlutterFragmentActivity() {
     private val apkChannel = "com.watv.app/apk_installer"
+    private val linkChannel = "com.watv.app/link"
     private val securityChannel = "com.watv.app/security"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -65,25 +66,32 @@ class MainActivity : FlutterFragmentActivity() {
                 }
             }
 
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, securityChannel)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, linkChannel)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
-                    "isHttpProxyEnabled" -> result.success(isHttpProxyEnabled())
+                    "openUrl" -> {
+                        val url = call.argument<String>("url")
+                        if (url.isNullOrBlank()) {
+                            result.error("bad_args", "url required", null)
+                            return@setMethodCallHandler
+                        }
+                        try {
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            startActivity(intent)
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("open_fail", e.message, null)
+                        }
+                    }
                     else -> result.notImplemented()
                 }
             }
 
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.watv.app/qq_login")
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, securityChannel)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
-                    "login" -> {
-                        // ????????? OpenSDK ?????????????
-                        result.error(
-                            "sdk_missing",
-                            "QQ OpenSDK ??????????? app_id/app_key",
-                            null
-                        )
-                    }
+                    "isHttpProxyEnabled" -> result.success(isHttpProxyEnabled())
                     else -> result.notImplemented()
                 }
             }

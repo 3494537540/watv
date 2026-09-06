@@ -8,7 +8,8 @@ class IosEdgeBack extends StatefulWidget {
     required this.onBack,
     required this.child,
     this.enabled = true,
-    this.edgeWidth = 28,
+    /// 真机侧滑起点较宽，避免被圆角/刘海挡住
+    this.edgeWidth = 44,
   });
 
   final VoidCallback onBack;
@@ -29,14 +30,6 @@ class _IosEdgeBackState extends State<IosEdgeBack> {
       (defaultTargetPlatform == TargetPlatform.iOS ||
           defaultTargetPlatform == TargetPlatform.macOS);
 
-  void _maybeBack() {
-    if (_dx > 64) {
-      widget.onBack();
-    }
-    _dx = 0;
-    _tracking = false;
-  }
-
   @override
   Widget build(BuildContext context) {
     if (!widget.enabled || !_iosLike) return widget.child;
@@ -51,8 +44,7 @@ class _IosEdgeBackState extends State<IosEdgeBack> {
           width: widget.edgeWidth,
           child: GestureDetector(
             behavior: HitTestBehavior.translucent,
-            onHorizontalDragStart: (d) {
-              if (d.globalPosition.dx > widget.edgeWidth + 8) return;
+            onHorizontalDragStart: (_) {
               _tracking = true;
               _dx = 0;
             },
@@ -60,7 +52,14 @@ class _IosEdgeBackState extends State<IosEdgeBack> {
               if (!_tracking) return;
               if (d.delta.dx > 0) _dx += d.delta.dx;
             },
-            onHorizontalDragEnd: (_) => _maybeBack(),
+            onHorizontalDragEnd: (d) {
+              final v = d.primaryVelocity ?? 0;
+              if (v > 600 || _dx > 48) {
+                widget.onBack();
+              }
+              _dx = 0;
+              _tracking = false;
+            },
             onHorizontalDragCancel: () {
               _dx = 0;
               _tracking = false;

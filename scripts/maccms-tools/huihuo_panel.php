@@ -15,6 +15,12 @@
  *   ?api=img_proxy&u=https%3A%2F%2F...   （封面反代，解决部分 CDN 客户端不可达）
  *   ?api=cms_proxy&target=vod|art|website&...  （H5 跨域：转发 provide JSON）
  *   ?api=redeem  (POST JSON: code,user_id,user_name) 兑换码
+ *   ?api=vod_collect_sync  扫描 mac_vod 新增片源并写入公告
+ *   ?api=user_vip&user_id=  查询会员组/到期时间（对接 App 个人页）
+ *   ?api=checkin  (POST JSON: user_id) 每日打卡加积分
+ *   ?api=checkin_status&user_id=  打卡状态
+ *   ?api=art_detail&id=  文章详情（DB 正文）
+ *   ?api=qq_oauth  (POST JSON: openid,access_token,nickname?) QQ 授权登录
  *
  * 密钥：huihuo_panel_2026
  */
@@ -138,6 +144,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $appName = trim((string)($_POST['app_name'] ?? ''));
             $iconUrl = trim((string)($_POST['icon_url'] ?? ''));
             $bgUrl = trim((string)($_POST['bg_url'] ?? ''));
+            $websiteUrl = trim((string)($_POST['website_url'] ?? ''));
             if ($ver === '' || $code <= 0) {
                 throw new RuntimeException('版本号 / versionCode 必填');
             }
@@ -194,17 +201,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($appName === '') {
                 $appName = '灰火';
             }
+            if ($websiteUrl === '') {
+                $websiteUrl = trim((string)($old['website_url'] ?? ''));
+            }
 
             $pdo->prepare("DELETE FROM `{$tUpdate}` WHERE `platform`=?")->execute([$platform]);
             $st = $pdo->prepare(
                 "INSERT INTO `{$tUpdate}`
                 (`platform`,`version`,`version_code`,`apk_url`,`download_url`,`changelog`,`force_update`,
-                 `app_name`,`icon_url`,`bg_url`,`updated_at`)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+                 `app_name`,`icon_url`,`bg_url`,`website_url`,`updated_at`)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
             );
             $st->execute([
                 $platform, $ver, $code, $url, $url, $log, $force,
-                $appName, $iconUrl, $bgUrl, time(),
+                $appName, $iconUrl, $bgUrl, $websiteUrl, time(),
             ]);
 
             huihuoWriteAppUpdateJson($root, $platform, [
@@ -218,6 +228,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'app_name' => $appName,
                 'icon_url' => $iconUrl,
                 'bg_url' => $bgUrl,
+                'website_url' => $websiteUrl,
                 'updated_at' => time(),
             ]);
             // 归档到更新日志（官网展示）
@@ -498,7 +509,8 @@ code{background:#f3f4f6;padding:2px 6px;border-radius:6px;font-size:12px}
     <b>双端说明：</b>Android / iOS 各自独立配置 versionCode。<br/>
     App 本地 <code>ApiConfig.appVersionCode</code> 小于服务器 versionCode 才算有新版本。<br/>
     <b>强制更新</b>勾选后：用户打开 App 才会弹窗；不勾选则仅「设置→检查更新」可见。<br/>
-    iOS 一般填 App Store / TestFlight / 企业签 OTA 地址；也可上传 .ipa 托管到本站（仍需企业签或旁加载才能装）。<br/>
+    iOS 一般填 App Store / TestFlight / 企业签 OTA 地址；也可上传 .ipa 托管到本站。<br/>
+    App 内 iOS 更新弹窗支持：官网下载、下载 IPA 后分享到第三方签名工具、复制/打开直链。<br/>
     每次保存会写入「更新日志」，官网 <code>?api=website</code> 可拉取双端安装包与日志列表。<br/>
     <b>上传限制：</b>当前 PHP <code>upload_max_filesize=<?= htmlspecialchars((string)ini_get('upload_max_filesize')) ?></code>，
     <code>post_max_size=<?= htmlspecialchars((string)ini_get('post_max_size')) ?></code>。
@@ -538,6 +550,8 @@ code{background:#f3f4f6;padding:2px 6px;border-radius:6px;font-size:12px}
         <input type="number" name="version_code" value="<?= (int)($row['version_code'] ?? 2) ?>" required min="1"/>
         <label>下载地址（可手填，或下方上传后自动填）</label>
         <input type="text" name="download_url" value="<?= htmlspecialchars((string)($row['download_url'] ?? $row['apk_url'] ?? '')) ?>" placeholder="https://…"/>
+        <label>官网下载页（可选，App「官网下载」按钮）</label>
+        <input type="text" name="website_url" value="<?= htmlspecialchars((string)($row['website_url'] ?? '')) ?>" placeholder="https://www.watv.fun"/>
         <label>上传安装包（可选）</label>
         <input type="file" name="pkg" accept="<?= htmlspecialchars($meta['accept']) ?>"/>
         <label>更新说明</label>
@@ -660,7 +674,7 @@ code{background:#f3f4f6;padding:2px 6px;border-radius:6px;font-size:12px}
       <label>iOS Universal Link（可选）</label>
       <input type="text" name="qq_universal_link" value="<?= htmlspecialchars((string)$qqCfg['universal_link']) ?>" placeholder="https://your.domain/qq_conn/"/>
       <div class="row"><button type="submit">保存 QQ 参数</button></div>
-      <p class="muted">写入 app_config.json 的 <code>qq_login</code>；App 启动拉配置后生效，无需改客户端发版（原生 SDK 已预留通道）。</p>
+      <p class="muted">写入 app_config.json 的 <code>qq_login</code>。App 用 tencent_kit 拉起 QQ 授权后，调面板 <code>?api=qq_oauth</code> 写入 CMS Cookie。请保证本面板已上传到站点根目录。</p>
     </form>
   </div>
   <div class="card">
@@ -881,6 +895,7 @@ function huihuoEnsureTables(
           `app_name` varchar(80) NOT NULL DEFAULT '',
           `icon_url` varchar(500) NOT NULL DEFAULT '',
           `bg_url` varchar(500) NOT NULL DEFAULT '',
+          `website_url` varchar(500) NOT NULL DEFAULT '',
           `updated_at` int unsigned NOT NULL DEFAULT 0,
           PRIMARY KEY (`id`),
           KEY `idx_platform` (`platform`)
@@ -897,6 +912,7 @@ function huihuoEnsureTables(
     huihuoEnsureColumn($pdo, $tUpdate, 'app_name', "varchar(80) NOT NULL DEFAULT ''");
     huihuoEnsureColumn($pdo, $tUpdate, 'icon_url', "varchar(500) NOT NULL DEFAULT ''");
     huihuoEnsureColumn($pdo, $tUpdate, 'bg_url', "varchar(500) NOT NULL DEFAULT ''");
+    huihuoEnsureColumn($pdo, $tUpdate, 'website_url', "varchar(500) NOT NULL DEFAULT ''");
 
     $pdo->exec(
         "CREATE TABLE IF NOT EXISTS `{$tConfig}` (
@@ -973,6 +989,275 @@ function huihuoEnsureColumn(PDO $pdo, string $table, string $column, string $ddl
     } catch (Throwable $e) {
         // ignore
     }
+}
+
+function huihuoEnsureCheckinTable(PDO $pdo, string $table): void
+{
+    $pdo->exec(
+        "CREATE TABLE IF NOT EXISTS `{$table}` (
+          `user_id` int unsigned NOT NULL,
+          `last_day` int unsigned NOT NULL DEFAULT 0,
+          `streak` int unsigned NOT NULL DEFAULT 0,
+          `total` int unsigned NOT NULL DEFAULT 0,
+          `updated_at` int unsigned NOT NULL DEFAULT 0,
+          PRIMARY KEY (`user_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+    );
+}
+
+/** 简易 HTTP GET（QQ 互联校验） */
+function huihuoHttpGet(string $url, int $timeout = 12): string
+{
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_CONNECTTIMEOUT => $timeout,
+            CURLOPT_TIMEOUT => $timeout,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => false,
+            CURLOPT_USERAGENT => 'HuihuoPanel/1.0',
+        ]);
+        $body = curl_exec($ch);
+        curl_close($ch);
+        return is_string($body) ? $body : '';
+    }
+    $ctx = stream_context_create([
+        'http' => ['timeout' => $timeout, 'ignore_errors' => true],
+        'ssl' => ['verify_peer' => false, 'verify_peer_name' => false],
+    ]);
+    $body = @file_get_contents($url, false, $ctx);
+    return is_string($body) ? $body : '';
+}
+
+/** 从 app_config 读取 QQ 互联参数 */
+function huihuoQqLoginConfig(PDO $pdo, string $tConfig, string $root): array
+{
+    $out = ['enabled' => false, 'app_id' => '', 'app_key' => '', 'universal_link' => ''];
+    $json = huihuoKvGet($pdo, $tConfig, 'app_config');
+    if ($json === null || $json === '') {
+        $file = $root . '/static/app/app_config.json';
+        if (is_file($file)) {
+            $json = (string)file_get_contents($file);
+        }
+    }
+    if ($json === null || $json === '') {
+        return $out;
+    }
+    $decoded = json_decode($json, true);
+    if (!is_array($decoded) || !isset($decoded['qq_login']) || !is_array($decoded['qq_login'])) {
+        return $out;
+    }
+    $q = $decoded['qq_login'];
+    $out['app_id'] = trim((string)($q['app_id'] ?? ''));
+    $out['app_key'] = trim((string)($q['app_key'] ?? ''));
+    $out['universal_link'] = trim((string)($q['universal_link'] ?? ''));
+    $enabledFlag = !empty($q['enabled']);
+    $out['enabled'] = $enabledFlag || ($out['app_id'] !== '' && $out['app_key'] !== '');
+    return $out;
+}
+
+/** 校验 QQ access_token 并拉简单资料 */
+function huihuoQqVerifyToken(string $appId, string $accessToken, string $openid): array
+{
+    $meUrl = 'https://graph.qq.com/oauth2.0/me?access_token=' . rawurlencode($accessToken);
+    $meRaw = huihuoHttpGet($meUrl);
+    // callback( {"client_id":"...","openid":"..."} );
+    if (!preg_match('/\{.*\}/s', $meRaw, $m)) {
+        throw new RuntimeException('QQ token 校验失败');
+    }
+    $me = json_decode($m[0], true);
+    if (!is_array($me)) {
+        throw new RuntimeException('QQ token 校验失败');
+    }
+    if (!empty($me['error'])) {
+        throw new RuntimeException((string)($me['error_description'] ?? $me['error']));
+    }
+    $gotOpen = trim((string)($me['openid'] ?? ''));
+    $gotCid = trim((string)($me['client_id'] ?? ''));
+    if ($gotOpen === '' || strcasecmp($gotOpen, $openid) !== 0) {
+        throw new RuntimeException('QQ openid 不匹配');
+    }
+    if ($appId !== '' && $gotCid !== '' && strcasecmp($gotCid, $appId) !== 0) {
+        throw new RuntimeException('QQ AppID 不匹配');
+    }
+
+    $nick = '';
+    $portrait = '';
+    $infoUrl = 'https://graph.qq.com/user/get_simple_userinfo?access_token='
+        . rawurlencode($accessToken)
+        . '&oauth_consumer_key=' . rawurlencode($appId)
+        . '&openid=' . rawurlencode($openid)
+        . '&format=json';
+    $infoRaw = huihuoHttpGet($infoUrl);
+    $info = json_decode($infoRaw, true);
+    if (is_array($info) && (int)($info['ret'] ?? -1) === 0) {
+        $nick = trim((string)($info['nickname'] ?? ''));
+        $portrait = trim((string)($info['figureurl_qq_2'] ?? $info['figureurl_qq_1'] ?? $info['figureurl_2'] ?? ''));
+    }
+    return ['openid' => $gotOpen, 'nickname' => $nick, 'portrait' => $portrait];
+}
+
+/** 生成 MacCMS 会员 Cookie 串（与站内登录一致） */
+function huihuoMacUserCookieHeader(array $u): string
+{
+    $uid = (int)($u['user_id'] ?? 0);
+    $name = (string)($u['user_name'] ?? '');
+    $pwd = (string)($u['user_pwd'] ?? '');
+    $gid = (int)($u['group_id'] ?? 2);
+    $gname = (string)($u['group_name'] ?? '注册会员');
+    $portrait = (string)($u['user_portrait'] ?? '');
+    $random = md5(uniqid((string)mt_rand(), true));
+    $check = md5($uid . $name . $pwd . $random);
+    $parts = [
+        'user_id=' . $uid,
+        'user_name=' . rawurlencode($name),
+        'group_id=' . $gid,
+        'group_name=' . rawurlencode($gname),
+        'user_check=' . $check,
+        'user_random=' . $random,
+    ];
+    if ($portrait !== '') {
+        $parts[] = 'user_portrait=' . rawurlencode($portrait);
+    }
+    return implode('; ', $parts);
+}
+
+/** QQ 授权 → 查找/创建 mac_user → Cookie */
+function huihuoQqOauthLogin(PDO $pdo, string $prefix, string $tConfig, string $root, array $body): array
+{
+    $cfg = huihuoQqLoginConfig($pdo, $tConfig, $root);
+    if ($cfg['app_id'] === '' || $cfg['app_key'] === '') {
+        throw new RuntimeException('后台未配置 QQ AppID / AppKey');
+    }
+    $openid = trim((string)($body['openid'] ?? ''));
+    $token = trim((string)($body['access_token'] ?? $body['accessToken'] ?? ''));
+    $nickHint = trim((string)($body['nickname'] ?? ''));
+    if ($openid === '' || $token === '') {
+        throw new RuntimeException('缺少 openid / access_token');
+    }
+
+    $profile = huihuoQqVerifyToken($cfg['app_id'], $token, $openid);
+    $nick = $profile['nickname'] !== '' ? $profile['nickname'] : $nickHint;
+    if ($nick === '') {
+        $nick = 'QQ用户' . substr(md5($openid), 0, 6);
+    }
+    $portrait = (string)$profile['portrait'];
+
+    $tUser = $prefix . 'user';
+    $tGroup = $prefix . 'group';
+
+    // 用 user_qq 存 openid（兼容无独立 openid 字段的站点）
+    $st = $pdo->prepare("SELECT * FROM `{$tUser}` WHERE `user_qq`=? LIMIT 1");
+    $st->execute([$openid]);
+    $row = $st->fetch(PDO::FETCH_ASSOC);
+
+    $now = time();
+    $ip = (string)($_SERVER['REMOTE_ADDR'] ?? '');
+
+    if (!$row) {
+        $uname = 'qq_' . substr(md5($openid), 0, 12);
+        // 撞名则追加后缀
+        $try = $uname;
+        for ($i = 0; $i < 8; $i++) {
+            $chk = $pdo->prepare("SELECT `user_id` FROM `{$tUser}` WHERE `user_name`=? LIMIT 1");
+            $chk->execute([$try]);
+            if (!$chk->fetchColumn()) {
+                $uname = $try;
+                break;
+            }
+            $try = $uname . substr(md5($openid . $i), 0, 4);
+        }
+        $pwd = md5(uniqid('qq', true));
+        $gid = 2;
+        try {
+            $g = $pdo->query("SELECT `group_id` FROM `{$tGroup}` WHERE `group_status`=1 AND `group_id`>1 ORDER BY `group_id` ASC LIMIT 1");
+            if ($g) {
+                $found = (int)$g->fetchColumn();
+                if ($found > 0) {
+                    $gid = $found;
+                }
+            }
+        } catch (Throwable $e) {
+            // ignore
+        }
+
+        $cols = ['user_name', 'user_pwd', 'user_nick_name', 'user_qq', 'group_id', 'user_status', 'user_reg_time', 'user_reg_ip', 'user_login_time', 'user_login_ip', 'user_login_num', 'user_points'];
+        $vals = [$uname, $pwd, $nick, $openid, $gid, 1, $now, $ip, $now, $ip, 1, 0];
+        // 可选头像字段
+        try {
+            $hasPortrait = $pdo->query("SHOW COLUMNS FROM `{$tUser}` LIKE 'user_portrait'");
+            if ($hasPortrait && $hasPortrait->fetch() && $portrait !== '') {
+                $cols[] = 'user_portrait';
+                $vals[] = $portrait;
+            }
+        } catch (Throwable $e) {
+            // ignore
+        }
+        $ph = implode(',', array_fill(0, count($cols), '?'));
+        $pdo->prepare(
+            'INSERT INTO `' . $tUser . '` (`' . implode('`,`', $cols) . '`) VALUES (' . $ph . ')'
+        )->execute($vals);
+        $uid = (int)$pdo->lastInsertId();
+        $st = $pdo->prepare("SELECT * FROM `{$tUser}` WHERE `user_id`=? LIMIT 1");
+        $st->execute([$uid]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        if (!$row) {
+            throw new RuntimeException('创建用户失败');
+        }
+    } else {
+        $uid = (int)$row['user_id'];
+        $sets = ['user_login_time=?', 'user_login_ip=?', 'user_login_num=`user_login_num`+1'];
+        $args = [$now, $ip];
+        if ($nick !== '') {
+            $sets[] = 'user_nick_name=?';
+            $args[] = $nick;
+        }
+        try {
+            $hasPortrait = $pdo->query("SHOW COLUMNS FROM `{$tUser}` LIKE 'user_portrait'");
+            if ($hasPortrait && $hasPortrait->fetch() && $portrait !== '') {
+                $sets[] = 'user_portrait=?';
+                $args[] = $portrait;
+            }
+        } catch (Throwable $e) {
+            // ignore
+        }
+        $args[] = $uid;
+        $pdo->prepare(
+            'UPDATE `' . $tUser . '` SET ' . implode(',', $sets) . ' WHERE `user_id`=?'
+        )->execute($args);
+        $st = $pdo->prepare("SELECT * FROM `{$tUser}` WHERE `user_id`=? LIMIT 1");
+        $st->execute([$uid]);
+        $row = $st->fetch(PDO::FETCH_ASSOC) ?: $row;
+    }
+
+    $gname = '注册会员';
+    try {
+        $gs = $pdo->prepare("SELECT `group_name` FROM `{$tGroup}` WHERE `group_id`=? LIMIT 1");
+        $gs->execute([(int)($row['group_id'] ?? 2)]);
+        $gn = (string)($gs->fetchColumn() ?: '');
+        if ($gn !== '') {
+            $gname = $gn;
+        }
+    } catch (Throwable $e) {
+        // ignore
+    }
+    $row['group_name'] = $gname;
+    if ($portrait !== '' && empty($row['user_portrait'])) {
+        $row['user_portrait'] = $portrait;
+    }
+
+    $cookie = huihuoMacUserCookieHeader($row);
+    return [
+        'cookie' => $cookie,
+        'user_id' => (int)$row['user_id'],
+        'user_name' => (string)$row['user_name'],
+        'nick_name' => (string)($row['user_nick_name'] ?? $nick),
+        'portrait' => (string)($row['user_portrait'] ?? $portrait),
+        'group_id' => (int)($row['group_id'] ?? 2),
+        'group_name' => $gname,
+    ];
 }
 
 function huihuoKvGet(PDO $pdo, string $table, string $k): ?string
@@ -1234,6 +1519,7 @@ function huihuoHandleApi(
                     'force_update' => (int)$row['force_update'] === 1,
                     'app_name' => (string)($row['app_name'] ?? ''),
                     'icon_url' => (string)($row['icon_url'] ?? ''),
+                    'website_url' => (string)($row['website_url'] ?? ''),
                     'updated_at' => (int)$row['updated_at'],
                 ];
             };
@@ -1344,6 +1630,7 @@ function huihuoHandleApi(
                        `c`.`comment_up`,`c`.`comment_down`,`c`.`comment_reply`,
                        COALESCE(NULLIF(`v`.`vod_name`, ''), '') AS `vod_name`,
                        COALESCE(NULLIF(`u`.`user_portrait`, ''), '') AS `user_portrait`,
+                       COALESCE(NULLIF(`u`.`user_qq`, ''), '') AS `user_qq`,
                        COALESCE(NULLIF(`u`.`user_nick_name`, ''), '') AS `user_nick_name`,
                        COALESCE(NULLIF(`u`.`user_name`, ''), '') AS `user_login`,
                        COALESCE(
@@ -1360,22 +1647,20 @@ function huihuoHandleApi(
             $buildWhere = function (bool $withMid) use ($rid, $name, $nameIds, $mid) {
                 $parts = [];
                 $args = [];
+                // 有精确 rid 时只按 rid 过滤，禁止 OR 片名导致串台
                 if ($rid > 0) {
                     $parts[] = '`c`.`comment_rid`=?';
                     $args[] = $rid;
-                }
-                foreach ($nameIds as $vid) {
-                    if ((int)$vid === (int)$rid) {
-                        continue;
+                } else {
+                    foreach ($nameIds as $vid) {
+                        $parts[] = '`c`.`comment_rid`=?';
+                        $args[] = (int)$vid;
                     }
-                    $parts[] = '`c`.`comment_rid`=?';
-                    $args[] = (int)$vid;
-                }
-                if ($name !== '') {
-                    $parts[] = "(REPLACE(REPLACE(REPLACE(COALESCE(`v`.`vod_name`,''),'【',''),'】',''),' ','') = ? OR `v`.`vod_name` = ? OR `v`.`vod_name` LIKE ?)";
-                    $args[] = $name;
-                    $args[] = $name;
-                    $args[] = '%' . $name . '%';
+                    if ($name !== '') {
+                        $parts[] = "(REPLACE(REPLACE(REPLACE(COALESCE(`v`.`vod_name`,''),'【',''),'】',''),' ','') = ? OR `v`.`vod_name` = ?)";
+                        $args[] = $name;
+                        $args[] = $name;
+                    }
                 }
                 if (empty($parts)) {
                     return [null, []];
@@ -1424,13 +1709,24 @@ function huihuoHandleApi(
             foreach ($rows as &$row) {
                 $portrait = trim((string)($row['user_portrait'] ?? ''));
                 $low = strtolower($portrait);
-                if ($portrait === '' ||
-                    strpos($low, 'duface') !== false ||
-                    strpos($low, 'touxiang') !== false ||
-                    strpos($low, 'nopic') !== false ||
-                    strpos($low, 'default') !== false ||
-                    strpos($low, 'noavatar') !== false) {
+                $isPlaceholder = $portrait === ''
+                    || strpos($low, 'duface') !== false
+                    || strpos($low, 'touxiang.png') !== false
+                    || strpos($low, 'nopic') !== false
+                    || strpos($low, 'noavatar') !== false
+                    || strpos($low, 'default_avatar') !== false
+                    || strpos($low, 'default-avatar') !== false;
+                if ($isPlaceholder) {
                     $row['user_portrait'] = '';
+                    $row['avatar'] = '';
+                } else {
+                    if (str_starts_with($portrait, '//')) {
+                        $portrait = 'https:' . $portrait;
+                    } elseif ($portrait !== '' && !preg_match('#^https?://#i', $portrait)) {
+                        $portrait = rtrim(huihuoPublicBase(), '/') . '/' . ltrim($portrait, '/');
+                    }
+                    $row['user_portrait'] = $portrait;
+                    $row['avatar'] = $portrait;
                 }
             }
             unset($row);
@@ -1445,6 +1741,165 @@ function huihuoHandleApi(
                 'list' => $rows,
             ], JSON_UNESCAPED_UNICODE);
             return;
+        }
+        if ($api === 'comment_mine') {
+            try {
+            $dbCfg = macLoadDbConfig($root);
+            $prefix = $dbCfg && !empty($dbCfg['prefix']) ? $dbCfg['prefix'] : 'mac_';
+            $tComment = $prefix . 'comment';
+            $tUser = $prefix . 'user';
+            $tVod = $prefix . 'vod';
+            $userId = (int)($_GET['user_id'] ?? $_POST['user_id'] ?? 0);
+            $userName = trim((string)($_GET['user_name'] ?? $_POST['user_name'] ?? ''));
+            $nickName = trim((string)($_GET['nick_name'] ?? $_POST['nick_name'] ?? ''));
+            $aliases = [];
+            if (isset($_GET['alias']) && is_array($_GET['alias'])) {
+                foreach ($_GET['alias'] as $a) {
+                    $a = trim((string)$a);
+                    if ($a !== '') {
+                        $aliases[] = $a;
+                    }
+                }
+            } elseif (isset($_GET['alias']) && is_string($_GET['alias'])) {
+                $a = trim((string)$_GET['alias']);
+                if ($a !== '') {
+                    $aliases[] = $a;
+                }
+            }
+            $page = max(1, (int)($_GET['page'] ?? 1));
+            $limit = min(50, max(1, (int)($_GET['limit'] ?? 30)));
+            $offset = ($page - 1) * $limit;
+            if ($userId <= 0 && $userName === '' && $nickName === '' && empty($aliases)) {
+                echo json_encode(['code' => 0, 'msg' => 'user_id required', 'list' => []], JSON_UNESCAPED_UNICODE);
+                return;
+            }
+            // 登录评论常有 user_id；游客/旧数据可能只有 comment_name（用户44556）
+            $parts = [];
+            $args = [];
+            if ($userId > 0) {
+                $parts[] = '`c`.`user_id`=?';
+                $args[] = $userId;
+                $aliases[] = (string)$userId;
+                $aliases[] = '用户' . $userId;
+            }
+            $names = [];
+            foreach (array_merge([$userName, $nickName], $aliases) as $n) {
+                $n = trim((string)$n);
+                if ($n !== '' && !in_array($n, $names, true)) {
+                    $names[] = $n;
+                }
+            }
+            foreach ($names as $n) {
+                $parts[] = '`c`.`comment_name`=?';
+                $args[] = $n;
+            }
+            // 按登录名/昵称反查会员 id（不依赖 user_qq 字段，避免旧库 500）
+            if (!empty($names)) {
+                try {
+                    $in = implode(',', array_fill(0, count($names), '?'));
+                    $stU = $pdo->prepare(
+                        "SELECT `user_id` FROM `{$tUser}`
+                         WHERE `user_name` IN ($in)
+                            OR `user_nick_name` IN ($in)
+                         LIMIT 20"
+                    );
+                    $stU->execute(array_merge($names, $names));
+                    foreach ($stU->fetchAll(PDO::FETCH_COLUMN) as $uid) {
+                        $uid = (int)$uid;
+                        if ($uid > 0) {
+                            $parts[] = '`c`.`user_id`=?';
+                            $args[] = $uid;
+                        }
+                    }
+                } catch (Throwable $e) {
+                    // ignore
+                }
+            }
+            if (empty($parts)) {
+                echo json_encode(['code' => 1, 'user_id' => $userId, 'page' => $page, 'total' => 0, 'list' => []], JSON_UNESCAPED_UNICODE);
+                return;
+            }
+            $where = '(' . implode(' OR ', $parts) . ')';
+            $sql = "SELECT `c`.`comment_id`,`c`.`comment_mid`,`c`.`comment_rid`,`c`.`comment_pid`,`c`.`user_id`,
+                           `c`.`comment_name`,`c`.`comment_content`,`c`.`comment_time`,
+                           `c`.`comment_up`,`c`.`comment_down`,`c`.`comment_reply`,
+                           COALESCE(NULLIF(`v`.`vod_name`, ''), '') AS `vod_name`,
+                           COALESCE(NULLIF(`v`.`vod_pic`, ''), '') AS `vod_pic`,
+                           COALESCE(NULLIF(`u`.`user_portrait`, ''), '') AS `user_portrait`,
+                           COALESCE(NULLIF(`u`.`user_name`, ''), '') AS `user_login`,
+                           COALESCE(
+                               NULLIF(`u`.`user_nick_name`, ''),
+                               NULLIF(`u`.`user_name`, ''),
+                               `c`.`comment_name`
+                           ) AS `display_name`,
+                           COALESCE(
+                               NULLIF(`u`.`user_nick_name`, ''),
+                               NULLIF(`u`.`user_name`, ''),
+                               `c`.`comment_name`
+                           ) AS `user_name`
+                    FROM `{$tComment}` `c`
+                    LEFT JOIN `{$tVod}` `v` ON `v`.`vod_id` = `c`.`comment_rid`
+                    LEFT JOIN `{$tUser}` `u` ON (
+                        (`c`.`user_id` > 0 AND `u`.`user_id` = `c`.`user_id`)
+                        OR (
+                            (`c`.`user_id` IS NULL OR `c`.`user_id` = 0)
+                            AND (
+                                `u`.`user_name` = `c`.`comment_name`
+                                OR `u`.`user_nick_name` = `c`.`comment_name`
+                            )
+                        )
+                    )
+                    WHERE {$where}
+                    ORDER BY `c`.`comment_id` DESC
+                    LIMIT {$limit} OFFSET {$offset}";
+            $st = $pdo->prepare($sql);
+            $st->execute($args);
+            $rows = $st->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($rows as &$row) {
+                $portrait = trim((string)($row['user_portrait'] ?? ''));
+                $low = strtolower($portrait);
+                $isPlaceholder = $portrait === ''
+                    || strpos($low, 'duface') !== false
+                    || strpos($low, 'touxiang.png') !== false
+                    || strpos($low, 'nopic') !== false
+                    || strpos($low, 'noavatar') !== false
+                    || strpos($low, 'default_avatar') !== false;
+                if ($isPlaceholder) {
+                    $row['user_portrait'] = '';
+                    $row['avatar'] = '';
+                } else {
+                    if (str_starts_with($portrait, '//')) {
+                        $portrait = 'https:' . $portrait;
+                    } elseif ($portrait !== '' && !preg_match('#^https?://#i', $portrait)) {
+                        $portrait = rtrim(huihuoPublicBase(), '/') . '/' . ltrim($portrait, '/');
+                    }
+                    $row['user_portrait'] = $portrait;
+                    $row['avatar'] = $portrait;
+                }
+                $pic = trim((string)($row['vod_pic'] ?? ''));
+                if ($pic !== '' && !preg_match('#^https?://#i', $pic) && !str_starts_with($pic, '//')) {
+                    $row['vod_pic'] = rtrim(huihuoPublicBase(), '/') . '/' . ltrim($pic, '/');
+                } elseif (str_starts_with($pic, '//')) {
+                    $row['vod_pic'] = 'https:' . $pic;
+                }
+            }
+            unset($row);
+            echo json_encode([
+                'code' => 1,
+                'user_id' => $userId,
+                'page' => $page,
+                'total' => count($rows),
+                'list' => $rows,
+            ], JSON_UNESCAPED_UNICODE);
+            return;
+            } catch (Throwable $e) {
+                echo json_encode([
+                    'code' => 0,
+                    'msg' => 'comment_mine error: ' . $e->getMessage(),
+                    'list' => [],
+                ], JSON_UNESCAPED_UNICODE);
+                return;
+            }
         }
         if ($api === 'app_update') {
             $platform = strtolower(trim((string)($_GET['platform'] ?? 'android')));
@@ -1489,6 +1944,7 @@ function huihuoHandleApi(
                     'app_name' => (string)($row['app_name'] ?? ''),
                     'icon_url' => (string)($row['icon_url'] ?? ''),
                     'bg_url' => (string)($row['bg_url'] ?? ''),
+                    'website_url' => (string)($row['website_url'] ?? ''),
                     'updated_at' => (int)$row['updated_at'],
                 ],
             ], JSON_UNESCAPED_UNICODE);
@@ -1507,6 +1963,27 @@ function huihuoHandleApi(
             }
             $decoded = json_decode($json, true);
             echo json_encode(['code' => 1, 'data' => $decoded], JSON_UNESCAPED_UNICODE);
+            return;
+        }
+        if ($api === 'qq_oauth') {
+            $raw = file_get_contents('php://input');
+            $j = json_decode($raw ?: '[]', true);
+            if (!is_array($j)) {
+                $j = $_POST;
+            }
+            try {
+                $data = huihuoQqOauthLogin($pdo, $prefix, $tConfig, $root, is_array($j) ? $j : []);
+                echo json_encode([
+                    'code' => 1,
+                    'msg' => '登录成功',
+                    'data' => $data,
+                ], JSON_UNESCAPED_UNICODE);
+            } catch (Throwable $e) {
+                echo json_encode([
+                    'code' => 0,
+                    'msg' => $e->getMessage() !== '' ? $e->getMessage() : 'QQ 登录失败',
+                ], JSON_UNESCAPED_UNICODE);
+            }
             return;
         }
         if ($api === 'update_report') {
@@ -1558,6 +2035,339 @@ function huihuoHandleApi(
             echo json_encode(['code' => 1, 'msg' => 'ok'], JSON_UNESCAPED_UNICODE);
             return;
         }
+        if ($api === 'checkin' || $api === 'checkin_status') {
+            $raw = file_get_contents('php://input');
+            $body = [];
+            if (is_string($raw) && $raw !== '') {
+                $decoded = json_decode($raw, true);
+                if (is_array($decoded)) {
+                    $body = $decoded;
+                }
+            }
+            $userId = (int)($body['user_id'] ?? $_GET['user_id'] ?? $_POST['user_id'] ?? 0);
+            if ($userId <= 0) {
+                echo json_encode(['code' => 0, 'msg' => '请先登录'], JSON_UNESCAPED_UNICODE);
+                return;
+            }
+            $tUser = $prefix . 'user';
+            $tCheckin = $prefix . 'huihuo_checkin';
+            huihuoEnsureCheckinTable($pdo, $tCheckin);
+            // 兼容签到插件字段
+            huihuoEnsureColumn($pdo, $tUser, 'user_sign_time', 'int unsigned NOT NULL DEFAULT 0');
+
+            $reward = (int)(huihuoKvGet($pdo, $tConfig, 'checkin_points') ?? '10');
+            if ($reward <= 0) {
+                $reward = 10;
+            }
+            $today = (int)date('Ymd');
+            $yesterday = (int)date('Ymd', time() - 86400);
+
+            $st = $pdo->prepare(
+                "SELECT `last_day`,`streak`,`total` FROM `{$tCheckin}` WHERE `user_id`=? LIMIT 1"
+            );
+            $st->execute([$userId]);
+            $row = $st->fetch(PDO::FETCH_ASSOC) ?: null;
+            $lastDay = (int)($row['last_day'] ?? 0);
+            $streak = (int)($row['streak'] ?? 0);
+            $total = (int)($row['total'] ?? 0);
+            $checkedToday = $lastDay === $today;
+
+            // 若 checkin 表无记录，用 user_sign_time 兜底判断今日是否已签
+            if (!$checkedToday && !$row) {
+                $u = $pdo->prepare("SELECT `user_sign_time` FROM `{$tUser}` WHERE `user_id`=? LIMIT 1");
+                $u->execute([$userId]);
+                $signTs = (int)($u->fetchColumn() ?: 0);
+                if ($signTs > 0 && (int)date('Ymd', $signTs) === $today) {
+                    $checkedToday = true;
+                    $lastDay = $today;
+                }
+            }
+
+            if ($api === 'checkin_status') {
+                $pts = $pdo->prepare("SELECT `user_points` FROM `{$tUser}` WHERE `user_id`=? LIMIT 1");
+                $pts->execute([$userId]);
+                $points = (int)($pts->fetchColumn() ?: 0);
+                echo json_encode([
+                    'code' => 1,
+                    'data' => [
+                        'checked_today' => $checkedToday ? 1 : 0,
+                        'streak' => $streak,
+                        'total' => $total,
+                        'reward_points' => $reward,
+                        'user_points' => $points,
+                        'last_day' => $lastDay,
+                    ],
+                ], JSON_UNESCAPED_UNICODE);
+                return;
+            }
+
+            // checkin
+            if ($checkedToday) {
+                $pts = $pdo->prepare("SELECT `user_points` FROM `{$tUser}` WHERE `user_id`=? LIMIT 1");
+                $pts->execute([$userId]);
+                echo json_encode([
+                    'code' => 0,
+                    'msg' => '今日已打卡',
+                    'data' => [
+                        'checked_today' => 1,
+                        'streak' => $streak,
+                        'total' => $total,
+                        'reward_points' => 0,
+                        'user_points' => (int)($pts->fetchColumn() ?: 0),
+                    ],
+                ], JSON_UNESCAPED_UNICODE);
+                return;
+            }
+
+            $pdo->beginTransaction();
+            try {
+                $exists = $pdo->prepare("SELECT `user_id` FROM `{$tUser}` WHERE `user_id`=? LIMIT 1 FOR UPDATE");
+                $exists->execute([$userId]);
+                if (!$exists->fetchColumn()) {
+                    throw new RuntimeException('用户不存在');
+                }
+
+                $newStreak = ($lastDay === $yesterday) ? ($streak + 1) : 1;
+                $newTotal = $total + 1;
+                $pdo->prepare(
+                    "INSERT INTO `{$tCheckin}` (`user_id`,`last_day`,`streak`,`total`,`updated_at`)
+                     VALUES (?,?,?,?,?)
+                     ON DUPLICATE KEY UPDATE
+                       `last_day`=VALUES(`last_day`),
+                       `streak`=VALUES(`streak`),
+                       `total`=VALUES(`total`),
+                       `updated_at`=VALUES(`updated_at`)"
+                )->execute([$userId, $today, $newStreak, $newTotal, time()]);
+
+                $pdo->prepare(
+                    "UPDATE `{$tUser}` SET `user_points`=`user_points`+?,`user_sign_time`=? WHERE `user_id`=?"
+                )->execute([$reward, time(), $userId]);
+
+                $pts = $pdo->prepare("SELECT `user_points` FROM `{$tUser}` WHERE `user_id`=? LIMIT 1");
+                $pts->execute([$userId]);
+                $points = (int)($pts->fetchColumn() ?: 0);
+                $pdo->commit();
+
+                echo json_encode([
+                    'code' => 1,
+                    'msg' => '打卡成功，积分 +' . $reward,
+                    'data' => [
+                        'checked_today' => 1,
+                        'streak' => $newStreak,
+                        'total' => $newTotal,
+                        'reward_points' => $reward,
+                        'user_points' => $points,
+                    ],
+                ], JSON_UNESCAPED_UNICODE);
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                echo json_encode(['code' => 0, 'msg' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+            }
+            return;
+        }
+        if ($api === 'user_vip') {
+            $userId = (int)($_GET['user_id'] ?? $_POST['user_id'] ?? 0);
+            if ($userId <= 0) {
+                echo json_encode(['code' => 0, 'msg' => 'user_id required'], JSON_UNESCAPED_UNICODE);
+                return;
+            }
+            $tUser = $prefix . 'user';
+            $tGroup = $prefix . 'group';
+            $st = $pdo->prepare(
+                "SELECT `u`.`user_id`,`u`.`user_name`,`u`.`user_nick_name`,`u`.`user_points`,
+                        `u`.`user_end_time`,`u`.`group_id`,
+                        `u`.`user_login_time`,`u`.`user_login_ip`,
+                        `u`.`user_last_login_time`,`u`.`user_last_login_ip`,
+                        COALESCE(NULLIF(`g`.`group_name`,''),'') AS `group_name`
+                 FROM `{$tUser}` `u`
+                 LEFT JOIN `{$tGroup}` `g` ON `g`.`group_id`=`u`.`group_id`
+                 WHERE `u`.`user_id`=? LIMIT 1"
+            );
+            $st->execute([$userId]);
+            $row = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$row) {
+                echo json_encode(['code' => 0, 'msg' => 'user not found'], JSON_UNESCAPED_UNICODE);
+                return;
+            }
+            $endRaw = trim((string)($row['user_end_time'] ?? ''));
+            $endTs = 0;
+            if (is_numeric($endRaw)) {
+                $endTs = (int)$endRaw;
+                if ($endTs > 9999999999) {
+                    $endTs = (int)floor($endTs / 1000);
+                }
+            } elseif (preg_match('/^(\d{4})-(\d{1,2})-(\d{1,2})/', $endRaw, $m)) {
+                $endTs = (int)strtotime(sprintf('%04d-%02d-%02d', (int)$m[1], (int)$m[2], (int)$m[3]));
+            }
+            $endText = '';
+            if ($endTs > 1000000000) {
+                // 远未来才算永久占位
+                if ($endTs >= 4102444800) {
+                    $endText = '永久';
+                } else {
+                    $endText = date('Y-m-d', $endTs);
+                }
+            }
+            $loginTs = (int)($row['user_login_time'] ?? 0);
+            if ($loginTs <= 0) {
+                $loginTs = (int)($row['user_last_login_time'] ?? 0);
+            }
+            $loginTimeText = $loginTs > 1000000000 ? date('Y-m-d H:i', $loginTs) : '';
+            $loginIpRaw = trim((string)($row['user_login_ip'] ?? ''));
+            if ($loginIpRaw === '' || $loginIpRaw === '0') {
+                $loginIpRaw = trim((string)($row['user_last_login_ip'] ?? ''));
+            }
+            $loginIp = $loginIpRaw;
+            if ($loginIp !== '' && ctype_digit($loginIp)) {
+                $loginIp = long2ip((int)$loginIp) ?: $loginIp;
+            }
+            echo json_encode([
+                'code' => 1,
+                'data' => [
+                    'user_id' => (int)$row['user_id'],
+                    'user_name' => (string)($row['user_name'] ?? ''),
+                    'user_nick_name' => (string)($row['user_nick_name'] ?? ''),
+                    'user_points' => (int)($row['user_points'] ?? 0),
+                    'group_id' => (int)($row['group_id'] ?? 0),
+                    'group_name' => (string)($row['group_name'] ?? ''),
+                    'user_end_time' => $endRaw,
+                    'user_end_ts' => $endTs,
+                    'user_end_text' => $endText,
+                    'user_login_time' => $loginTs,
+                    'user_login_time_text' => $loginTimeText,
+                    'user_login_ip' => $loginIp,
+                ],
+            ], JSON_UNESCAPED_UNICODE);
+            return;
+        }
+        if ($api === 'art_detail') {
+            $artId = (int)($_GET['id'] ?? $_GET['art_id'] ?? 0);
+            if ($artId <= 0) {
+                echo json_encode(['code' => 0, 'msg' => 'id required'], JSON_UNESCAPED_UNICODE);
+                return;
+            }
+            $tArt = $prefix . 'art';
+            $tType = $prefix . 'type';
+            $st = $pdo->prepare(
+                "SELECT `a`.*, COALESCE(NULLIF(`t`.`type_name`,''),'') AS `type_name`
+                 FROM `{$tArt}` `a`
+                 LEFT JOIN `{$tType}` `t` ON `t`.`type_id`=`a`.`type_id`
+                 WHERE `a`.`art_id`=? LIMIT 1"
+            );
+            $st->execute([$artId]);
+            $row = $st->fetch(PDO::FETCH_ASSOC);
+            if (!$row) {
+                echo json_encode(['code' => 0, 'msg' => 'not found'], JSON_UNESCAPED_UNICODE);
+                return;
+            }
+            echo json_encode(['code' => 1, 'data' => $row], JSON_UNESCAPED_UNICODE);
+            return;
+        }
+        if ($api === 'vod_collect_sync') {
+            // 扫描 mac_vod 新增，写入一条「片库更新」公告（幂等：按 last_vod_id）
+            $tVod = $prefix . 'vod';
+            $pdo->beginTransaction();
+            try {
+                $pdo->exec(
+                    "INSERT IGNORE INTO `{$tConfig}` (`k`,`v`,`updated_at`) VALUES ('vod_collect_last_id','0'," . time() . ')'
+                );
+                $st = $pdo->query(
+                    "SELECT `v` FROM `{$tConfig}` WHERE `k`='vod_collect_last_id' FOR UPDATE"
+                );
+                $lastId = (int)($st ? $st->fetchColumn() : 0);
+                // 首次：只记当前最大 id 作基线，不刷历史公告
+                if ($lastId <= 0) {
+                    $maxNow = (int)$pdo->query(
+                        "SELECT COALESCE(MAX(`vod_id`),0) FROM `{$tVod}` WHERE `vod_status`=1"
+                    )->fetchColumn();
+                    huihuoKvSet($pdo, $tConfig, 'vod_collect_last_id', (string)$maxNow);
+                    $pdo->commit();
+                    echo json_encode([
+                        'code' => 1,
+                        'msg' => 'baseline',
+                        'added' => 0,
+                        'titles' => [],
+                        'last_id' => $maxNow,
+                    ], JSON_UNESCAPED_UNICODE);
+                    return;
+                }
+                $q = $pdo->prepare(
+                    "SELECT `vod_id`,`vod_name` FROM `{$tVod}`
+                     WHERE `vod_id`>? AND `vod_status`=1
+                     ORDER BY `vod_id` ASC LIMIT 80"
+                );
+                $q->execute([$lastId]);
+                $rows = $q->fetchAll(PDO::FETCH_ASSOC) ?: [];
+                if (!$rows) {
+                    $pdo->commit();
+                    echo json_encode([
+                        'code' => 1,
+                        'msg' => 'ok',
+                        'added' => 0,
+                        'titles' => [],
+                        'last_id' => $lastId,
+                    ], JSON_UNESCAPED_UNICODE);
+                    return;
+                }
+                $titles = [];
+                $maxId = $lastId;
+                foreach ($rows as $r) {
+                    $vid = (int)($r['vod_id'] ?? 0);
+                    $name = trim((string)($r['vod_name'] ?? ''));
+                    if ($vid > $maxId) {
+                        $maxId = $vid;
+                    }
+                    if ($name !== '') {
+                        $titles[] = $name;
+                    }
+                }
+                $titles = array_values(array_unique($titles));
+                $n = count($titles);
+                $show = array_slice($titles, 0, 30);
+                $bodyLines = [];
+                foreach ($show as $i => $t) {
+                    $bodyLines[] = ($i + 1) . '. ' . $t;
+                }
+                if ($n > count($show)) {
+                    $bodyLines[] = '……等共 ' . $n . ' 部';
+                }
+                $title = '片库更新 · 新增 ' . $n . ' 部';
+                $body = implode("\n", $bodyLines);
+                $pdo->prepare(
+                    "INSERT INTO `{$tNotify}`
+                    (`title`,`body`,`link`,`tag`,`subtitle`,`cover_url`,`accent`,`style`,`status`,`created_at`)
+                    VALUES (?,?,?,?,?,?,?,?,1,?)"
+                )->execute([
+                    $title,
+                    $body,
+                    '',
+                    '片库更新',
+                    '采集入库',
+                    '',
+                    '#1ECAD3',
+                    'important',
+                    time(),
+                ]);
+                huihuoKvSet($pdo, $tConfig, 'vod_collect_last_id', (string)$maxId);
+                huihuoRefreshNotifyJson($pdo, $tNotify, $root);
+                $pdo->commit();
+                echo json_encode([
+                    'code' => 1,
+                    'msg' => 'ok',
+                    'added' => $n,
+                    'titles' => $show,
+                    'last_id' => $maxId,
+                ], JSON_UNESCAPED_UNICODE);
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                echo json_encode(['code' => 0, 'msg' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+            }
+            return;
+        }
         if ($api === 'redeem') {
             $raw = file_get_contents('php://input');
             $body = [];
@@ -1595,18 +2405,26 @@ function huihuoHandleApi(
                 $rval = (int)$row['reward_value'];
                 $tUser = $prefix . 'user';
                 if ($rtype === 'vip_days') {
-                    $u = $pdo->prepare("SELECT `user_end_time` FROM `{$tUser}` WHERE `user_id`=? LIMIT 1");
+                    $u = $pdo->prepare(
+                        "SELECT `user_end_time`,`group_id` FROM `{$tUser}` WHERE `user_id`=? LIMIT 1"
+                    );
                     $u->execute([$userId]);
-                    $cur = $u->fetchColumn();
+                    $urow = $u->fetch(PDO::FETCH_ASSOC) ?: [];
+                    $cur = $urow['user_end_time'] ?? 0;
                     $now = time();
                     $base = is_numeric($cur) ? (int)$cur : 0;
                     if ($base < $now) {
                         $base = $now;
                     }
                     $end = $base + max(1, $rval) * 86400;
+                    // 注册会员(≤2) 升到默认 VIP 组 3，已是更高组则保留
+                    $gid = (int)($urow['group_id'] ?? 0);
+                    if ($gid < 3) {
+                        $gid = 3;
+                    }
                     $pdo->prepare(
-                        "UPDATE `{$tUser}` SET `user_end_time`=? WHERE `user_id`=?"
-                    )->execute([(string)$end, $userId]);
+                        "UPDATE `{$tUser}` SET `user_end_time`=?,`group_id`=? WHERE `user_id`=?"
+                    )->execute([(string)$end, $gid, $userId]);
                     $rewardText = '会员 +' . $rval . ' 天';
                 } else {
                     $pdo->prepare(

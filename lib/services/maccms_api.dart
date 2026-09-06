@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -6,8 +7,11 @@ import 'package:http/http.dart' as http;
 
 import '../config/api_config.dart';
 import '../models/movie_models.dart';
+import '../utils/qq_avatar.dart';
 import '../utils/relative_time.dart';
+import 'huihuo_http.dart';
 import 'huihuo_panel_api.dart';
+import 'local_my_comments_store.dart';
 
 /// 苹果 CMS V10 `provide/vod` 客户端
 class MacCmsApi {
@@ -585,28 +589,293 @@ class MacCmsApi {
     final out = <CmsArticle>[];
     for (final item in raw) {
       if (item is! Map) continue;
-      final m = Map<String, dynamic>.from(item);
-      final id = '${m['art_id'] ?? m['id'] ?? ''}'.trim();
-      final title = '${m['art_name'] ?? m['name'] ?? ''}'.trim();
-      if (id.isEmpty || title.isEmpty) continue;
-      final picRaw =
-          '${m['art_pic'] ?? m['art_pic_thumb'] ?? m['pic'] ?? m['art_img'] ?? ''}'
-              .trim();
-      out.add(
-        CmsArticle(
-          id: id,
-          title: title,
-          subTitle: '${m['art_sub'] ?? m['art_blurb'] ?? ''}'.trim(),
-          content: _stripHtml('${m['art_content'] ?? m['content'] ?? ''}'),
-          coverUrl: _absoluteCmsUrl(picRaw),
-          timeText: '${m['art_time'] ?? m['time'] ?? ''}'.trim(),
-          author: '${m['art_author'] ?? m['author'] ?? ''}'.trim(),
-          typeName: '${m['type_name'] ?? ''}'.trim(),
-        ),
-      );
+      final art = articleFromCms(Map<String, dynamic>.from(item));
+      if (art == null) continue;
+      out.add(art);
       if (out.length >= limit) break;
     }
     return out;
+  }
+
+  /// 单篇详情：provide/art?ac=detail&ids= → 面板 DB 兜底
+  Future<CmsArticle?> fetchArticleDetail(String id) async {
+    final aid = id.trim();
+    if (aid.isEmpty) return null;
+
+    try {
+      final uri = Uri.parse(ApiConfig.macCmsArtProvide).replace(
+        queryParameters: {
+          if (ApiConfig.useCmsWebProxy) ...{
+            'target': 'art',
+          },
+          'ac': 'detail',
+          'ids': aid,
+        },
+      );
+      final res = await _client
+          .get(
+            uri,
+            headers: const {
+              'Accept': 'application/json',
+              'User-Agent': _ua,
+            },
+          )
+          .timeout(const Duration(seconds: 20));
+      final body = utf8.decode(res.bodyBytes).trim();
+      if (body.startsWith('{')) {
+        final decoded = jsonDecode(body);
+        if (decoded is Map &&
+            ((decoded['code'] as num?)?.toInt() ?? 0) == 1) {
+          final raw = decoded['list'];
+          if (raw is List && raw.isNotEmpty && raw.first is Map) {
+            final art = articleFromCms(
+              Map<String, dynamic>.from(raw.first as Map),
+            );
+            if (art != null &&
+                (art.content.trim().isNotEmpty ||
+                    art.contentHtml.trim().isNotEmpty)) {
+              return art;
+            }
+            if (art != null) {
+              final panel = await _fetchArticleFromPanel(aid);
+              return panel ?? art;
+            }
+          }
+        }
+      }
+    } catch (_) {}
+
+    return _fetchArticleFromPanel(aid);
+  }
+
+  Future<CmsArticle?> _fetchArticleFromPanel(String id) async {
+    try {
+      final res = await huihuoHttpGet(
+        ApiConfig.huihuoPanelArtDetailUrl(id),
+        timeout: const Duration(seconds: 12),
+      );
+      if (res.status < 200 || res.status >= 300) return null;
+      final body = res.body.trim();
+      if (!body.startsWith('{')) return null;
+      final decoded = jsonDecode(body);
+      if (decoded is! Map) return null;
+      if (decoded['code'] != 1 && decoded['code'] != '1') return null;
+      final data = decoded['data'];
+      if (data is! Map) return null;
+      return articleFromCms(Map<String, dynamic>.from(data));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 解析 CMS art 字段（provide / 面板 DB）
+  static CmsArticle? articleFromCms(Map<String, dynamic> m) {
+    final id = '${m['art_id'] ?? m['id'] ?? ''}'.trim();
+    final title = '${m['art_name'] ?? m['name'] ?? ''}'.trim();
+    if (id.isEmpty || title.isEmpty) return null;
+
+    final picRaw =
+        '${m['art_pic'] ?? m['art_pic_thumb'] ?? m['pic'] ?? m['art_img'] ?? ''}'
+            .trim();
+    final htmlRaw =
+        '${m['art_content'] ?? m['content'] ?? m['art_body'] ?? ''}'.trim();
+    final blurb =
+        '${m['art_blurb'] ?? m['art_sub'] ?? m['art_remarks'] ?? ''}'.trim();
+    final timeRaw =
+        '${m['art_time'] ?? m['art_pubdate'] ?? m['time'] ?? ''}'.trim();
+    final hits = int.tryParse('${m['art_hits'] ?? m['hits'] ?? 0}') ?? 0;
+    final typeId = int.tryParse('${m['type_id'] ?? 0}') ?? 0;
+
+    return CmsArticle(
+      id: id,
+      title: title,
+      subTitle: blurb.isEmpty ? _htmlToPlain(htmlRaw).trim() : _stripHtml(blurb),
+      content: _htmlToPlain(htmlRaw),
+      contentHtml: htmlRaw,
+      coverUrl: _absoluteCmsUrl(picRaw),
+      timeText: _formatArtTime(timeRaw),
+      author: '${m['art_author'] ?? m['author'] ?? ''}'.trim(),
+      typeName: '${m['type_name'] ?? ''}'.trim(),
+      typeId: typeId,
+      from: '${m['art_from'] ?? m['from'] ?? ''}'.trim(),
+      remarks: '${m['art_remarks'] ?? ''}'.trim(),
+      hits: hits,
+      tag: '${m['art_tag'] ?? m['tag'] ?? ''}'.trim(),
+    );
+  }
+
+  static String _formatArtTime(String raw) {
+    final t = raw.trim();
+    if (t.isEmpty || t == '0') return '';
+    final ts = int.tryParse(t);
+    if (ts != null && ts > 1000000000) {
+      final sec = ts > 9999999999 ? ts ~/ 1000 : ts;
+      final dt = DateTime.fromMillisecondsSinceEpoch(sec * 1000);
+      return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+    }
+    final m = RegExp(r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})').firstMatch(t);
+    if (m != null) {
+      return '${m.group(1)}-${m.group(2)!.padLeft(2, '0')}-${m.group(3)!.padLeft(2, '0')}';
+    }
+    return t;
+  }
+
+  static String _htmlToPlain(String raw) {
+    if (raw.trim().isEmpty) return '';
+    var s = raw
+        .replaceAll(RegExp(r'<script[\s\S]*?</script>', caseSensitive: false), '')
+        .replaceAll(RegExp(r'<style[\s\S]*?</style>', caseSensitive: false), '')
+        .replaceAll(RegExp(r'<br\s*/?>', caseSensitive: false), '\n')
+        .replaceAll(RegExp(r'</p>', caseSensitive: false), '\n\n')
+        .replaceAll(RegExp(r'</div>', caseSensitive: false), '\n')
+        .replaceAll(RegExp(r'</h[1-6]>', caseSensitive: false), '\n\n')
+        .replaceAll(RegExp(r'<li[^>]*>', caseSensitive: false), '• ')
+        .replaceAll(RegExp(r'</li>', caseSensitive: false), '\n');
+    s = _stripHtml(s);
+    s = s
+        .replaceAll('&nbsp;', ' ')
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll('&amp;', '&')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&#39;', "'")
+        .replaceAll(RegExp(r'\n{3,}'), '\n\n')
+        .trim();
+    return s;
+  }
+
+  /// 追番表：动漫 + 剧集近期更新，按周几分组
+  Future<Map<int, List<Movie>>> fetchBangumiSchedule({int limit = 80}) async {
+    final out = <int, List<Movie>>{
+      for (var d = 1; d <= 7; d++) d: <Movie>[],
+    };
+    final seen = <String>{};
+
+    Future<void> ingest(List<Movie> list, {Map<String, int>? weekById}) async {
+      for (final m in list) {
+        if (!seen.add(m.id)) continue;
+        if ((m.coverUrl ?? '').isEmpty) continue;
+        // 偏剧集 / 动漫；纯电影（单集且无更新备注）弱优先
+        final wd = weekById?[m.id] ??
+            weekdayFromRemarks(m.remarks) ??
+            weekdayFromRemarks(m.tagline) ??
+            _weekdayFallback(m.id);
+        out[wd]!.add(m);
+      }
+    }
+
+    // 动漫分类 + 子类
+    final animeIds = {
+      ApiConfig.macCmsHomeTabTypeIds['动漫'] ?? 4,
+      ...ApiConfig.macCmsChildTypeIds(
+        ApiConfig.macCmsHomeTabTypeIds['动漫'] ?? 4,
+      ),
+    };
+    final tvIds = {
+      ApiConfig.macCmsHomeTabTypeIds['电视剧'] ?? 2,
+      ...ApiConfig.macCmsChildTypeIds(
+        ApiConfig.macCmsHomeTabTypeIds['电视剧'] ?? 2,
+      ),
+    };
+
+    final weekById = <String, int>{};
+
+    Future<void> pullTypes(Set<int> typeIds) async {
+      for (final tid in typeIds.take(8)) {
+        try {
+          final json = await _get({
+            'ac': 'detail',
+            't': '$tid',
+            'pg': '1',
+          });
+          final raw = json['list'];
+          if (raw is! List) continue;
+          final movies = <Movie>[];
+          for (final item in raw) {
+            if (item is! Map) continue;
+            final m = Map<String, dynamic>.from(item);
+            final movie = movieFromVod(m);
+            final id = movie.id;
+            final fromField = _weekdayFromCmsMap(m);
+            if (fromField != null) weekById[id] = fromField;
+            movies.add(movie);
+            if (movies.length >= limit ~/ 2) break;
+          }
+          await ingest(movies, weekById: weekById);
+        } catch (_) {}
+      }
+    }
+
+    await pullTypes(animeIds);
+    if (out.values.fold<int>(0, (a, b) => a + b.length) < 24) {
+      await pullTypes(tvIds);
+    }
+
+    // 仍空：全站最近更新兜底
+    if (out.values.every((e) => e.isEmpty)) {
+      final latest = await fetchLatest(limit: limit);
+      await ingest(latest, weekById: weekById);
+    }
+
+    // 每天最多 36 条
+    for (final e in out.entries) {
+      if (e.value.length > 36) {
+        out[e.key] = e.value.take(36).toList();
+      }
+    }
+    return out;
+  }
+
+  static int? weekdayFromRemarks(String raw) {
+    final r = raw.trim();
+    if (r.isEmpty) return null;
+    const map = {
+      '周一': 1,
+      '星期一': 1,
+      '周二': 2,
+      '星期二': 2,
+      '周三': 3,
+      '星期三': 3,
+      '周四': 4,
+      '星期四': 4,
+      '周五': 5,
+      '星期五': 5,
+      '周六': 6,
+      '星期六': 6,
+      '周日': 7,
+      '星期日': 7,
+      '周天': 7,
+    };
+    for (final e in map.entries) {
+      if (r.contains(e.key)) return e.value;
+    }
+    return null;
+  }
+
+  static int? _weekdayFromCmsMap(Map<String, dynamic> m) {
+    final w = int.tryParse('${m['vod_weekday'] ?? m['weekday'] ?? ''}');
+    if (w != null && w >= 1 && w <= 7) return w;
+    // 0=周日 的站点
+    if (w == 0) return 7;
+
+    final fromRemarks = weekdayFromRemarks('${m['vod_remarks'] ?? ''}');
+    if (fromRemarks != null) return fromRemarks;
+
+    final timeRaw =
+        '${m['vod_time'] ?? m['vod_time_add'] ?? m['vod_pubdate'] ?? ''}'
+            .trim();
+    final ts = int.tryParse(timeRaw);
+    if (ts != null && ts > 1000000000) {
+      final sec = ts > 9999999999 ? ts ~/ 1000 : ts;
+      return DateTime.fromMillisecondsSinceEpoch(sec * 1000).weekday;
+    }
+    final dt = DateTime.tryParse(timeRaw.replaceAll('/', '-'));
+    return dt?.weekday;
+  }
+
+  static int _weekdayFallback(String id) {
+    final n = int.tryParse(id) ?? id.hashCode.abs();
+    return (n % 7) + 1;
   }
 
   /// 最新更新（全站或指定分类）
@@ -1536,12 +1805,22 @@ class MacCmsApi {
       if (joined.contains('.mp4')) sc += 28;
       if (joined.contains('https://')) sc += 12;
       else if (joined.contains('http://')) sc += 6;
-      // 解析/套壳源往往卡顿，降权
+      // 解析/套壳/云播源：测速常「假绿」，降权
       if (name.contains('解析') ||
           name.contains('parse') ||
           name.contains('iframe') ||
-          name.contains('jump')) {
+          name.contains('jump') ||
+          name.contains('yun') ||
+          name.contains('云播') ||
+          name.contains('json')) {
         sc -= 45;
+      }
+      // 无真实后缀的壳地址再降
+      if (!joined.contains('.m3u8') &&
+          !joined.contains('.mp4') &&
+          !joined.contains('.ts') &&
+          (joined.contains('url=') || name.contains('yun'))) {
+        sc -= 40;
       }
       // 集数更全略加分（封顶）
       sc += s.episodes.length.clamp(0, 30);
@@ -1640,127 +1919,418 @@ class MacCmsApi {
         'Cookie': ?_commentCookie,
       };
 
-  /// 拉取评论：优先按片名（后台 link【片名】），再按影片 ID。
+  /// 拉取评论：严格按影片 ID，避免主题 ajax / 片名模糊匹配串台
   Future<List<MovieComment>> fetchComments(
     String vodId, {
     String? title,
     int page = 1,
   }) async {
     final id = vodId.trim();
-    final name = (title ?? '').trim();
-    if (id.isEmpty && name.isEmpty) return const [];
-
-    final rows = <Map<String, dynamic>>[];
-    final seen = <String>{};
-
-    void take(List<Map<String, dynamic>> list) {
-      for (final m in list) {
-        final cid = '${m['comment_id'] ?? m['id'] ?? ''}'.trim();
-        final key = cid.isNotEmpty
-            ? cid
-            : '${m['comment_content']}_${m['comment_time']}';
-        if (key.isEmpty || !seen.add(key)) continue;
-        rows.add(m);
-      }
+    if (id.isEmpty || !RegExp(r'^\d+$').hasMatch(id)) {
+      // 无可用数字 id 时不按片名猜，防止串到别的片
+      return const [];
     }
 
-    // 1) 片名（最稳：与后台「link【片名】」一致）
-    if (name.isNotEmpty) {
-      try {
-        take(await HuihuoPanelApi.fetchCommentRows(
-          name: name,
-          mid: 0,
-          page: page,
-        ).timeout(const Duration(seconds: 10)));
-      } catch (e) {
-        debugPrint('fetchComments by name: $e');
-      }
-    }
-
-    // 2) 片名反查到的真实 id
-    if (name.isNotEmpty && rows.isEmpty) {
-      try {
-        final realId = await _resolveVodIdByTitle(name);
-        if (realId != null && realId.isNotEmpty) {
-          take(await HuihuoPanelApi.fetchCommentRows(
-            rid: realId,
-            name: name,
-            mid: 0,
-            page: page,
-          ).timeout(const Duration(seconds: 10)));
-        }
-      } catch (e) {
-        debugPrint('fetchComments by resolved id: $e');
-      }
-    }
-
-    // 3) 页面上的 vod id
-    if (id.isNotEmpty && rows.isEmpty) {
-      try {
-        take(await HuihuoPanelApi.fetchCommentRows(
-          rid: id,
-          name: name,
-          mid: 0,
-          page: page,
-        ).timeout(const Duration(seconds: 10)));
-      } catch (e) {
-        debugPrint('fetchComments by rid: $e');
-      }
-    }
-
-    return _parseCommentJsonList(rows);
-  }
-
-  static String _normVodTitle(String raw) {
-    return raw
-        .replaceAll(RegExp(r'[【】\[\]\s]+'), '')
-        .trim()
-        .toLowerCase();
-  }
-
-  Future<String?> _resolveVodIdByTitle(String title) async {
-    final q = title.trim();
-    if (q.isEmpty) return null;
+    // 1) 面板按 comment_rid 精确过滤（主题 ajax 常串台）
     try {
-      final uri = _cmsUri('/index.php/ajax/suggest', {
-        'mid': '1',
-        'wd': q,
-      });
-      final res = await _client
-          .get(uri, headers: _commentHeaders)
-          .timeout(const Duration(seconds: 8));
-      if (res.statusCode != 200) return null;
-      final j = jsonDecode(utf8.decode(res.bodyBytes));
-      if (j is! Map) return null;
-      final list = j['list'];
-      if (list is! List || list.isEmpty) return null;
-      final want = _normVodTitle(q);
-      for (final e in list) {
-        if (e is! Map) continue;
-        final name = _normVodTitle('${e['name'] ?? ''}');
-        final sid = '${e['id'] ?? ''}'.trim();
-        if (sid.isEmpty) continue;
-        if (name == want || name.contains(want) || want.contains(name)) {
-          return sid;
-        }
+      final rows = await HuihuoPanelApi.fetchCommentRows(
+        rid: id,
+        name: '', // 禁止带片名，面板 OR 条件会串片
+        mid: 1,
+        page: page,
+      ).timeout(const Duration(seconds: 10));
+      if (rows.isNotEmpty) {
+        return [
+          for (final c in _parseCommentJsonList(rows)) _withQqAvatar(c),
+        ];
       }
-      final first = list.first;
-      if (first is Map) {
-        final sid = '${first['id'] ?? ''}'.trim();
-        if (sid.isNotEmpty) return sid;
+    } catch (e) {
+      debugPrint('panel comment_list: $e');
+    }
+
+    // 2) CMS ajax / 详情页（仍只用精确 rid）
+    try {
+      final ajax = await _fetchCommentsCmsAjax(id, page: page);
+      if (ajax.isNotEmpty) {
+        return [for (final c in ajax) _withQqAvatar(c)];
+      }
+    } catch (e) {
+      debugPrint('cms comment ajax $id: $e');
+    }
+    try {
+      final pageList = await _fetchCommentsFromDetailHtml(id);
+      if (pageList.isNotEmpty) {
+        return [for (final c in pageList) _withQqAvatar(c)];
+      }
+    } catch (e) {
+      debugPrint('cms comment detail $id: $e');
+    }
+    return const [];
+  }
+
+  static MovieComment _withQqAvatar(MovieComment c) {
+    if ((c.avatarUrl ?? '').trim().isNotEmpty) return c;
+    final qq = QqAvatar.urlFromCandidates([
+      c.userName,
+      c.id,
+    ]);
+    if (qq == null) return c;
+    return MovieComment(
+      id: c.id,
+      userName: c.userName,
+      content: c.content,
+      timeText: c.timeText,
+      timeMs: c.timeMs,
+      avatarUrl: qq,
+      up: c.up,
+      down: c.down,
+      replyCount: c.replyCount,
+      vodId: c.vodId,
+      vodName: c.vodName,
+      vodPic: c.vodPic,
+    );
+  }
+
+  Future<List<MovieComment>> _fetchCommentsCmsAjax(
+    String rid, {
+    int page = 1,
+  }) async {
+    final id = rid.trim();
+    if (id.isEmpty) return const [];
+    final paths = <String>[
+      '/index.php/comment/ajax.html',
+      '/index.php/comment/ajax',
+      '/index.php/ajax/comment.html',
+      '/index.php/ajax/comment',
+    ];
+    for (final path in paths) {
+      try {
+        final res = await _client
+            .get(
+              _cmsUri(path, {
+                'rid': id,
+                'mid': '1',
+                'page': '$page',
+                'limit': '40',
+              }),
+              headers: _commentHeaders,
+            )
+            .timeout(const Duration(seconds: 10));
+        _captureCookies(res);
+        if (res.statusCode < 200 || res.statusCode >= 300) continue;
+        final body = utf8.decode(res.bodyBytes);
+        final fromJson = _tryParseCommentJsonBody(body);
+        if (fromJson.isNotEmpty) return fromJson;
+        final html = _unwrapCommentHtml(body);
+        final parsed = _parseCommentHtml(html);
+        if (parsed.isNotEmpty) return parsed;
+      } catch (e) {
+        debugPrint('comment ajax $path: $e');
+      }
+    }
+    return const [];
+  }
+
+  Future<List<MovieComment>> _fetchCommentsFromDetailHtml(String rid) async {
+    final id = rid.trim();
+    if (id.isEmpty) return const [];
+    final uris = <Uri>[
+      _cmsUri('/index.php/vod/detail/id/$id.html'),
+      _cmsUri('/index.php/vod/detail/id/$id'),
+      Uri.parse('${ApiConfig.macCmsBase}/voddetail/$id.html'),
+    ];
+    for (final uri in uris) {
+      try {
+        final res = await _client
+            .get(uri, headers: {
+              ..._commentHeaders,
+              'Accept': 'text/html,*/*',
+            })
+            .timeout(const Duration(seconds: 12));
+        _captureCookies(res);
+        if (res.statusCode < 200 || res.statusCode >= 300) continue;
+        final html = utf8.decode(res.bodyBytes);
+        final parsed = _parseCommentHtml(html);
+        if (parsed.isNotEmpty) return parsed;
+      } catch (e) {
+        debugPrint('comment detail $uri: $e');
+      }
+    }
+    return const [];
+  }
+
+  List<MovieComment> _tryParseCommentJsonBody(String raw) {
+    final t = raw.trim();
+    if (t.isEmpty) return const [];
+    try {
+      final decoded = jsonDecode(t);
+      if (decoded is List) {
+        return _parseCommentJsonList(decoded);
+      }
+      if (decoded is Map) {
+        final map = Map<String, dynamic>.from(decoded);
+        final list = map['list'] ??
+            map['data'] ??
+            map['comments'] ??
+            (map['data'] is Map ? (map['data'] as Map)['list'] : null);
+        if (list is List) return _parseCommentJsonList(list);
+        for (final key in ['html', 'content', 'msg', 'data']) {
+          final v = map[key];
+          if (v is String && v.contains('<')) {
+            final p = _parseCommentHtml(_unwrapCommentHtml(v));
+            if (p.isNotEmpty) return p;
+          }
+        }
       }
     } catch (_) {}
-    return null;
+    return const [];
+  }
+
+  /// 我的评论：面板 → CMS → 本机备份（面板 500/未部署时仍能显示）
+  Future<List<MovieComment>> fetchMyComments({
+    required int userId,
+    int page = 1,
+    String userName = '',
+    String nickName = '',
+  }) async {
+    if (userId <= 0 &&
+        userName.trim().isEmpty &&
+        nickName.trim().isEmpty &&
+        (_commentCookie == null || _commentCookie!.isEmpty)) {
+      return LocalMyCommentsStore.list(userId: userId);
+    }
+
+    final aliases = <String>{
+      if (userName.trim().isNotEmpty) userName.trim(),
+      if (nickName.trim().isNotEmpty) nickName.trim(),
+      if (userId > 0) '$userId',
+      if (userId > 0) '用户$userId',
+    };
+
+    final remote = <MovieComment>[];
+
+    // 1) 面板
+    try {
+      final rows = await HuihuoPanelApi.fetchMyCommentRows(
+        userId: userId,
+        page: page,
+        userName: userName,
+        nickName: nickName,
+        aliases: aliases.toList(),
+      ).timeout(const Duration(seconds: 12));
+      remote.addAll([
+        for (final c in _parseCommentJsonList(rows)) _withQqAvatar(c),
+      ]);
+    } catch (e) {
+      debugPrint('panel comment_mine: $e');
+    }
+
+    // 2) CMS 会员中心（面板空/失败时）
+    if (remote.isEmpty) {
+      final paths = <(String, Map<String, String>)>[
+        ('/index.php/user/comment.html', {'page': '$page'}),
+        ('/index.php/user/comments.html', {'page': '$page'}),
+        ('/index.php/user/ajax_data', {'ac': 'comment', 'page': '$page'}),
+        ('/index.php/user/ajax_comment', {'page': '$page'}),
+      ];
+
+      for (final (path, q) in paths) {
+        try {
+          final res = await _client
+              .get(
+                _cmsUri(path, q),
+                headers: {
+                  ..._commentHeaders,
+                  'Accept': 'text/html,application/json,*/*',
+                  'Referer':
+                      '${ApiConfig.macCmsBase}/index.php/user/index.html',
+                },
+              )
+              .timeout(const Duration(seconds: 12));
+          _captureCookies(res);
+          if (res.statusCode < 200 || res.statusCode >= 300) continue;
+          final body = utf8.decode(res.bodyBytes);
+          if (body.contains('login') &&
+              body.contains('password') &&
+              !body.contains('comment') &&
+              !body.contains('评论')) {
+            continue;
+          }
+          final fromJson = _tryParseCommentJsonBody(body);
+          if (fromJson.isNotEmpty) {
+            remote.addAll([for (final c in fromJson) _withQqAvatar(c)]);
+            break;
+          }
+          final fromUser = _parseUserCommentHtml(body);
+          if (fromUser.isNotEmpty) {
+            remote.addAll([for (final c in fromUser) _withQqAvatar(c)]);
+            break;
+          }
+        } catch (e) {
+          debugPrint('my comments $path: $e');
+        }
+      }
+    }
+
+    // 3) 别名再试面板
+    if (remote.isEmpty) {
+      for (final alias in aliases) {
+        if (alias == userName.trim() || alias == nickName.trim()) continue;
+        try {
+          final rows = await HuihuoPanelApi.fetchMyCommentRows(
+            userId: 0,
+            page: page,
+            userName: alias,
+            nickName: '',
+          ).timeout(const Duration(seconds: 8));
+          if (rows.isNotEmpty) {
+            remote.addAll([
+              for (final c in _parseCommentJsonList(rows)) _withQqAvatar(c),
+            ]);
+            break;
+          }
+        } catch (_) {}
+      }
+    }
+
+    // 4) 本机备份合并
+    final local = await LocalMyCommentsStore.list(userId: userId);
+    if (remote.isNotEmpty && userId > 0) {
+      unawaited(
+        LocalMyCommentsStore.mergeRemote(remote, ownerUid: userId),
+      );
+    }
+
+    if (remote.isEmpty) return local;
+    if (local.isEmpty) return remote;
+
+    final seen = <String>{};
+    final merged = <MovieComment>[];
+    for (final c in [...remote, ...local]) {
+      final key = '${c.vodId}|${c.content.trim()}';
+      if (key.length < 2 || !seen.add(key)) continue;
+      merged.add(c);
+    }
+    merged.sort((a, b) => b.timeMs.compareTo(a.timeMs));
+    return merged;
+  }
+
+  /// 会员中心「我的评论」列表
+  static List<MovieComment> _parseUserCommentHtml(String html) {
+    if (html.trim().isEmpty) return const [];
+    final blocks = <String>[];
+    final liRe = RegExp(
+      r'''<li\b[^>]*class=["'][^"']*(?:comment|comm|cmt)[^"']*["'][^>]*>([\s\S]*?)</li>''',
+      caseSensitive: false,
+    );
+    blocks.addAll([for (final m in liRe.allMatches(html)) m.group(1) ?? '']);
+    if (blocks.isEmpty) {
+      final trRe = RegExp(
+        r'''<tr\b[^>]*>([\s\S]*?)</tr>''',
+        caseSensitive: false,
+      );
+      for (final m in trRe.allMatches(html)) {
+        final b = m.group(1) ?? '';
+        if (b.contains('/vod/detail') ||
+            b.contains('comment') ||
+            RegExp(r'第\s*\d+\s*集').hasMatch(b)) {
+          blocks.add(b);
+        }
+      }
+    }
+    if (blocks.isEmpty) {
+      final cardRe = RegExp(
+        r'''<(?:div|li|tr)\b[^>]*>[\s\S]*?/vod/detail/[\s\S]*?</(?:div|li|tr)>''',
+        caseSensitive: false,
+      );
+      blocks.addAll([for (final m in cardRe.allMatches(html)) m.group(0) ?? '']);
+    }
+
+    final out = <MovieComment>[];
+    var i = 0;
+    for (final block in blocks) {
+      if (block.trim().isEmpty) continue;
+      final content = _cleanCommentBody(
+        _stripHtml(
+          _matchGroup(block, [
+                r'''<p\b[^>]*>([\s\S]*?)</p>''',
+                r'''class=["'][^"']*content[^"']*["'][^>]*>([\s\S]*?)</''',
+                r'''class=["'][^"']*text[^"']*["'][^>]*>([\s\S]*?)</''',
+              ]) ??
+              '',
+        ),
+      );
+      var body = content;
+      if (body.isEmpty) {
+        body = _cleanCommentBody(_stripHtml(block));
+      }
+      if (body.length < 2) continue;
+
+      final vodId = _matchGroup(block, [
+            r'''/vod/detail/id/(\d+)''',
+            r'''voddetail/(\d+)''',
+            r'''data-id=["'](\d+)["']''',
+          ]) ??
+          '';
+      final vodName = _stripHtml(
+        _matchGroup(block, [
+              r'''/vod/detail/[^"']*["'][^>]*>([^<]{1,40})</a>''',
+              r'''title=["']([^"']+)["']''',
+            ]) ??
+            '',
+      ).trim();
+      final vodPic = _matchGroup(block, [
+            r'''<img[^>]+src=["']([^"']+)["']''',
+          ]) ??
+          '';
+      final time = _stripHtml(
+        _matchGroup(block, [
+              r'(\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:\s+\d{1,2}:\d{2})?)',
+              r'(\d+\s*(?:秒|分钟|小时|天)前)',
+            ]) ??
+            '',
+      );
+
+      if (vodName.isNotEmpty) {
+        body = body.replaceFirst(vodName, '').trim();
+      }
+      if (body.isEmpty) continue;
+
+      out.add(
+        MovieComment(
+          id: 'mine_${vodId}_${i++}',
+          userName: '我',
+          content: body,
+          timeText: time,
+          timeMs: _parseCommentTimeMs(time),
+          avatarUrl: null,
+          vodId: vodId,
+          vodName: vodName,
+          vodPic: () {
+            final p = vodPic.trim();
+            if (p.isEmpty) return '';
+            return _resolveCommentAvatar(p) ?? p;
+          }(),
+        ),
+      );
+    }
+    return out;
   }
 
   static bool _isDefaultCommentAvatar(String p) {
     final low = p.toLowerCase();
+    // 仅过滤明确占位图，勿误伤 /user/xxx/avatar 等真实路径
     return low.contains('duface') ||
-        low.contains('touxiang') ||
+        low.contains('touxiang.png') ||
         low.contains('nopic') ||
         low.contains('noavatar') ||
-        low.contains('/user/avatar') ||
-        (low.contains('default') && low.contains('avatar'));
+        low.endsWith('/avatar.png') ||
+        low.endsWith('/avatar.gif') ||
+        low.contains('default_avatar') ||
+        low.contains('default-avatar') ||
+        (low.contains('static') &&
+            low.contains('avatar') &&
+            low.contains('default'));
   }
 
   static String? _resolveCommentAvatar(dynamic raw) {
@@ -1821,6 +2391,17 @@ class MacCmsApi {
       final name = _commentDisplayName(m);
       final timeRaw = m['comment_time'] ?? m['time'] ?? '';
       final timeMs = toEpochMs(timeRaw);
+      final portrait = _resolveCommentAvatar(
+            m['user_portrait'] ?? m['avatar'] ?? m['portrait'] ?? '',
+          ) ??
+          QqAvatar.urlFromCandidates([
+            '${m['user_login'] ?? ''}',
+            '${m['user_name'] ?? ''}',
+            '${m['comment_name'] ?? ''}',
+            name,
+            '${m['user_id'] ?? ''}',
+            '${m['user_qq'] ?? m['qq'] ?? ''}',
+          ]);
       out.add(
         MovieComment(
           id: id.isEmpty ? '${out.length}' : id,
@@ -1828,12 +2409,20 @@ class MacCmsApi {
           content: content,
           timeText: '$timeRaw',
           timeMs: timeMs,
-          avatarUrl: _resolveCommentAvatar(
-            m['user_portrait'] ?? m['avatar'] ?? m['portrait'] ?? '',
-          ),
+          avatarUrl: portrait,
           up: _toInt(m['comment_up'] ?? m['up']),
           down: _toInt(m['comment_down'] ?? m['down']),
           replyCount: _toInt(m['comment_reply'] ?? m['reply']),
+          vodId: '${m['comment_rid'] ?? m['vod_id'] ?? m['rid'] ?? ''}'.trim(),
+          vodName: '${m['vod_name'] ?? ''}'.trim(),
+          vodPic: () {
+            final p = '${m['vod_pic'] ?? m['pic'] ?? ''}'.trim();
+            if (p.isEmpty) return '';
+            if (p.startsWith('http://') || p.startsWith('https://')) return p;
+            if (p.startsWith('//')) return 'https:$p';
+            if (p.startsWith('/')) return '${ApiConfig.macCmsBase}$p';
+            return '${ApiConfig.macCmsBase}/$p';
+          }(),
         ),
       );
     }
@@ -2171,7 +2760,8 @@ class MacCmsApi {
           content: content,
           timeText: time,
           timeMs: _parseCommentTimeMs(time),
-          avatarUrl: _resolveCommentAvatar(avatar),
+          avatarUrl: _resolveCommentAvatar(avatar) ??
+              QqAvatar.urlFromAccount(name),
           up: up,
           down: down,
         ),
@@ -2306,10 +2896,14 @@ class MacCmsApi {
       }
       if (content.isEmpty) continue;
 
-      final avatar = _matchGroup(
-        block,
-        [r'''<img[^>]+src=["']([^"']+)["']'''],
-      );
+      final avatar = _matchGroup(block, [
+        r'''class=["'][^"']*face[^"']*["'][^>]*src=["']([^"']+)["']''',
+        r'''src=["']([^"']+)["'][^>]*class=["'][^"']*face[^"']*["']''',
+        r'''class=["'][^"']*avatar[^"']*["'][^>]*src=["']([^"']+)["']''',
+        r'''src=["']([^"']+)["'][^>]*class=["'][^"']*avatar[^"']*["']''',
+        r'''<img[^>]+src=["']([^"']+(?:upload|user|avatar|portrait)[^"']*)["']''',
+        r'''<img[^>]+src=["']([^"']+)["']''',
+      ]);
 
       final plain = _stripHtml(block);
       final up = int.tryParse(
@@ -2363,9 +2957,12 @@ class MacCmsApi {
           content: content,
           timeText: timeRaw,
           timeMs: timeMs,
-          avatarUrl: avatar == null || avatar.isEmpty
-              ? null
-              : _resolveCommentAvatar(avatar),
+          avatarUrl: () {
+            final fromImg = avatar == null || avatar.isEmpty
+                ? null
+                : _resolveCommentAvatar(avatar);
+            return fromImg ?? QqAvatar.urlFromAccount(name);
+          }(),
           up: up,
           down: down,
           replyCount: replyCount,
@@ -2455,18 +3052,68 @@ class CmsArticle {
     required this.title,
     this.subTitle = '',
     this.content = '',
+    this.contentHtml = '',
     this.coverUrl = '',
     this.timeText = '',
     this.author = '',
     this.typeName = '',
+    this.typeId = 0,
+    this.from = '',
+    this.remarks = '',
+    this.hits = 0,
+    this.tag = '',
   });
 
   final String id;
   final String title;
   final String subTitle;
+  /// 纯文本正文
   final String content;
+  /// 原始 HTML 正文
+  final String contentHtml;
   final String coverUrl;
   final String timeText;
   final String author;
   final String typeName;
+  final int typeId;
+  final String from;
+  final String remarks;
+  final int hits;
+  final String tag;
+
+  bool get hasBody =>
+      content.trim().isNotEmpty || contentHtml.trim().isNotEmpty;
+
+  CmsArticle copyWith({
+    String? title,
+    String? subTitle,
+    String? content,
+    String? contentHtml,
+    String? coverUrl,
+    String? timeText,
+    String? author,
+    String? typeName,
+    int? typeId,
+    String? from,
+    String? remarks,
+    int? hits,
+    String? tag,
+  }) {
+    return CmsArticle(
+      id: id,
+      title: title ?? this.title,
+      subTitle: subTitle ?? this.subTitle,
+      content: content ?? this.content,
+      contentHtml: contentHtml ?? this.contentHtml,
+      coverUrl: coverUrl ?? this.coverUrl,
+      timeText: timeText ?? this.timeText,
+      author: author ?? this.author,
+      typeName: typeName ?? this.typeName,
+      typeId: typeId ?? this.typeId,
+      from: from ?? this.from,
+      remarks: remarks ?? this.remarks,
+      hits: hits ?? this.hits,
+      tag: tag ?? this.tag,
+    );
+  }
 }

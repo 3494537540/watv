@@ -261,6 +261,9 @@ class MovieComment {
     this.up = 0,
     this.down = 0,
     this.replyCount = 0,
+    this.vodId = '',
+    this.vodName = '',
+    this.vodPic = '',
   });
 
   final String id;
@@ -272,8 +275,18 @@ class MovieComment {
   final int up;
   final int down;
   final int replyCount;
+  final String vodId;
+  final String vodName;
+  final String vodPic;
 
-  MovieComment copyWith({int? up, int? down, int? replyCount}) {
+  MovieComment copyWith({
+    int? up,
+    int? down,
+    int? replyCount,
+    String? vodId,
+    String? vodName,
+    String? vodPic,
+  }) {
     return MovieComment(
       id: id,
       userName: userName,
@@ -284,6 +297,9 @@ class MovieComment {
       up: up ?? this.up,
       down: down ?? this.down,
       replyCount: replyCount ?? this.replyCount,
+      vodId: vodId ?? this.vodId,
+      vodName: vodName ?? this.vodName,
+      vodPic: vodPic ?? this.vodPic,
     );
   }
 }

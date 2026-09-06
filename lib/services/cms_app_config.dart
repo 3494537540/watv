@@ -94,15 +94,27 @@ class QqLoginRemoteConfig {
   final String appKey;
   final String universalLink;
 
-  bool get isReady =>
-      enabled && appId.trim().isNotEmpty && appKey.trim().isNotEmpty;
+  bool get isReady {
+    final id = appId.trim();
+    final key = appKey.trim();
+    if (id.isEmpty || key.isEmpty) return false;
+    // 后台已填 ID/Key 即视为可用（即使未勾选 enabled，避免一直转圈/误判审核中）
+    return enabled || id.isNotEmpty;
+  }
 
   factory QqLoginRemoteConfig.fromJson(Map<String, dynamic>? j) {
     if (j == null) return const QqLoginRemoteConfig();
+    final appId = '${j['app_id'] ?? j['appId'] ?? j['qq_app_id'] ?? ''}'.trim();
+    final appKey =
+        '${j['app_key'] ?? j['appKey'] ?? j['qq_app_key'] ?? ''}'.trim();
+    final enabledFlag =
+        j['enabled'] == true || j['enable'] == 1 || j['enable'] == true;
+    // 有凭证时默认启用
+    final enabled = enabledFlag || (appId.isNotEmpty && appKey.isNotEmpty);
     return QqLoginRemoteConfig(
-      enabled: j['enabled'] == true || j['enable'] == 1 || j['enable'] == true,
-      appId: '${j['app_id'] ?? j['appId'] ?? j['qq_app_id'] ?? ''}'.trim(),
-      appKey: '${j['app_key'] ?? j['appKey'] ?? j['qq_app_key'] ?? ''}'.trim(),
+      enabled: enabled,
+      appId: appId,
+      appKey: appKey,
       universalLink:
           '${j['universal_link'] ?? j['universalLink'] ?? ''}'.trim(),
     );

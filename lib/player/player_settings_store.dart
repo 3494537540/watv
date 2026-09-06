@@ -19,10 +19,91 @@ enum PlayerAspectMode {
 extension PlayerAspectModeX on PlayerAspectMode {
   String get label => switch (this) {
         PlayerAspectMode.fit => '适应',
-        PlayerAspectMode.cover => '裁剪填充',
+        PlayerAspectMode.cover => '裁剪铺满',
         PlayerAspectMode.fill => '拉伸',
         PlayerAspectMode.ratio16x9 => '16:9',
         PlayerAspectMode.ratio4x3 => '4:3',
+      };
+}
+
+/// 流畅度策略：影响自动清晰度、缓冲与边播边缓力度
+enum PlayerPlayMode {
+  /// 优先流畅，偏中低清晰度 + 更大缓冲
+  smooth,
+  /// 均衡
+  standard,
+  /// 尽量高清
+  high,
+}
+
+extension PlayerPlayModeX on PlayerPlayMode {
+  String get label => switch (this) {
+        PlayerPlayMode.smooth => '流畅',
+        PlayerPlayMode.standard => '标准',
+        PlayerPlayMode.high => '高画质',
+      };
+
+  String get hint => switch (this) {
+        PlayerPlayMode.smooth => '更稳更省流，自动偏中低清晰度',
+        PlayerPlayMode.standard => '清晰度与流畅均衡（推荐）',
+        PlayerPlayMode.high => '尽量高清，弱网可能更易卡顿',
+      };
+}
+
+/// 播放内核
+enum PlayerKernel {
+  /// Android ExoPlayer / iOS AVPlayer（video_player）
+  exo,
+  /// libmpv 硬解
+  mpv,
+  /// IJK 风格兼容（libmpv 软解，奇葩封装更稳）
+  ijk,
+  /// 阿里云风格兼容（libmpv + 更大缓冲）
+  ali,
+}
+
+extension PlayerKernelX on PlayerKernel {
+  String get label => switch (this) {
+        PlayerKernel.exo => '系统(Exo)',
+        PlayerKernel.mpv => 'MPV',
+        PlayerKernel.ijk => 'IJK兼容',
+        PlayerKernel.ali => '阿里兼容',
+      };
+
+  String get hint => switch (this) {
+        PlayerKernel.exo => '官方推荐，画中画/省电最好',
+        PlayerKernel.mpv => 'libmpv 硬解，兼容性更强',
+        PlayerKernel.ijk => '软解兼容层，卡顿片源可试',
+        PlayerKernel.ali => '大缓冲策略，弱网可试',
+      };
+
+  bool get isMediaKit =>
+      this == PlayerKernel.mpv ||
+      this == PlayerKernel.ijk ||
+      this == PlayerKernel.ali;
+}
+
+/// 自研画质增强档位
+enum PlayerEnhanceLevel {
+  off,
+  mild,
+  standard,
+  vivid,
+}
+
+extension PlayerEnhanceLevelX on PlayerEnhanceLevel {
+  String get label => switch (this) {
+        PlayerEnhanceLevel.off => '关闭',
+        PlayerEnhanceLevel.mild => '轻度',
+        PlayerEnhanceLevel.standard => '标准',
+        PlayerEnhanceLevel.vivid => '鲜明',
+      };
+
+  String get hint => switch (this) {
+        PlayerEnhanceLevel.off => '原始画面',
+        PlayerEnhanceLevel.mild => '轻微提亮与清晰感',
+        PlayerEnhanceLevel.standard => '对比度与色彩增强',
+        PlayerEnhanceLevel.vivid => '更强锐利与饱和（略费电）',
       };
 }
 
@@ -42,6 +123,10 @@ class PlayerSettingsPrefs {
     this.doubleTapSeek = true,
     this.chromeAutoHideSec = 4,
     this.autoSourceFailover = false,
+    this.playMode = PlayerPlayMode.high,
+    this.streamCacheEnabled = true,
+    this.enhanceLevel = PlayerEnhanceLevel.vivid,
+    this.kernel = PlayerKernel.exo,
   });
 
   final PlayerAspectMode aspect;
@@ -58,6 +143,14 @@ class PlayerSettingsPrefs {
   final int chromeAutoHideSec;
   /// 卡顿/失败时自动切换播放线路（默认关）
   final bool autoSourceFailover;
+  /// 流畅 / 标准 / 高画质
+  final PlayerPlayMode playMode;
+  /// 迅速模式：边播边缓（分片预热 + 更大缓冲）
+  final bool streamCacheEnabled;
+  /// 自研画质增强
+  final PlayerEnhanceLevel enhanceLevel;
+  /// 播放内核
+  final PlayerKernel kernel;
 
   PlayerSettingsPrefs copyWith({
     PlayerAspectMode? aspect,
@@ -73,6 +166,10 @@ class PlayerSettingsPrefs {
     bool? doubleTapSeek,
     int? chromeAutoHideSec,
     bool? autoSourceFailover,
+    PlayerPlayMode? playMode,
+    bool? streamCacheEnabled,
+    PlayerEnhanceLevel? enhanceLevel,
+    PlayerKernel? kernel,
   }) {
     return PlayerSettingsPrefs(
       aspect: aspect ?? this.aspect,
@@ -88,6 +185,10 @@ class PlayerSettingsPrefs {
       doubleTapSeek: doubleTapSeek ?? this.doubleTapSeek,
       chromeAutoHideSec: chromeAutoHideSec ?? this.chromeAutoHideSec,
       autoSourceFailover: autoSourceFailover ?? this.autoSourceFailover,
+      playMode: playMode ?? this.playMode,
+      streamCacheEnabled: streamCacheEnabled ?? this.streamCacheEnabled,
+      enhanceLevel: enhanceLevel ?? this.enhanceLevel,
+      kernel: kernel ?? this.kernel,
     );
   }
 
@@ -105,6 +206,10 @@ class PlayerSettingsPrefs {
         'double_tap': doubleTapSeek,
         'chrome_hide': chromeAutoHideSec,
         'auto_source': autoSourceFailover,
+        'play_mode': playMode.name,
+        'stream_cache': streamCacheEnabled,
+        'enhance': enhanceLevel.name,
+        'kernel': kernel.name,
       };
 
   factory PlayerSettingsPrefs.fromJson(Map<String, dynamic> json) {
@@ -113,6 +218,18 @@ class PlayerSettingsPrefs {
       (e) => e.name == aspectName,
       orElse: () => PlayerAspectMode.fit,
     );
+    final modeName = '${json['play_mode'] ?? 'high'}';
+    final playMode = PlayerPlayMode.values.firstWhere(
+      (e) => e.name == modeName,
+      orElse: () => PlayerPlayMode.high,
+    );
+    final enhanceName = '${json['enhance'] ?? 'vivid'}';
+    final enhance = PlayerEnhanceLevel.values.firstWhere(
+      (e) => e.name == enhanceName,
+      orElse: () => PlayerEnhanceLevel.vivid,
+    );
+    // 仅保留系统 Exo
+    const kernel = PlayerKernel.exo;
     return PlayerSettingsPrefs(
       aspect: aspect,
       holdBoostEnabled: json['hold_boost'] != false,
@@ -129,6 +246,10 @@ class PlayerSettingsPrefs {
       chromeAutoHideSec:
           ((json['chrome_hide'] as num?)?.toInt() ?? 4).clamp(2, 12),
       autoSourceFailover: json['auto_source'] == true,
+      playMode: playMode,
+      streamCacheEnabled: json['stream_cache'] != false,
+      enhanceLevel: enhance,
+      kernel: kernel,
     );
   }
 }

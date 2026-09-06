@@ -88,18 +88,11 @@ class AboutPage extends StatelessWidget {
               onTap: () => _showDouyinQr(context),
             ),
             const SizedBox(height: 12),
-            _Block(
-              title: '开发技术',
-              body:
-                  '· 客户端：Flutter / Dart（一套代码覆盖 Android、iOS、H5）\n'
-                  '· UI：Material + Cupertino 组件\n'
-                  '· 播放：video_player 等媒体能力\n'
-                  '· 数据：站点开放接口与扩展面板\n'
-                  '· 本地：SharedPreferences、路径与缓存存储\n'
-                  '· 安全：${AppSecurity.instance.securitySummary}',
+            _TechStackCard(
               text: text,
               secondary: secondary,
               surface: surface,
+              line: line,
             ),
             const SizedBox(height: 12),
             _Block(
@@ -415,9 +408,119 @@ class _Block extends StatelessWidget {
                 fontFamily: 'AppSans',
                 fontSize: 14,
                 height: 1.55,
-                color: secondary,
+                fontWeight: FontWeight.w500,
+                color: text.withValues(alpha: 0.78),
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TechStackCard extends StatelessWidget {
+  const _TechStackCard({
+    required this.text,
+    required this.secondary,
+    required this.surface,
+    required this.line,
+  });
+
+  final Color text;
+  final Color secondary;
+  final Color surface;
+  final Color line;
+
+  static const _items = <({String title, String desc})>[
+    (
+      title: '客户端',
+      desc: 'Flutter / Dart，一套代码覆盖 Android、iOS、H5',
+    ),
+    (
+      title: '界面',
+      desc: 'Material 与 Cupertino 组件混排，跟随系统观感',
+    ),
+    (
+      title: '播放',
+      desc: 'video_player 等媒体能力，支持缓存与投屏',
+    ),
+    (
+      title: '数据',
+      desc: '站点开放接口与扩展面板，远程配置与更新',
+    ),
+    (
+      title: '本地',
+      desc: 'SharedPreferences、路径与缓存存储',
+    ),
+    (
+      title: '安全',
+      desc: '',
+    ),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final security = AppSecurity.instance.securitySummary;
+    return Material(
+      color: surface,
+      borderRadius: BorderRadius.circular(14),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '开发技术',
+              style: TextStyle(
+                fontFamily: 'AppSans',
+                fontSize: 16,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 0.2,
+                color: text,
+              ),
+            ),
+            const SizedBox(height: 6),
+            for (var i = 0; i < _items.length; i++) ...[
+              if (i > 0)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Divider(height: 1, thickness: 0.5, color: line),
+                ),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 11),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.baseline,
+                  textBaseline: TextBaseline.alphabetic,
+                  children: [
+                    SizedBox(
+                      width: 56,
+                      child: Text(
+                        _items[i].title,
+                        style: TextStyle(
+                          fontFamily: 'AppSans',
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: text,
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: Text(
+                        _items[i].desc.isEmpty ? security : _items[i].desc,
+                        style: TextStyle(
+                          fontFamily: 'AppSans',
+                          fontSize: 13.5,
+                          height: 1.45,
+                          fontWeight: FontWeight.w500,
+                          color: text.withValues(alpha: 0.62),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ],
         ),
       ),

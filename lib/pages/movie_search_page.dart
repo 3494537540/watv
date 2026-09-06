@@ -1207,8 +1207,11 @@ class _MovieSearchPageState extends State<MovieSearchPage> {
       return [
         const SliverToBoxAdapter(
           child: Padding(
-            padding: EdgeInsets.symmetric(vertical: 48),
-            child: Center(child: FigmaMetaballLoader(size: 56)),
+            padding: EdgeInsets.fromLTRB(16, 8, 16, 16),
+            child: SizedBox(
+              height: 528,
+              child: _SearchRankBoardSkeleton(),
+            ),
           ),
         ),
       ];
@@ -1295,8 +1298,8 @@ class _MovieSearchPageState extends State<MovieSearchPage> {
       if (_findLoading)
         const SliverToBoxAdapter(
           child: Padding(
-            padding: EdgeInsets.symmetric(vertical: 40),
-            child: Center(child: FigmaMetaballLoader(size: 48)),
+            padding: EdgeInsets.fromLTRB(12, 8, 12, 16),
+            child: _SearchPosterGridSkeleton(),
           ),
         )
       else
@@ -1327,7 +1330,10 @@ class _MovieSearchPageState extends State<MovieSearchPage> {
 
   Widget _buildSuggest() {
     if (_suggestLoading && _suggestRich.isEmpty && _suggestTexts.isEmpty) {
-      return const Center(child: FigmaMetaballLoader(size: 48));
+      return const Padding(
+        padding: EdgeInsets.fromLTRB(16, 12, 16, 16),
+        child: _SearchSuggestSkeleton(),
+      );
     }
     final q = _controller.text.trim();
     if (_suggestRich.isEmpty && _suggestTexts.isEmpty) {
@@ -1485,7 +1491,10 @@ class _MovieSearchPageState extends State<MovieSearchPage> {
 
   Widget _buildResultsBody() {
     if (_loading) {
-      return const Center(child: FigmaMetaballLoader(size: 56));
+      return const Padding(
+        padding: EdgeInsets.fromLTRB(16, 12, 16, 16),
+        child: _SearchResultListSkeleton(),
+      );
     }
     if (_error != null) {
       return Center(
@@ -1601,7 +1610,7 @@ class _MovieSearchPageState extends State<MovieSearchPage> {
               Text(
                 '「$q」在$ch下暂无结果',
                 textAlign: TextAlign.center,
-                style: TextStyle(
+          style: TextStyle(
             fontFamily: 'AppSans',
             fontSize: 15,
                   color: _muted,
@@ -2931,6 +2940,152 @@ class _PosterBadge extends StatelessWidget {
           height: 1.1,
           decoration: TextDecoration.none,
         ),
+      ),
+    );
+  }
+}
+
+/// 搜索榜单骨架（日照扫光）
+class _SearchRankBoardSkeleton extends StatelessWidget {
+  const _SearchRankBoardSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return FigmaSkeletonPulse(
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: const Color(0xFFF3F4F6),
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 16, 14, 14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const FigmaSkeletonBone(width: 72, height: 18, radius: 8),
+              const SizedBox(height: 16),
+              for (var i = 0; i < 8; i++) ...[
+                if (i > 0) const SizedBox(height: 14),
+                const Row(
+                  children: [
+                    FigmaSkeletonBone(width: 22, height: 16, radius: 4),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: FigmaSkeletonBone(height: 14, radius: 7),
+                    ),
+                    SizedBox(width: 12),
+                    FigmaSkeletonBone(width: 36, height: 12, radius: 6),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SearchPosterGridSkeleton extends StatelessWidget {
+  const _SearchPosterGridSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return FigmaSkeletonPulse(
+      child: GridView.builder(
+        shrinkWrap: true,
+        physics: const NeverScrollableScrollPhysics(),
+        itemCount: 6,
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 3,
+          mainAxisSpacing: 14,
+          crossAxisSpacing: 10,
+          childAspectRatio: 0.52,
+        ),
+        itemBuilder: (_, _) => const Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            AspectRatio(
+              aspectRatio: 0.72,
+              child: FigmaSkeletonBone(height: double.infinity, radius: 10),
+            ),
+            SizedBox(height: 8),
+            FigmaSkeletonBone(height: 12, radius: 6),
+            SizedBox(height: 6),
+            FigmaSkeletonBone(width: 48, height: 10, radius: 5),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SearchSuggestSkeleton extends StatelessWidget {
+  const _SearchSuggestSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return FigmaSkeletonPulse(
+      child: Column(
+        children: [
+          for (var i = 0; i < 7; i++) ...[
+            if (i > 0) const SizedBox(height: 14),
+            const Row(
+              children: [
+                FigmaSkeletonBone(width: 44, height: 60, radius: 8),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      FigmaSkeletonBone(height: 14, radius: 7),
+                      SizedBox(height: 8),
+                      FigmaSkeletonBone(width: 120, height: 11, radius: 6),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _SearchResultListSkeleton extends StatelessWidget {
+  const _SearchResultListSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    return FigmaSkeletonPulse(
+      child: Column(
+        children: [
+          for (var i = 0; i < 6; i++) ...[
+            if (i > 0) const SizedBox(height: 16),
+            const Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                FigmaSkeletonBone(width: 78, height: 110, radius: 10),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      FigmaSkeletonBone(height: 16, radius: 8),
+                      SizedBox(height: 10),
+                      FigmaSkeletonBone(height: 12, radius: 6),
+                      SizedBox(height: 8),
+                      FigmaSkeletonBone(width: 140, height: 12, radius: 6),
+                      SizedBox(height: 16),
+                      FigmaSkeletonBone(width: 88, height: 28, radius: 14),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
       ),
     );
   }

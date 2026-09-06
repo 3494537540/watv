@@ -35,7 +35,7 @@ class _PlayerDanmakuLayerState extends State<PlayerDanmakuLayer>
   int _lastPaintMs = 0;
   final _widthCache = <int, double>{};
 
-  static const _minPaintIntervalMs = 48; // ~20fps
+  static const _minPaintIntervalMs = 100; // ~10fps, 降内存/主线程压力
 
   @override
   void initState() {

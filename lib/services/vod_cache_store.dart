@@ -237,6 +237,25 @@ class VodCacheStore {
     return null;
   }
 
+  /// 同一集任意线路已缓存完成则返回（优先 [preferSourceIndex]）
+  VodCacheItem? findDoneEpisode({
+    required String vodId,
+    required int episodeIndex,
+    int? preferSourceIndex,
+  }) {
+    VodCacheItem? fallback;
+    for (final e in _items) {
+      if (e.vodId != vodId || e.episodeIndex != episodeIndex) continue;
+      if (!e.isDone || e.localPath.isEmpty) continue;
+      if (!File(e.localPath).existsSync()) continue;
+      if (preferSourceIndex != null && e.sourceIndex == preferSourceIndex) {
+        return e;
+      }
+      fallback ??= e;
+    }
+    return fallback;
+  }
+
   /// 已完成且本地文件仍在时返回本地路径，否则 null
   Future<String?> localPlayPath({
     required String vodId,
@@ -244,15 +263,62 @@ class VodCacheStore {
     required int sourceIndex,
   }) async {
     await ensureLoaded();
-    final e = find(
+    final e = findDoneEpisode(
       vodId: vodId,
       episodeIndex: episodeIndex,
-      sourceIndex: sourceIndex,
+      preferSourceIndex: sourceIndex,
     );
-    if (e == null || !e.isDone) return null;
-    final f = File(e.localPath);
-    if (!await f.exists()) return null;
-    return e.localPath;
+    return e?.localPath;
+  }
+
+  /// 打开本地 m3u8 前：把仍指向远程的 KEY/MAP 拉到同目录，避免 iOS 离线卡死
+  Future<String> prepareLocalMediaPath(String rawPath) async {
+    var path = rawPath.trim();
+    if (path.startsWith('file:')) {
+      path = Uri.parse(path).toFilePath();
+    }
+    final lower = path.toLowerCase();
+    if (!lower.endsWith('.m3u8')) return path;
+    final file = File(path);
+    if (!await file.exists()) return path;
+    String body;
+    try {
+      body = await file.readAsString();
+    } catch (_) {
+      return path;
+    }
+    if (!body.contains('http://') && !body.contains('https://')) {
+      return path;
+    }
+    final dir = file.parent;
+    final lines = body.split('\n');
+    final out = StringBuffer();
+    var changed = false;
+    for (final raw in lines) {
+      final trimmed = raw.trim();
+      final upper = trimmed.toUpperCase();
+      if (upper.startsWith('#EXT-X-KEY:') || upper.startsWith('#EXT-X-MAP:')) {
+        final name =
+            upper.startsWith('#EXT-X-MAP:') ? 'init.mp4' : 'key.key';
+        final next = await _localizeHlsAttrUriLine(
+          trimmed,
+          // 用假基址解析绝对 URL；相对 URI 保持不动
+          'https://local.invalid/',
+          dir,
+          fileName: name,
+        );
+        if (next != trimmed) changed = true;
+        out.writeln(next);
+      } else {
+        out.writeln(raw);
+      }
+    }
+    if (changed) {
+      try {
+        await file.writeAsString(out.toString());
+      } catch (_) {}
+    }
+    return path;
   }
 
   Future<VodCacheItem> enqueueAndDownload({
@@ -847,8 +913,34 @@ class VodCacheStore {
     for (final raw in lines) {
       final line = raw.trimRight();
       final trimmed = line.trim();
-      if (trimmed.isEmpty || trimmed.startsWith('#')) {
+      if (trimmed.isEmpty) {
         rewritten.writeln(line);
+        continue;
+      }
+      if (trimmed.startsWith('#')) {
+        final upper = trimmed.toUpperCase();
+        // 密钥 / init map 本地化，避免离线或弱网时 HLS 一直转圈
+        if (upper.startsWith('#EXT-X-KEY:')) {
+          rewritten.writeln(
+            await _localizeHlsAttrUriLine(
+              trimmed,
+              playlistUrl,
+              workDir,
+              fileName: 'key.key',
+            ),
+          );
+        } else if (upper.startsWith('#EXT-X-MAP:')) {
+          rewritten.writeln(
+            await _localizeHlsAttrUriLine(
+              trimmed,
+              playlistUrl,
+              workDir,
+              fileName: 'init.mp4',
+            ),
+          );
+        } else {
+          rewritten.writeln(line);
+        }
         continue;
       }
       rewritten.writeln(names[segIndex]);
@@ -859,6 +951,37 @@ class VodCacheStore {
     await index.writeAsString(rewritten.toString());
     onProgress(1, received, received);
     return index.path;
+  }
+
+  Future<String> _localizeHlsAttrUriLine(
+    String line,
+    String playlistUrl,
+    Directory workDir, {
+    required String fileName,
+  }) async {
+    final m = RegExp(
+      r'URI="([^"]+)"',
+      caseSensitive: false,
+    ).firstMatch(line);
+    final raw = m?.group(1)?.trim() ?? '';
+    if (raw.isEmpty) return line;
+    // 已是相对本地名
+    if (!raw.contains('://') && !raw.startsWith('/')) {
+      return line;
+    }
+    try {
+      final abs = _resolveUrl(playlistUrl, raw);
+      final out = File('${workDir.path}/$fileName');
+      if (!await out.exists() || await out.length() == 0) {
+        await _downloadToFile(abs, out);
+      }
+      return line.replaceFirstMapped(
+        RegExp(r'URI="[^"]+"', caseSensitive: false),
+        (_) => 'URI="$fileName"',
+      );
+    } catch (_) {
+      return line;
+    }
   }
 
   Future<String> _getText(String url) async {
@@ -872,6 +995,7 @@ class VodCacheStore {
   }
 
   Future<int> _downloadToFile(String url, File file) async {
+    _client ??= http.Client();
     final req = http.Request('GET', Uri.parse(url));
     req.headers.addAll(VodPlayback.httpHeaders);
     final res = await _client!.send(req).timeout(const Duration(seconds: 60));

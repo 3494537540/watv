@@ -2,6 +2,8 @@ import AVFoundation
 import AVKit
 import Flutter
 import UIKit
+import UserNotifications
+import flutter_local_notifications
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
@@ -11,6 +13,11 @@ import UIKit
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    // 本地通知：前台也能出横幅（flutter_local_notifications 要求）
+    if #available(iOS 10.0, *) {
+      UNUserNotificationCenter.current().delegate =
+        self as UNUserNotificationCenterDelegate
+    }
     // 播放 / AirPlay / 画中画需要 playback 会话
     do {
       let session = AVAudioSession.sharedInstance()
@@ -23,6 +30,10 @@ import UIKit
   }
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
+    // 通知动作 isolate 需要能注册插件
+    FlutterLocalNotificationsPlugin.setPluginRegistrantCallback { registry in
+      GeneratedPluginRegistrant.register(with: registry)
+    }
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     let messenger = engineBridge.applicationRegistrar.messenger()
     let channel = FlutterMethodChannel(name: "watv/cast", binaryMessenger: messenger)
@@ -36,9 +47,31 @@ import UIKit
         result(FlutterMethodNotImplemented)
       }
     }
+
+    let link = FlutterMethodChannel(name: "com.watv.app/link", binaryMessenger: messenger)
+    link.setMethodCallHandler { call, result in
+      switch call.method {
+      case "openUrl":
+        guard let urlStr = call.arguments as? [String: Any],
+              let raw = urlStr["url"] as? String,
+              let url = URL(string: raw) else {
+          result(FlutterError(code: "bad_args", message: "url required", details: nil))
+          return
+        }
+        UIApplication.shared.open(url, options: [:]) { ok in
+          if ok {
+            result(true)
+          } else {
+            result(FlutterError(code: "open_fail", message: "无法打开链接", details: nil))
+          }
+        }
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
   }
 
-  /// 弹出系统 AirPlay / 屏幕镜像路由选择器
+  /// 弹出系统 AirPlay 路由选择器（投视频/音频，非控制中心「屏幕镜像」）
   private func showAirPlayPicker(result: @escaping FlutterResult) {
     DispatchQueue.main.async {
       guard let root = self.keyWindowRootView() else {
@@ -53,35 +86,46 @@ import UIKit
         NSLog("[watv] AirPlay session: \(error)")
       }
 
-      let picker = self.routePickerView ?? AVRoutePickerView(frame: .zero)
+      let picker = self.routePickerView ?? AVRoutePickerView(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
+      if #available(iOS 13.0, *) {
+        picker.prioritizesVideoDevices = true
+      }
       picker.isHidden = true
       if picker.superview == nil {
         root.addSubview(picker)
       }
       self.routePickerView = picker
 
-      // 优先找内部 UIButton 触发系统面板
-      if let btn = picker.subviews.compactMap({ $0 as? UIButton }).first {
+      func fire(_ btn: UIButton) {
         btn.sendActions(for: .touchUpInside)
         result(true)
+      }
+
+      // 优先找内部 UIButton 触发系统面板
+      if let btn = picker.subviews.compactMap({ $0 as? UIButton }).first {
+        fire(btn)
         return
       }
-      // 兜底：遍历更深一层
       for sub in picker.subviews {
         if let btn = sub as? UIButton {
-          btn.sendActions(for: .touchUpInside)
-          result(true)
+          fire(btn)
           return
         }
         for nested in sub.subviews {
           if let btn = nested as? UIButton {
-            btn.sendActions(for: .touchUpInside)
-            result(true)
+            fire(btn)
             return
           }
         }
       }
-      result(FlutterError(code: "NO_BUTTON", message: "无法唤起 AirPlay 面板", details: nil))
+      // 再兜底：延迟一帧后重试（部分 iOS 子视图懒加载）
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        if let btn = picker.subviews.compactMap({ $0 as? UIButton }).first {
+          fire(btn)
+          return
+        }
+        result(FlutterError(code: "NO_BUTTON", message: "无法唤起 AirPlay 面板", details: nil))
+      }
     }
   }
 

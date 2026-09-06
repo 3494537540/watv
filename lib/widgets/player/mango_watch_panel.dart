@@ -861,6 +861,8 @@ class MangoSourceRow extends StatefulWidget {
     required this.selected,
     required this.onSelect,
     this.probeUrls = const [],
+    this.probeEnabled = true,
+    this.onProbeDone,
   });
 
   final List<String> names;
@@ -868,6 +870,9 @@ class MangoSourceRow extends StatefulWidget {
   final ValueChanged<int> onSelect;
   /// 与 names 一一对应的探测地址（通常取该线路当前集 URL）
   final List<String> probeUrls;
+  /// 是否开启测速（展示 KB/s）
+  final bool probeEnabled;
+  final ValueChanged<Map<int, int?>>? onProbeDone;
 
   @override
   State<MangoSourceRow> createState() => _MangoSourceRowState();
@@ -877,27 +882,49 @@ class _MangoSourceRowState extends State<MangoSourceRow> {
   final Map<int, int?> _latency = {};
   bool _probing = false;
   int _probeGen = 0;
+  String _probedKey = '';
+
+  String get _urlsKey =>
+      '${widget.names.join('|')}::${widget.probeUrls.join('|')}';
 
   @override
   void initState() {
     super.initState();
-    unawaited(_runProbe());
+    if (widget.probeEnabled) unawaited(_runProbe());
   }
 
   @override
   void didUpdateWidget(covariant MangoSourceRow oldWidget) {
     super.didUpdateWidget(oldWidget);
-    // 仅当探测地址真变了才重测；切换选中线路不重测、不清空结果
+    if (!widget.probeEnabled) {
+      if (_probing) {
+        _probeGen++;
+        _probing = false;
+      }
+      return;
+    }
+    // 线路集合变了才测；同一批不重复狂测
     if (oldWidget.probeUrls.join('|') != widget.probeUrls.join('|') ||
         oldWidget.names.join('|') != widget.names.join('|')) {
+      _probedKey = '';
       unawaited(_runProbe(force: true));
+      return;
+    }
+    if (!oldWidget.probeEnabled &&
+        widget.probeEnabled &&
+        _probedKey != _urlsKey) {
+      unawaited(_runProbe());
     }
   }
 
   Future<void> _runProbe({bool force = false}) async {
+    if (!widget.probeEnabled) return;
     if (_probing && !force) return;
     if (widget.names.length <= 1) return;
     if (!widget.probeUrls.any((u) => u.trim().isNotEmpty)) return;
+    final key = _urlsKey;
+    // 已测过且非强制：不重复
+    if (!force && _probedKey == key && _latency.isNotEmpty) return;
     final gen = ++_probeGen;
     setState(() => _probing = true);
     final urls = List<String>.from(widget.probeUrls);
@@ -922,7 +949,11 @@ class _MangoSourceRowState extends State<MangoSourceRow> {
       for (var w = 0; w < concurrency; w++) worker(),
     ]);
     if (!mounted || gen != _probeGen) return;
-    setState(() => _probing = false);
+    setState(() {
+      _probing = false;
+      _probedKey = key;
+    });
+    widget.onProbeDone?.call(Map<int, int?>.from(_latency));
   }
 
   @override
@@ -955,6 +986,20 @@ class _MangoSourceRowState extends State<MangoSourceRow> {
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
                       color: Color(0xFF999999),
+                    ),
+                  ),
+                ] else if (widget.probeEnabled) ...[
+                  const SizedBox(width: 8),
+                  GestureDetector(
+                    onTap: () => unawaited(_runProbe(force: true)),
+                    child: const Text(
+                      '重测',
+                      style: TextStyle(
+                        fontFamily: 'AppSans',
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF8E8E93),
+                      ),
                     ),
                   ),
                 ],
@@ -1054,8 +1099,8 @@ class _MangoSourceRowState extends State<MangoSourceRow> {
   }
 }
 
-/// 横滑选集
-class MangoEpisodeRow extends StatelessWidget {
+/// 横滑选集（自动滚到当前播放集）
+class MangoEpisodeRow extends StatefulWidget {
   const MangoEpisodeRow({
     super.key,
     required this.episodes,
@@ -1135,15 +1180,66 @@ class MangoEpisodeRow extends StatelessWidget {
     return '${index + 1}';
   }
 
-  static double _chipWidthFor(String label) {
+  static double chipWidthFor(String label) {
     if (label.length <= 2) return MangoWatchStyle.chipSize;
     return MangoWatchStyle.chipSize + (label.length - 2) * 10.0;
   }
 
   @override
+  State<MangoEpisodeRow> createState() => _MangoEpisodeRowState();
+}
+
+class _MangoEpisodeRowState extends State<MangoEpisodeRow> {
+  final _scroll = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToSelected());
+  }
+
+  @override
+  void didUpdateWidget(covariant MangoEpisodeRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.selected != widget.selected ||
+        oldWidget.episodes.length != widget.episodes.length) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToSelected());
+    }
+  }
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  void _scrollToSelected() {
+    if (!_scroll.hasClients || widget.episodes.isEmpty) return;
+    final i = widget.selected.clamp(0, widget.episodes.length - 1);
+    var offset = 0.0;
+    for (var k = 0; k < i; k++) {
+      final label = MangoEpisodeRow.chipLabel(
+        widget.episodes[k].name,
+        k,
+        total: widget.episodes.length,
+      );
+      offset += MangoEpisodeRow.chipWidthFor(label) + MangoWatchStyle.chipGap;
+    }
+    final max = _scroll.position.maxScrollExtent;
+    final target = (offset - 24).clamp(0.0, max);
+    if ((target - _scroll.offset).abs() < 2) return;
+    _scroll.animateTo(
+      target,
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final episodes = widget.episodes;
     if (episodes.isEmpty) return const SizedBox.shrink();
-    final tip = intro?.trim();
+    final tip = widget.intro?.trim();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1174,9 +1270,9 @@ class MangoEpisodeRow extends StatelessWidget {
               ),
             ] else
               const Spacer(),
-            if (onShowAll != null)
+            if (widget.onShowAll != null)
               GestureDetector(
-                onTap: onShowAll,
+                onTap: widget.onShowAll,
                 behavior: HitTestBehavior.opaque,
                 child: Padding(
                   padding: const EdgeInsets.only(left: 8),
@@ -1207,6 +1303,7 @@ class MangoEpisodeRow extends StatelessWidget {
         SizedBox(
           height: MangoWatchStyle.chipSize + 10,
           child: ListView.separated(
+            controller: _scroll,
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.only(top: 6, right: 6),
             physics: const BouncingScrollPhysics(),
@@ -1215,10 +1312,12 @@ class MangoEpisodeRow extends StatelessWidget {
                 const SizedBox(width: MangoWatchStyle.chipGap),
             itemBuilder: (context, i) {
               final ep = episodes[i];
-              final label = chipLabel(ep.name, i, total: episodes.length);
+              final label =
+                  MangoEpisodeRow.chipLabel(ep.name, i, total: episodes.length);
               String? badge;
               if (MangoEpisodeChip.isVipLabel(ep.name) ||
-                  (markVipFromIndex != null && i >= markVipFromIndex!)) {
+                  (widget.markVipFromIndex != null &&
+                      i >= widget.markVipFromIndex!)) {
                 badge = 'VIP';
               } else if (i == episodes.length - 1 && episodes.length > 1) {
                 badge = '新';
@@ -1228,10 +1327,10 @@ class MangoEpisodeRow extends StatelessWidget {
               }
               return MangoEpisodeChip(
                 label: label,
-                selected: i == selected,
+                selected: i == widget.selected,
                 cornerBadge: badge,
-                width: _chipWidthFor(label),
-                onTap: () => onSelect(i),
+                width: MangoEpisodeRow.chipWidthFor(label),
+                onTap: () => widget.onSelect(i),
               );
             },
           ),
@@ -2170,6 +2269,8 @@ class MangoWatchPanel extends StatelessWidget {
     this.onSourceSelect,
     this.sourceProbeUrls = const [],
     this.shellLoading = false,
+    this.sourceProbeEnabled = true,
+    this.onSourceProbeDone,
   });
 
   final String title;
@@ -2202,8 +2303,9 @@ class MangoWatchPanel extends StatelessWidget {
   final int sourceIndex;
   final ValueChanged<int>? onSourceSelect;
   final List<String> sourceProbeUrls;
-  /// 详情未到：线路/选集用骨架占位
   final bool shellLoading;
+  final bool sourceProbeEnabled;
+  final ValueChanged<Map<int, int?>>? onSourceProbeDone;
 
   @override
   Widget build(BuildContext context) {
@@ -2252,6 +2354,8 @@ class MangoWatchPanel extends StatelessWidget {
                 selected: sourceIndex,
                 onSelect: onSourceSelect!,
                 probeUrls: sourceProbeUrls,
+                probeEnabled: sourceProbeEnabled,
+                onProbeDone: onSourceProbeDone,
               ),
             if (shellLoading && episodes.isEmpty)
               const MangoEpisodeSkeleton()

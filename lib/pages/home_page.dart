@@ -21,6 +21,8 @@ import '../widgets/home_continue_watch.dart';
 import '../widgets/home_top_chrome.dart';
 import '../widgets/movie_poster_card.dart';
 import 'cms_messages_page.dart';
+import 'bangumi_schedule_page.dart';
+import 'membership_shop_page.dart';
 import 'movie_detail_page.dart';
 import 'movie_search_page.dart';
 import 'redeem_page.dart';
@@ -487,6 +489,18 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       _openSectionAll(context, section);
       return;
     }
+    if (i == 2) {
+      HapticFeedback.selectionClick();
+      unawaited(showMembershipShopSheet(context));
+      return;
+    }
+    if (i == 3) {
+      HapticFeedback.selectionClick();
+      Navigator.of(context).push(
+        AppPageRoute<void>(builder: (_) => const BangumiSchedulePage()),
+      );
+      return;
+    }
     if (i == 4) {
       HapticFeedback.selectionClick();
       Navigator.of(context).push(
@@ -795,7 +809,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                           if (_genreLoading)
                             const TourTarget(
                               id: 'tour_feed',
-                              child: HomeListSkeleton(showMetaball: false),
+                              child: Padding(
+                                padding: EdgeInsets.symmetric(vertical: 48),
+                                child: WatvPageLoader(size: 48),
+                              ),
                             )
                           else if (_displayMovies.isEmpty)
                             const TourTarget(
@@ -886,7 +903,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                             ),
                           ],
                         ),
-                        child: CupertinoActivityIndicator(
+                        child: AppLoadingIndicator(
+                          size: 36,
                           color: AppColors.brand,
                         ),
                       ),

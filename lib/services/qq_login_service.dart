@@ -1,67 +1,131 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
+import 'package:tencent_kit/tencent_kit.dart';
 
 import 'cms_app_config.dart';
+import 'huihuo_panel_api.dart';
 
-/// QQ 互联登录（参数走后台 app_config.qq_login，审核通过后填入即可）
+/// QQ 互联登录（tencent_kit 原生 SDK + 面板 qq_oauth 写入 CMS 会话）
 class QqLoginService {
   QqLoginService._();
   static final instance = QqLoginService._();
 
-  static const _channel = MethodChannel('com.watv.app/qq_login');
-
   QqLoginRemoteConfig get config => CmsAppConfigStore.instance.config.qqLogin;
 
-  /// 登录引导页是否展示 QQ 入口（默认展示，方便审核/联调）
   bool get showEntry => true;
 
+  String? _registeredAppId;
+  bool _permissionGranted = false;
+
+  Future<void> ensureRegistered() async {
+    if (kIsWeb) return;
+    final cfg = config;
+    if (!cfg.isReady) return;
+    if (!_permissionGranted) {
+      await TencentKitPlatform.instance.setIsPermissionGranted(granted: true);
+      _permissionGranted = true;
+    }
+    final appId = cfg.appId.trim();
+    if (_registeredAppId == appId) return;
+    await TencentKitPlatform.instance.registerApp(
+      appId: appId,
+      universalLink: cfg.universalLink.trim().isEmpty
+          ? null
+          : cfg.universalLink.trim(),
+    );
+    _registeredAppId = appId;
+  }
+
+  /// 拉起 QQ 授权，成功后换 CMS Cookie 会话
   Future<QqLoginResult> login() async {
     final cfg = config;
     if (!cfg.isReady) {
       return const QqLoginResult(
         ok: false,
-        message: 'QQ登录审核中，通过后将在后台自动启用',
+        message: 'QQ登录未配置，请在后台填写 AppID / AppKey 并启用',
       );
     }
     if (kIsWeb) {
       return const QqLoginResult(ok: false, message: 'Web 暂不支持 QQ 登录');
     }
+
     try {
-      final raw = await _channel.invokeMethod<dynamic>('login', {
-        'app_id': cfg.appId,
-        'app_key': cfg.appKey,
-        'universal_link': cfg.universalLink,
-      });
-      if (raw is Map) {
-        final m = Map<String, dynamic>.from(raw);
-        final ok = m['ok'] == true;
-        return QqLoginResult(
-          ok: ok,
-          openId: '${m['openid'] ?? m['open_id'] ?? ''}',
-          accessToken: '${m['access_token'] ?? m['token'] ?? ''}',
-          message: '${m['message'] ?? m['msg'] ?? (ok ? '登录成功' : '登录失败')}',
-        );
+      await ensureRegistered();
+    } catch (e) {
+      return QqLoginResult(ok: false, message: 'QQ SDK 初始化失败：$e');
+    }
+
+    final completer = Completer<TencentLoginResp>();
+    late final StreamSubscription<TencentResp> sub;
+    sub = TencentKitPlatform.instance.respStream().listen((resp) {
+      if (resp is TencentLoginResp && !completer.isCompleted) {
+        completer.complete(resp);
       }
-      return const QqLoginResult(ok: false, message: 'QQ 登录无返回');
-    } on PlatformException catch (e) {
-      final code = e.code;
-      if (code == 'sdk_missing' || code == 'not_implemented') {
+    });
+
+    try {
+      await TencentKitPlatform.instance.login(
+        scope: <String>[TencentScope.kGetSimpleUserInfo],
+      );
+      final resp = await completer.future.timeout(
+        const Duration(minutes: 3),
+        onTimeout: () => throw TimeoutException('QQ 授权超时'),
+      );
+
+      if (resp.isCancelled) {
+        return const QqLoginResult(ok: false, message: '已取消 QQ 登录');
+      }
+      if (!resp.isSuccessful) {
+        final msg = (resp.msg ?? '').trim();
         return QqLoginResult(
           ok: false,
-          message: '原生 QQ SDK 待接入（AppID ${cfg.appId} 已配置）',
+          message: msg.isEmpty ? 'QQ 授权失败（${resp.ret}）' : msg,
         );
       }
-      if (code == 'cancelled') {
-        return const QqLoginResult(ok: false, message: '已取消 QQ 登录');
+
+      final openId = (resp.openid ?? '').trim();
+      final token = (resp.accessToken ?? '').trim();
+      if (openId.isEmpty || token.isEmpty) {
+        return const QqLoginResult(ok: false, message: 'QQ 未返回有效凭证');
+      }
+
+      // 换 CMS 登录态
+      final session = await HuihuoPanelApi.qqOauthLogin(
+        openId: openId,
+        accessToken: token,
+        nickname: '',
+        expiresIn: resp.expiresIn ?? 0,
+      );
+
+      return QqLoginResult(
+        ok: true,
+        openId: openId,
+        accessToken: token,
+        message: session.msg.isEmpty ? '登录成功' : session.msg,
+        cookieHeader: session.cookieHeader,
+        userId: session.userId,
+        userName: session.userName,
+        nickName: session.nickName,
+        portrait: session.portrait,
+      );
+    } on TimeoutException {
+      return const QqLoginResult(ok: false, message: 'QQ 授权超时，请重试');
+    } catch (e) {
+      var s = e is StateError ? e.message : '$e';
+      s = s.replaceFirst(RegExp(r'^Bad state:\s*'), '').trim();
+      if (s.contains('MissingPluginException')) {
+        return const QqLoginResult(
+          ok: false,
+          message: 'QQ SDK 未编译进当前包，请完整重新安装 App 后再试',
+        );
       }
       return QqLoginResult(
         ok: false,
-        message: e.message?.trim().isNotEmpty == true
-            ? e.message!
-            : 'QQ 登录失败',
+        message: s.isEmpty ? 'QQ 登录失败' : s,
       );
-    } catch (e) {
-      return QqLoginResult(ok: false, message: '$e');
+    } finally {
+      await sub.cancel();
     }
   }
 }
@@ -72,10 +136,20 @@ class QqLoginResult {
     this.openId = '',
     this.accessToken = '',
     this.message = '',
+    this.cookieHeader = '',
+    this.userId = 0,
+    this.userName = '',
+    this.nickName = '',
+    this.portrait = '',
   });
 
   final bool ok;
   final String openId;
   final String accessToken;
   final String message;
+  final String cookieHeader;
+  final int userId;
+  final String userName;
+  final String nickName;
+  final String portrait;
 }

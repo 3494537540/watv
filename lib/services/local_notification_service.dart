@@ -139,6 +139,31 @@ abstract final class LocalNotificationService {
     // 已可用则直接过
     if (await areNotificationsEnabled()) return true;
 
+    // iOS：优先走 FLN 系统弹窗（比 permission_handler 更准）
+    if (Platform.isIOS) {
+      final ios = _plugin.resolvePlatformSpecificImplementation<
+          IOSFlutterLocalNotificationsPlugin>();
+      final granted = await ios?.requestPermissions(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+      if (granted == true) return true;
+      // 用户拒绝后再走说明弹窗（引导去设置）
+      if (context != null && context.mounted) {
+        final ok = await AppPermission.requestWithRationale(
+          AppPermissionKind.notifications,
+          context: context,
+          title: '开启通知',
+          message: '用于提醒剧集更新、下载完成和重要消息。可随时在系统设置里关闭。',
+          confirmLabel: '去开启',
+        );
+        if (!ok) return false;
+        await ios?.requestPermissions(alert: true, badge: true, sound: true);
+      }
+      return areNotificationsEnabled();
+    }
+
     final ok = await AppPermission.requestWithRationale(
       AppPermissionKind.notifications,
       context: context,
@@ -148,15 +173,9 @@ abstract final class LocalNotificationService {
     );
     if (!ok) return false;
 
-    if (Platform.isIOS) {
-      final ios = _plugin.resolvePlatformSpecificImplementation<
-          IOSFlutterLocalNotificationsPlugin>();
-      await ios?.requestPermissions(alert: true, badge: true, sound: true);
-    }
     if (Platform.isAndroid) {
       final android = _plugin.resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin>();
-      // Android 13+；低版本返回 null/true 均可
       await android?.requestNotificationsPermission();
     }
     return areNotificationsEnabled();
@@ -225,6 +244,7 @@ abstract final class LocalNotificationService {
     presentSound: true,
     presentBanner: true,
     presentList: true,
+    interruptionLevel: InterruptionLevel.active,
   );
 
   static Future<void> _showSafe({

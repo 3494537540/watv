@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+
 import '../theme/app_colors.dart';
 
 /// 产品导览锚点注册表（首次进入高亮真实控件）
@@ -57,7 +58,7 @@ class AppOnboardingGate extends StatefulWidget {
 
   final Widget child;
 
-  static const prefsKey = 'watv_product_tour_done_v2';
+  static const prefsKey = 'watv_product_tour_done_v3';
 
   /// 设置里点「重新导览」时递增，触发当前 Gate 立刻重开
   static final ValueNotifier<int> restartTick = ValueNotifier(0);
@@ -134,14 +135,39 @@ class _AppOnboardingGateState extends State<AppOnboardingGate> {
 
   void _onRestartRequested() {
     if (!mounted) return;
+    // MainShell 同步听 restartTick 会先切回首页；这里等锚点就绪再盖引导
+    unawaited(_startTourAfterHomeReady());
+  }
+
+  Future<void> _startTourAfterHomeReady() async {
+    for (var i = 0; i < 10; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      if (!mounted) return;
+      final search = TourRegistry.rectOf('tour_search');
+      final nav = TourRegistry.rectOf('tour_nav');
+      if ((search != null && search.width > 8) ||
+          (nav != null && nav.width > 8)) {
+        break;
+      }
+    }
+    if (!mounted) return;
     setState(() => _showTour = true);
   }
 
   Future<void> _maybeStart() async {
     final done = await AppOnboardingGate.isDone();
     if (done || !mounted) return;
-    // 等首页布局出来再量锚点
-    await Future<void>.delayed(const Duration(milliseconds: 900));
+    // 等首页锚点挂上：最多约 2.4s，避免「引导消失」
+    for (var i = 0; i < 8; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      if (!mounted) return;
+      final search = TourRegistry.rectOf('tour_search');
+      final nav = TourRegistry.rectOf('tour_nav');
+      if ((search != null && search.width > 8) ||
+          (nav != null && nav.width > 8)) {
+        break;
+      }
+    }
     if (!mounted) return;
     setState(() => _showTour = true);
   }
@@ -321,20 +347,49 @@ class _ProductTourOverlayState extends State<ProductTourOverlay>
                 ),
               ),
             ),
-          // 底部固定说明卡：避免挡住高亮区，布局更稳
-          Positioned(
-            left: 16,
-            right: 16,
-            bottom: pad.bottom + 16,
-            child: _TourBubble(
-              step: _index + 1,
-              total: total,
-              title: step.title,
-              body: step.body,
-              isLast: _index >= total - 1,
-              onSkip: _skip,
-              onNext: _next,
-            ),
+          // 说明卡跟随高亮洞口：优先洞下方，空间不够则洞上方，再兜底贴底
+          Builder(
+            builder: (context) {
+              final bubble = _TourBubble(
+                step: _index + 1,
+                total: total,
+                title: step.title,
+                body: step.body,
+                isLast: _index >= total - 1,
+                onSkip: _skip,
+                onNext: _next,
+              );
+              if (hole == null) {
+                return Positioned(
+                  left: 16,
+                  right: 16,
+                  bottom: pad.bottom + 16,
+                  child: bubble,
+                );
+              }
+              final size = MediaQuery.sizeOf(context);
+              const gap = 14.0;
+              const estH = 210.0;
+              final spaceBelow = size.height - hole.bottom - pad.bottom - 16;
+              final preferBelow = spaceBelow >= estH + gap;
+              double top;
+              if (preferBelow) {
+                top = hole.bottom + gap;
+              } else {
+                top = hole.top - estH - gap;
+                if (top < pad.top + 12) {
+                  top = (pad.top + 12).clamp(0.0, size.height);
+                }
+              }
+              final maxTop = size.height - pad.bottom - estH - 8;
+              if (top > maxTop) top = maxTop;
+              return Positioned(
+                left: 16,
+                right: 16,
+                top: top,
+                child: bubble,
+              );
+            },
           ),
         ],
       ),

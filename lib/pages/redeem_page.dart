@@ -210,18 +210,42 @@ class _RedeemPageState extends State<RedeemPage> {
                 color: text,
               ),
             ),
-            const SizedBox(height: 8),
-            Text(
-              '· 每个兑换码仅可使用一次\n'
-              '· 需登录会员账号后兑换\n'
-              '· 积分 / 会员奖励到账可能有短暂延迟，下拉个人中心刷新即可',
-              style: TextStyle(
-                fontFamily: 'AppSans',
-                fontSize: 13,
-                height: 1.55,
-                color: secondary,
+            const SizedBox(height: 10),
+            for (final tip in const [
+              '每个兑换码仅可使用一次',
+              '需登录会员账号后兑换',
+              '积分 / 会员奖励到账可能有短暂延迟，下拉个人中心刷新即可',
+            ])
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      margin: const EdgeInsets.only(top: 5),
+                      width: 6,
+                      height: 6,
+                      decoration: BoxDecoration(
+                        color: AppColors.brand.withValues(alpha: 0.85),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        tip,
+                        style: TextStyle(
+                          fontFamily: 'AppSans',
+                          fontSize: 13,
+                          height: 1.45,
+                          fontWeight: FontWeight.w500,
+                          color: text.withValues(alpha: 0.78),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ),
           ],
         ),
       ),

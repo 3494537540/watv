@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../../services/maccms_api.dart';
 import '../../state/cms_auth_controller.dart';
 import '../dialogx/dialogx.dart';
+import '../ios_edge_back.dart';
 
 /// 组装提交到 CMS 留言本的报错正文（后台「留言」可见）
 String buildPlayErrorReportContent({
@@ -73,9 +74,12 @@ Future<void> showPlayErrorReportDialog(
       borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
     ),
     builder: (ctx) {
-      return _PlayErrorReportSheet(
-        vodId: vodId.trim(),
-        initialContent: initial,
+      return IosEdgeBack(
+        onBack: () => Navigator.of(ctx).maybePop(),
+        child: _PlayErrorReportSheet(
+          vodId: vodId.trim(),
+          initialContent: initial,
+        ),
       );
     },
   );
@@ -213,12 +217,17 @@ class _PlayErrorReportSheetState extends State<_PlayErrorReportSheet> {
               const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         );
 
-    return Padding(
-      padding: EdgeInsets.fromLTRB(16, 10, 16, 12 + bottom + pad.bottom),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
+    final maxH = MediaQuery.sizeOf(context).height * 0.88;
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(16, 10, 16, 12 + bottom + pad.bottom),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: maxH),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
           Center(
             child: Container(
               width: 36,
@@ -362,7 +371,10 @@ class _PlayErrorReportSheetState extends State<_PlayErrorReportSheet> {
                     ),
             ),
           ),
-        ],
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

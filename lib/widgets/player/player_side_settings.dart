@@ -235,7 +235,10 @@ class _PlayerSideSettingsPanelState extends State<PlayerSideSettingsPanel> {
         color: const Color(0xFFF5F6F8),
         child: AnimatedSwitcher(
           duration: const Duration(milliseconds: 180),
-          child: _pageBody(),
+          child: KeyedSubtree(
+            key: ValueKey<String>(_page),
+            child: _pageBody(),
+          ),
         ),
       );
     }
@@ -245,7 +248,10 @@ class _PlayerSideSettingsPanelState extends State<PlayerSideSettingsPanel> {
         padding: EdgeInsets.fromLTRB(12, 8, 12, 10 + pad.bottom),
         child: AnimatedSwitcher(
           duration: const Duration(milliseconds: 180),
-          child: _pageBody(),
+          child: KeyedSubtree(
+            key: ValueKey<String>(_page),
+            child: _pageBody(),
+          ),
         ),
       ),
     );
@@ -255,25 +261,21 @@ class _PlayerSideSettingsPanelState extends State<PlayerSideSettingsPanel> {
     final host = h;
     return switch (_page) {
       'speed' => _SpeedPage(
-          key: const ValueKey('speed'),
           value: host.playbackRate,
           onBack: () => _go('home'),
           onChanged: host.onPlaybackRate,
         ),
       'sleep' => _SleepPage(
-          key: const ValueKey('sleep'),
           minutes: host.sleepMinutes,
           onBack: () => _go('home'),
           onChanged: host.onSleepMinutes,
         ),
       'aspect' => _AspectPage(
-          key: const ValueKey('aspect'),
           value: host.settings.aspect,
           onBack: () => _go('home'),
           onChanged: (m) => host.onSettings(host.settings.copyWith(aspect: m)),
         ),
       'quality' => _QualityPage(
-          key: const ValueKey('quality'),
           prefer: host.qualityPrefer,
           variants: host.qualityVariants,
           current: host.currentQuality,
@@ -281,14 +283,22 @@ class _PlayerSideSettingsPanelState extends State<PlayerSideSettingsPanel> {
           onPrefer: host.onQualityPrefer,
           onVariant: host.onQualityVariant,
         ),
+      'playmode' => _PlayModePage(
+          settings: host.settings,
+          onBack: () => _go('home'),
+          onChanged: host.onSettings,
+        ),
+      'enhance' => _EnhancePage(
+          settings: host.settings,
+          onBack: () => _go('home'),
+          onChanged: host.onSettings,
+        ),
       'danmaku' => _DanmakuPage(
-          key: const ValueKey('danmaku'),
           prefs: host.danmakuPrefs,
           onBack: () => _go('home'),
           onChanged: host.onDanmakuPrefs,
         ),
       'skip' => _SkipPage(
-          key: const ValueKey('skip'),
           prefs: host.skipPrefs,
           positionSec: host.positionSec,
           durationSec: host.durationSec,
@@ -296,7 +306,6 @@ class _PlayerSideSettingsPanelState extends State<PlayerSideSettingsPanel> {
           onChanged: host.onSkipPrefs,
         ),
       'sources' => _SourcesPage(
-          key: const ValueKey('sources'),
           names: host.sourceNames,
           selected: host.sourceIndex,
           probeUrls: host.sourceProbeUrls,
@@ -307,21 +316,18 @@ class _PlayerSideSettingsPanelState extends State<PlayerSideSettingsPanel> {
           },
         ),
       'more' => _ExtraSettingsPage(
-          key: const ValueKey('more'),
           host: host,
           onBack: () => _go('home'),
           onOpen: _go,
         ),
       _ => widget.flatMode
           ? _FlatSettingsPage(
-              key: const ValueKey('flat'),
-              host: host,
+                  host: host,
               onClose: widget.onClose,
               onOpen: _go,
             )
           : _MoreHomePage(
-              key: const ValueKey('home'),
-              host: host,
+                  host: host,
               onClose: widget.onClose,
               onOpen: _go,
             ),
@@ -371,90 +377,79 @@ class _FlatSettingsPage extends StatelessWidget {
               ],
             ),
             _SettingsCard(
-          title: '播放',
+          title: '流畅与画质',
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const _SectionLabel('倍速'),
+              const _SectionLabel('播放模式'),
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  for (final r in const [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0])
+                  for (final m in PlayerPlayMode.values)
                     _Chip(
-                      label: VodPlayback.rateLabel(r),
-                      selected: (h.playbackRate - r).abs() < 0.01,
-                      onTap: () => h.onPlaybackRate(r),
+                      label: m.label,
+                      selected: h.settings.playMode == m,
+                      onTap: () => h.onSettings(
+                        h.settings.copyWith(playMode: m),
+                      ),
                     ),
                 ],
               ),
-              const SizedBox(height: 12),
-              const _SectionLabel('清晰度'),
+              Padding(
+                padding: const EdgeInsets.only(top: 6, bottom: 4),
+                child: Text(
+                  h.settings.playMode.hint,
+                  style: const TextStyle(
+                    fontFamily: 'AppSans',
+                    fontSize: 11,
+                    color: _moreGray,
+                    height: 1.3,
+                  ),
+                ),
+              ),
+              _SwitchRow(
+                title: '边看边缓',
+                value: h.settings.streamCacheEnabled,
+                onChanged: (v) => h.onSettings(
+                  h.settings.copyWith(streamCacheEnabled: v),
+                ),
+              ),
+              const SizedBox(height: 4),
+              const _SectionLabel('画质增强（自研）'),
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  _Chip(
-                    label: '自动',
-                    selected: h.qualityPrefer == VodQualityTier.auto,
-                    onTap: () => h.onQualityPrefer?.call(VodQualityTier.auto),
-                  ),
-                  if (h.qualityVariants.isEmpty)
-                    for (final t in [
-                      VodQualityTier.q1080,
-                      VodQualityTier.q720,
-                      VodQualityTier.q480,
-                    ])
-                      _Chip(
-                        label: t.label,
-                        selected: h.qualityPrefer == t,
-                        onTap: () => h.onQualityPrefer?.call(t),
-                      )
-                  else
-                    for (final v in [...h.qualityVariants].reversed)
-                      _Chip(
-                        label: v.shortLabel,
-                        selected: h.currentQuality?.url == v.url &&
-                            h.qualityPrefer != VodQualityTier.auto,
-                        onTap: () => h.onQualityVariant?.call(v),
+                  for (final e in PlayerEnhanceLevel.values)
+                    _Chip(
+                      label: e.label,
+                      selected: h.settings.enhanceLevel == e,
+                      onTap: () => h.onSettings(
+                        h.settings.copyWith(enhanceLevel: e),
                       ),
+                    ),
                 ],
+              ),
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  h.settings.enhanceLevel.hint,
+                  style: const TextStyle(
+                    fontFamily: 'AppSans',
+                    fontSize: 11,
+                    color: _moreGray,
+                    height: 1.3,
+                  ),
+                ),
               ),
             ],
           ),
         ),
-        _SettingsCard(
-          title: '画面',
-          child: Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final m in PlayerAspectMode.values)
-                _Chip(
-                  label: m.label,
-                  selected: h.settings.aspect == m,
-                  onTap: () =>
-                      h.onSettings(h.settings.copyWith(aspect: m)),
-                ),
-            ],
-          ),
-        ),
-        _SettingsCard(
+            _SettingsCard(
           title: '播放控制',
           child: Column(
             children: [
-              _SwitchRow(
-                title: '跳过片头片尾',
-                value: h.skipPrefs.enabled,
-                onChanged: (v) =>
-                    h.onSkipPrefs(h.skipPrefs.copyWith(enabled: v)),
-              ),
-              if (h.skipPrefs.enabled)
-                _LightTile(
-                  title: '片头/片尾细调',
-                  selected: false,
-                  onTap: () => onOpen('skip'),
-                ),
               _SwitchRow(
                 title: '自动连播',
                 value: h.settings.autoPlayNext,
@@ -569,21 +564,6 @@ class _FlatSettingsPage extends StatelessWidget {
             spacing: 8,
             runSpacing: 8,
             children: [
-              if (h.hasSources)
-                _Chip(
-                  label: '播放线路',
-                  selected: false,
-                  onTap: () => onOpen('sources'),
-                ),
-              if (h.hasEpisodes)
-                _Chip(
-                  label: '选集',
-                  selected: false,
-                  onTap: () {
-                    onClose();
-                    h.onOpenEpisodes();
-                  },
-                ),
               _Chip(
                 label: h.locked ? '解锁' : '锁屏',
                 selected: h.locked,
@@ -793,15 +773,6 @@ class _MoreHomePage extends StatelessWidget {
             h.onCast();
           },
         ),
-      if (h.hasSources)
-        _MoreTile(
-          icon: CupertinoIcons.layers_alt_fill,
-          label: '播放线路',
-          onTap: () {
-            onClose();
-            h.onOpenSources();
-          },
-        ),
       _MoreTile(
         icon: CupertinoIcons.rectangle_on_rectangle,
         label: '画中画',
@@ -814,6 +785,17 @@ class _MoreHomePage extends StatelessWidget {
         },
       ),
       _MoreTile(
+        icon: CupertinoIcons.gauge,
+        label: '播放模式',
+        onTap: () => onOpen('playmode'),
+      ),
+      _MoreTile(
+        icon: CupertinoIcons.sparkles,
+        label: '画质增强',
+        active: h.settings.enhanceLevel != PlayerEnhanceLevel.off,
+        onTap: () => onOpen('enhance'),
+      ),
+      _MoreTile(
         icon: CupertinoIcons.moon_zzz,
         label: '定时关闭',
         onTap: () => onOpen('sleep'),
@@ -824,16 +806,6 @@ class _MoreHomePage extends StatelessWidget {
         onTap: () {
           DialogX.showWarning('请从详情页使用缓存下载');
         },
-      ),
-      _MoreTile(
-        icon: CupertinoIcons.gauge,
-        label: '倍速',
-        onTap: () => onOpen('speed'),
-      ),
-      _MoreTile(
-        icon: CupertinoIcons.video_camera,
-        label: h.currentQuality?.shortLabel ?? h.qualityPrefer.label,
-        onTap: () => onOpen('quality'),
       ),
       _MoreTile(
         icon: CupertinoIcons.music_note_2,
@@ -911,11 +883,6 @@ class _MoreHomePage extends StatelessWidget {
           onClose();
           h.onScreenshot();
         },
-      ),
-      _MoreTile(
-        icon: CupertinoIcons.rectangle_expand_vertical,
-        label: '画面比例',
-        onTap: () => onOpen('aspect'),
       ),
       _MoreTile(
         icon: CupertinoIcons.arrow_left_right_square,
@@ -1144,9 +1111,11 @@ class _LightTile extends StatelessWidget {
     required this.title,
     required this.selected,
     required this.onTap,
+    this.subtitle,
   });
 
   final String title;
+  final String? subtitle;
   final bool selected;
   final VoidCallback onTap;
 
@@ -1165,6 +1134,17 @@ class _LightTile extends StatelessWidget {
           fontWeight: selected ? FontWeight.w800 : FontWeight.w500,
         ),
       ),
+      subtitle: subtitle == null
+          ? null
+          : Text(
+              subtitle!,
+              style: const TextStyle(
+                fontFamily: 'AppSans',
+                fontSize: 11,
+                color: _moreGray,
+                height: 1.3,
+              ),
+            ),
       trailing: selected
           ? Icon(CupertinoIcons.check_mark, color: _playerAccent, size: 18)
           : null,
@@ -1357,12 +1337,31 @@ class _QualityPage extends StatelessWidget {
               selected: prefer == VodQualityTier.auto,
               onTap: () => onPrefer?.call(VodQualityTier.auto),
             ),
-            for (final v in [...variants].reversed)
-              _LightTile(
-                title: v.label,
-                selected:
-                    current?.url == v.url && prefer != VodQualityTier.auto,
-                onTap: () => onVariant?.call(v),
+            for (final tier in const [
+              VodQualityTier.q1080,
+              VodQualityTier.q720,
+              VodQualityTier.q480,
+              VodQualityTier.q360,
+            ])
+              Builder(
+                builder: (_) {
+                  final match = VodPlayback.pickVariant(
+                    variants,
+                    tier,
+                    playMode: PlayerSettingsStore.cached.playMode,
+                  );
+                  if (match == null) return const SizedBox.shrink();
+                  if (match.height + 40 < tier.minHeight && match.tier != tier) {
+                    return const SizedBox.shrink();
+                  }
+                  return _LightTile(
+                    title: tier.label,
+                    selected: prefer == tier ||
+                        (prefer != VodQualityTier.auto &&
+                            current?.url == match.url),
+                    onTap: () => onPrefer?.call(tier),
+                  );
+                },
               ),
           ] else ...[
             _LightTile(
@@ -1589,10 +1588,31 @@ class _ExtraSettingsPage extends StatelessWidget {
       onBack: onBack,
       child: ListView(
         children: [
-          _LightTile(
-            title: '跳过片头片尾',
-            selected: false,
-            onTap: () => onOpen('skip'),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('播放模式', style: TextStyle(fontFamily: 'AppSans')),
+            subtitle: Text(
+              h.settings.playMode.label,
+              style: const TextStyle(fontFamily: 'AppSans', color: _moreGray),
+            ),
+            trailing: const Icon(CupertinoIcons.chevron_right, size: 16),
+            onTap: () => onOpen('playmode'),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('画质增强', style: TextStyle(fontFamily: 'AppSans')),
+            subtitle: Text(
+              h.settings.enhanceLevel.label,
+              style: const TextStyle(fontFamily: 'AppSans', color: _moreGray),
+            ),
+            trailing: const Icon(CupertinoIcons.chevron_right, size: 16),
+            onTap: () => onOpen('enhance'),
+          ),
+          _SwitchRow(
+            title: '边看边缓',
+            value: h.settings.streamCacheEnabled,
+            onChanged: (v) =>
+                h.onSettings(h.settings.copyWith(streamCacheEnabled: v)),
           ),
           _SwitchRow(
             title: '自动连播',
@@ -1645,19 +1665,107 @@ class _ExtraSettingsPage extends StatelessWidget {
             onChanged: (v) =>
                 h.onSettings(h.settings.copyWith(keepScreenOn: v)),
           ),
-          if (h.hasEpisodes)
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('选集', style: TextStyle(fontFamily: 'AppSans')),
-              trailing: const Icon(CupertinoIcons.chevron_right, size: 16),
-              onTap: h.onOpenEpisodes,
-            ),
           if (h.hasNext && h.onNextEpisode != null)
             ListTile(
               contentPadding: EdgeInsets.zero,
               title: const Text('下一集', style: TextStyle(fontFamily: 'AppSans')),
               onTap: h.onNextEpisode,
             ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PlayModePage extends StatelessWidget {
+  const _PlayModePage({
+    super.key,
+    required this.settings,
+    required this.onBack,
+    required this.onChanged,
+  });
+
+  final PlayerSettingsPrefs settings;
+  final VoidCallback onBack;
+  final ValueChanged<PlayerSettingsPrefs> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return _SubPageScaffold(
+      title: '播放模式',
+      onBack: onBack,
+      child: ListView(
+        children: [
+          for (final m in PlayerPlayMode.values)
+            _LightTile(
+              title: m.label,
+              subtitle: m.hint,
+              selected: settings.playMode == m,
+              onTap: () => onChanged(settings.copyWith(playMode: m)),
+            ),
+          const SizedBox(height: 8),
+          _SwitchRow(
+            title: '边看边缓',
+            value: settings.streamCacheEnabled,
+            onChanged: (v) =>
+                onChanged(settings.copyWith(streamCacheEnabled: v)),
+          ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(4, 4, 4, 8),
+            child: Text(
+              '开启后加大播放缓冲，并预热即将播放的分片，弱网更稳，可能略增流量。',
+              style: TextStyle(
+                fontFamily: 'AppSans',
+                fontSize: 12,
+                height: 1.35,
+                color: Color(0xFF888888),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EnhancePage extends StatelessWidget {
+  const _EnhancePage({
+    super.key,
+    required this.settings,
+    required this.onBack,
+    required this.onChanged,
+  });
+
+  final PlayerSettingsPrefs settings;
+  final VoidCallback onBack;
+  final ValueChanged<PlayerSettingsPrefs> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return _SubPageScaffold(
+      title: '画质增强',
+      onBack: onBack,
+      child: ListView(
+        children: [
+          for (final e in PlayerEnhanceLevel.values)
+            _LightTile(
+              title: e.label,
+              subtitle: e.hint,
+              selected: settings.enhanceLevel == e,
+              onTap: () => onChanged(settings.copyWith(enhanceLevel: e)),
+            ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(4, 8, 4, 8),
+            child: Text(
+              '哇TV 自研滤镜：实时调整对比度、饱和度与清晰感。无法凭空变成更高分辨率，弱网时仍建议搭配「流畅」模式。',
+              style: TextStyle(
+                fontFamily: 'AppSans',
+                fontSize: 12,
+                height: 1.35,
+                color: Color(0xFF888888),
+              ),
+            ),
+          ),
         ],
       ),
     );

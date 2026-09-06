@@ -6,8 +6,9 @@ import 'package:flutter/services.dart';
 
 import '../services/maccms_api.dart';
 import '../theme/app_colors.dart';
-import '../widgets/figma_loading.dart';
 import '../widgets/app_page_route.dart';
+import '../widgets/app_pull_refresh.dart';
+import '../widgets/figma_loading.dart';
 
 /// CMS 发布的文章列表
 class CmsArticlesPage extends StatefulWidget {
@@ -139,11 +140,19 @@ class _CmsArticlesPageState extends State<CmsArticlesPage> {
           ],
         ),
       ),
-      body: RefreshIndicator(
+      body: AppPullRefresh(
         color: AppColors.brand,
         onRefresh: _reload,
         child: _loading && _items.isEmpty
-            ? Center(child: FigmaMetaballLoader(size: 48))
+            ? ListView(
+                physics: const AlwaysScrollableScrollPhysics(
+                  parent: BouncingScrollPhysics(),
+                ),
+                children: const [
+                  SizedBox(height: 160),
+                  Center(child: WatvPageLoader(size: 48)),
+                ],
+              )
             : ListView.builder(
                 controller: _scroll,
                 physics: const AlwaysScrollableScrollPhysics(
@@ -194,7 +203,7 @@ class _CmsArticlesPageState extends State<CmsArticlesPage> {
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       child: Center(
                         child: _loadingMore
-                            ? const CupertinoActivityIndicator()
+                            ? const AppLoadingIndicator(size: 28)
                             : Text(
                                 _hasMore ? '' : '没有更多了',
                                 style: const TextStyle(
@@ -472,14 +481,65 @@ class _ArticleRowCard extends StatelessWidget {
   }
 }
 
-class CmsArticleDetailPage extends StatelessWidget {
+class CmsArticleDetailPage extends StatefulWidget {
   const CmsArticleDetailPage({super.key, required this.article});
 
   final CmsArticle article;
 
   @override
+  State<CmsArticleDetailPage> createState() => _CmsArticleDetailPageState();
+}
+
+class _CmsArticleDetailPageState extends State<CmsArticleDetailPage> {
+  late CmsArticle _article;
+  bool _loading = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _article = widget.article;
+    if (!_article.hasBody) {
+      unawaited(_loadDetail());
+    }
+  }
+
+  Future<void> _loadDetail() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final full = await MacCmsApi().fetchArticleDetail(_article.id);
+      if (!mounted) return;
+      if (full == null) {
+        setState(() {
+          _loading = false;
+          _error = '正文加载失败';
+        });
+        return;
+      }
+      setState(() {
+        _article = full;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = '$e';
+      });
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final cover = article.coverUrl.trim();
+    final a = _article;
+    final cover = a.coverUrl.trim();
+    final body = a.content.trim().isNotEmpty
+        ? a.content.trim()
+        : (a.subTitle.trim().isNotEmpty ? a.subTitle.trim() : '');
+
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
@@ -488,7 +548,7 @@ class CmsArticleDetailPage extends StatelessWidget {
         surfaceTintColor: Colors.transparent,
         foregroundColor: const Color(0xFF181818),
         title: Text(
-          article.title,
+          a.title,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(
@@ -498,98 +558,126 @@ class CmsArticleDetailPage extends StatelessWidget {
           ),
         ),
       ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
-        children: [
-          if (cover.isNotEmpty) ...[
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: AspectRatio(
-                aspectRatio: 16 / 9,
-                child: Image.network(
-                  cover,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, _, _) => const ColoredBox(
-                    color: Color(0xFFF0F1F3),
-                  ),
-                ),
-              ),
-            ),
-            SizedBox(height: 16),
-          ],
-          Text(
-            article.title,
-            textAlign: TextAlign.left,
-            style: const TextStyle(
-              fontFamily: 'AppSans',
-              fontSize: 22,
-              fontWeight: FontWeight.w800,
-              color: Color(0xFF181818),
-              height: 1.3,
-            ),
-          ),
-          SizedBox(height: 10),
-          Row(
-            children: [
-              if (article.typeName.isNotEmpty) ...[
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 3,
-                  ),
-                  decoration: BoxDecoration(
-                    color: AppColors.brand.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Text(
-                    article.typeName,
-                    style: TextStyle(
-                      fontFamily: 'AppSans',
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.brand,
+      body: _loading && !a.hasBody
+          ? const Center(child: AppLoadingIndicator(size: 40))
+          : ListView(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
+              children: [
+                if (cover.isNotEmpty) ...[
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: AspectRatio(
+                      aspectRatio: 16 / 9,
+                      child: Image.network(
+                        cover,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => const ColoredBox(
+                          color: Color(0xFFF0F1F3),
+                        ),
+                      ),
                     ),
                   ),
-                ),
-                SizedBox(width: 10),
-              ],
-              Expanded(
-                child: Text(
-                  [
-                    if (article.author.isNotEmpty) article.author,
-                    if (article.timeText.isNotEmpty) article.timeText,
-                  ].join(' · '),
+                  const SizedBox(height: 16),
+                ],
+                Text(
+                  a.title,
+                  textAlign: TextAlign.left,
                   style: const TextStyle(
                     fontFamily: 'AppSans',
-                    fontSize: 12,
-                    color: Color(0xFF8E8E93),
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF181818),
+                    height: 1.3,
                   ),
                 ),
-              ),
-            ],
-          ),
-          SizedBox(height: 18),
-          Container(
-            height: 3,
-            width: 36,
-            decoration: BoxDecoration(
-              color: AppColors.brand,
-              borderRadius: BorderRadius.circular(2),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    if (a.typeName.isNotEmpty) ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppColors.brand.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          a.typeName,
+                          style: TextStyle(
+                            fontFamily: 'AppSans',
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.brand,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                    ],
+                    Expanded(
+                      child: Text(
+                        [
+                          if (a.author.isNotEmpty) a.author,
+                          if (a.from.isNotEmpty) a.from,
+                          if (a.timeText.isNotEmpty) a.timeText,
+                          if (a.hits > 0) '阅读 ${a.hits}',
+                        ].join(' · '),
+                        style: const TextStyle(
+                          fontFamily: 'AppSans',
+                          fontSize: 12,
+                          color: Color(0xFF8E8E93),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                if (a.tag.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    a.tag,
+                    style: const TextStyle(
+                      fontFamily: 'AppSans',
+                      fontSize: 12,
+                      color: Color(0xFFB0B0B5),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 18),
+                Container(
+                  height: 3,
+                  width: 36,
+                  decoration: BoxDecoration(
+                    color: AppColors.brand,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                if (_error != null && body.isEmpty)
+                  TextButton(
+                    onPressed: () => unawaited(_loadDetail()),
+                    child: Text(
+                      '$_error\n点击重试',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontFamily: 'AppSans',
+                        color: AppColors.brand,
+                      ),
+                    ),
+                  )
+                else
+                  Text(
+                    body.isEmpty ? '暂无正文' : body,
+                    textAlign: TextAlign.left,
+                    style: const TextStyle(
+                      fontFamily: 'AppSans',
+                      fontSize: 15,
+                      height: 1.7,
+                      color: Color(0xFF333333),
+                    ),
+                  ),
+              ],
             ),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            article.content.isEmpty ? '暂无正文' : article.content,
-            textAlign: TextAlign.left,
-            style: const TextStyle(
-              fontFamily: 'AppSans',
-              fontSize: 15,
-              height: 1.7,
-              color: Color(0xFF333333),
-            ),
-          ),
-        ],
-      ),
     );
   }
 }

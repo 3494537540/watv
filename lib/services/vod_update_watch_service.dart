@@ -5,7 +5,6 @@ import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/movie_models.dart';
-import 'app_permission.dart';
 import 'cms_fav_store.dart';
 import 'cms_message_store.dart';
 import 'local_notification_service.dart';
@@ -65,9 +64,7 @@ abstract final class VodUpdateWatchService {
           // 未授权时不写 lastCheck，下次仍可再请求
           return;
         }
-      } else if (!await AppPermission.isGranted(
-        AppPermissionKind.notifications,
-      )) {
+      } else if (!await LocalNotificationService.areNotificationsEnabled()) {
         return;
       }
 

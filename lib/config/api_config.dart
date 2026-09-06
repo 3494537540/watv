@@ -175,6 +175,13 @@ class ApiConfig {
   static String get huihuoPanelUpdateUrl =>
       '$huihuoPanelBase?api=app_update';
 
+  /// 官网安装包 + 更新日志列表（双端）
+  static String get huihuoPanelWebsiteUrl =>
+      '$huihuoPanelBase?api=website';
+
+  /// App 内「官网下载」默认落地页（面板可按端覆盖 website_url）
+  static const String officialWebsiteUrl = 'https://www.watv.fun';
+
   static String get huihuoPanelAppConfigUrl =>
       '$huihuoPanelBase?api=app_config';
 
@@ -183,6 +190,29 @@ class ApiConfig {
 
   static String get huihuoPanelRedeemUrl =>
       '$huihuoPanelBase?api=redeem';
+
+  /// QQ 授权登录（openid → CMS Cookie）
+  static String get huihuoPanelQqOauthUrl =>
+      '$huihuoPanelBase?api=qq_oauth';
+
+  /// 扫描采集新增片源并写入公告
+  static String get huihuoPanelVodCollectSyncUrl =>
+      '$huihuoPanelBase?api=vod_collect_sync';
+
+  /// 查询 CMS 会员组 / 到期时间
+  static String huihuoPanelUserVipUrl(int userId) =>
+      '$huihuoPanelBase?api=user_vip&user_id=$userId';
+
+  /// 文章详情（DB，补全 provide 缺正文）
+  static String huihuoPanelArtDetailUrl(String artId) =>
+      '$huihuoPanelBase?api=art_detail&id=${Uri.encodeQueryComponent(artId)}';
+
+  /// 每日打卡
+  static String get huihuoPanelCheckinUrl =>
+      '$huihuoPanelBase?api=checkin';
+
+  static String huihuoPanelCheckinStatusUrl(int userId) =>
+      '$huihuoPanelBase?api=checkin_status&user_id=$userId';
 
   /// 按影片过滤的评论列表（DB 直查；可带片名，避免 id 不一致）
   static String huihuoPanelCommentListUrl({
@@ -202,6 +232,30 @@ class ApiConfig {
     return '$huihuoPanelBase?${q.join('&')}';
   }
 
+  /// 我的评论记录
+  static String huihuoPanelCommentMineUrl({
+    required int userId,
+    int page = 1,
+    int limit = 30,
+    String userName = '',
+    String nickName = '',
+    List<String> aliases = const [],
+  }) {
+    final q = <String>[
+      'api=comment_mine',
+      'user_id=$userId',
+      'page=$page',
+      'limit=$limit',
+      if (userName.trim().isNotEmpty)
+        'user_name=${Uri.encodeQueryComponent(userName.trim())}',
+      if (nickName.trim().isNotEmpty)
+        'nick_name=${Uri.encodeQueryComponent(nickName.trim())}',
+      for (final a in aliases)
+        if (a.trim().isNotEmpty)
+          'alias[]=${Uri.encodeQueryComponent(a.trim())}',
+    ];
+    return '$huihuoPanelBase?${q.join('&')}';
+  }
   /// 封面反代（部分采集 CDN 客户端直连会被重置）
   static String huihuoImgProxyUrl(String absoluteImageUrl) =>
       '$huihuoPanelBase?api=img_proxy&u=${Uri.encodeComponent(absoluteImageUrl)}';

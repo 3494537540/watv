@@ -85,7 +85,6 @@ class _CastPanelState extends State<CastPanel> {
   bool _scanning = false;
   bool _casting = false;
   bool _paused = false;
-  bool _showMore = false;
   DlnaDevice? _active;
 
   bool get _isIos =>
@@ -96,7 +95,8 @@ class _CastPanelState extends State<CastPanel> {
   @override
   void initState() {
     super.initState();
-    if (!_isIos) unawaited(_scan());
+    // iOS / Android 都自动搜局域网设备（内置 DLNA 投屏）
+    unawaited(_scan());
   }
 
   Future<void> _scan() async {
@@ -255,7 +255,7 @@ class _CastPanelState extends State<CastPanel> {
                           ),
                         ),
                         Text(
-                          _isIos ? 'AirPlay / 屏幕镜像' : '同一 Wi‑Fi 下的电视',
+                          _isIos ? 'AirPlay / 局域网设备' : '同一 Wi‑Fi 下的电视',
                           style: const TextStyle(
                             fontFamily: 'AppSans',
                             fontSize: 12,
@@ -277,24 +277,26 @@ class _CastPanelState extends State<CastPanel> {
               ),
               const SizedBox(height: 12),
               if (_isIos) ...[
+                // ① AirPlay：系统路由面板（搜 Apple TV / AirPlay 音箱等）
                 Row(
                   children: [
                     Expanded(
-                      child: FilledButton(
+                      child: FilledButton.icon(
                         onPressed: _openAirPlay,
+                        icon: const Icon(Icons.airplay_rounded, size: 18),
+                        label: const Text(
+                          'AirPlay 搜设备',
+                          style: TextStyle(
+                            fontFamily: 'AppSans',
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
                         style: FilledButton.styleFrom(
                           backgroundColor: _accent,
                           foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(vertical: 12),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                        child: const Text(
-                          '打开系统投屏',
-                          style: TextStyle(
-                            fontFamily: 'AppSans',
-                            fontWeight: FontWeight.w700,
                           ),
                         ),
                       ),
@@ -311,31 +313,57 @@ class _CastPanelState extends State<CastPanel> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 6),
                 const Text(
-                  '也可下拉控制中心使用「屏幕镜像」',
+                  'AirPlay：把当前视频投到 Apple TV / 支持 AirPlay 的设备\n'
+                  '屏幕镜像：请下拉控制中心点「屏幕镜像」搜同屏设备',
                   style: TextStyle(
                     fontFamily: 'AppSans',
                     fontSize: 11,
+                    height: 1.35,
                     color: _muted,
                   ),
                 ),
-                if (!_showMore)
-                  TextButton(
-                    onPressed: () {
-                      setState(() => _showMore = true);
-                      unawaited(_scan());
-                    },
-                    child: Text(
-                      '更多 DLNA 设备',
-                      style: TextStyle(
-                        fontFamily: 'AppSans',
-                        fontSize: 12,
-                        color: _accent,
-                        fontWeight: FontWeight.w600,
+                const SizedBox(height: 12),
+                // ② 内置 DLNA：搜电视盒子
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        '内置投屏（局域网）',
+                        style: TextStyle(
+                          fontFamily: 'AppSans',
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: _ink,
+                        ),
                       ),
                     ),
-                  ),
+                    Text(
+                      _scanning
+                          ? '搜索中…'
+                          : (_devices.isEmpty
+                              ? '未发现'
+                              : '发现 ${_devices.length} 台'),
+                      style: const TextStyle(
+                        fontFamily: 'AppSans',
+                        fontSize: 12,
+                        color: _muted,
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _scanning ? null : _scan,
+                      child: Text(
+                        '刷新',
+                        style: TextStyle(
+                          fontFamily: 'AppSans',
+                          fontWeight: FontWeight.w700,
+                          color: _accent,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ] else ...[
                 Row(
                   children: [
@@ -404,11 +432,11 @@ class _CastPanelState extends State<CastPanel> {
                   ),
                 ),
               ],
-              if ((!_isIos || _showMore) && _devices.isNotEmpty) ...[
+              if (_devices.isNotEmpty) ...[
                 const SizedBox(height: 6),
                 ConstrainedBox(
                   constraints: BoxConstraints(
-                    maxHeight: widget.asSide ? 280 : 160,
+                    maxHeight: widget.asSide ? 280 : 180,
                   ),
                   child: ListView.separated(
                     shrinkWrap: true,
@@ -452,6 +480,16 @@ class _CastPanelState extends State<CastPanel> {
                         onTap: on || _casting ? null : () => _castTo(d),
                       );
                     },
+                  ),
+                ),
+              ] else if (_isIos && !_scanning) ...[
+                const SizedBox(height: 4),
+                const Text(
+                  '未搜到局域网电视时，可试 AirPlay 或控制中心「屏幕镜像」',
+                  style: TextStyle(
+                    fontFamily: 'AppSans',
+                    fontSize: 11,
+                    color: _muted,
                   ),
                 ),
               ],

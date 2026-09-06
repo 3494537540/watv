@@ -28,6 +28,23 @@ abstract final class FigmaSkeletonColors {
       : icon;
 }
 
+/// 四大主页统一全页加载（跟随设置「加载动画」）
+class WatvPageLoader extends StatelessWidget {
+  const WatvPageLoader({super.key, this.size = 48});
+
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: AppLoadingIndicator(
+        size: size,
+        color: AppColors.brand,
+      ),
+    );
+  }
+}
+
 /// 页面加载：跟随设置里的「加载动画」
 class FigmaMetaballLoader extends StatelessWidget {
   const FigmaMetaballLoader({

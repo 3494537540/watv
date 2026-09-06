@@ -8,20 +8,24 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:gal/gal.dart';
-import 'package:screen_brightness/screen_brightness.dart';
 import 'package:video_player/video_player.dart';
-
+import 'package:screen_brightness/screen_brightness.dart';
 import '../../models/movie_models.dart';
 import '../../player/danmaku_store.dart';
+import '../../player/playback_enhance.dart';
+import '../../player/playback_profile.dart';
 import '../../player/playback_speed_tracker.dart';
 import '../../player/playback_wakelock.dart';
 import '../../player/player_danmaku_prefs.dart';
 import '../../player/player_pip.dart';
 import '../../player/player_settings_store.dart';
 import '../../player/player_skip_store.dart';
+import '../../player/stream_ahead_cache.dart';
+import '../../player/vod_engine.dart';
 import '../../player/vod_playback.dart';
 import '../../services/app_permission.dart';
 import '../../services/danmaku_remote_api.dart';
+import '../../services/vod_cache_store.dart';
 import '../../state/cms_auth_controller.dart';
 import '../dialogx/dialogx.dart';
 import '../cast_sheet.dart';
@@ -35,7 +39,7 @@ import 'play_error_report.dart';
 import 'player_sheets.dart';
 import 'player_side_settings.dart';
 
-/// 芒果风格内嵌播放器（video_player / ExoPlayer，Android 稳定）
+/// ??????????video_player / ExoPlayer?Android ???
 class MangoInlinePlayer extends StatefulWidget {
   const MangoInlinePlayer({
     super.key,
@@ -85,26 +89,26 @@ class MangoInlinePlayer extends StatefulWidget {
   final List<String> sourceNames;
   final int sourceIndex;
   final ValueChanged<int>? onSourceSelect;
-  /// 与 sourceNames 对应的探测地址（测速）
+  /// ? sourceNames ???????????
   final List<String> sourceProbeUrls;
-  /// 当前线路失败时请求父级切源；返回 true 表示已切换，播放器等待新 url
+  /// ???????????????? true ???????????? url
   final Future<bool> Function()? onRequestSourceFailover;
-  /// 用户点「重试」前，父级可清空失败线路记录并回到最优源
+  /// ??????????????????????????
   final Future<void> Function()? onPrepareRetry;
-  /// 全屏等无下方选集区时，在「更多」里显示选集
+  /// ?????????????????????
   final bool showEpisodesInMenu;
-  /// 有 vodId 时启用弹幕
+  /// ? vodId ?????
   final String? vodId;
-  /// 片名，用于第三方弹幕库按标题匹配（如 B 站）
+  /// ?????????????????? B ??
   final String danmakuTitle;
   final int danmakuEpisode;
-  /// CMS 集标题，例如「第12集」，用于对齐 B 站分集
+  /// CMS ????????12??????? B ???
   final String danmakuEpisodeLabel;
   final VoidCallback? onCast;
-  /// 短剧/直播等场景关闭弹幕
+  /// ??/?????????
   final bool enableDanmaku;
   final VoidCallback? onPip;
-  /// 未就绪时垫在画面下的封面
+  /// ????????????
   final String? posterUrl;
 
   @override
@@ -112,12 +116,13 @@ class MangoInlinePlayer extends StatefulWidget {
 }
 
 class MangoInlinePlayerState extends State<MangoInlinePlayer> {
-  VideoPlayerController? _controller;
+  VodEngine? _engine;
   bool _ready = false;
   bool _failed = false;
-  /// 最近一次播放失败原因（提交 CMS 报错用）
+  /// ????????????? CMS ????
   String _lastErrorMsg = '';
   bool _failoverBusy = false;
+  bool _suppressSourceFailover = false;
   bool _showChrome = true;
   double _playbackRate = 1.0;
   Timer? _hideTimer;
@@ -131,6 +136,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
   Timer? _seekHintTimer;
   int _progressTick = 0;
   bool _locked = false;
+  bool _isLocalMedia = false;
   DanmakuDisplayPrefs _danmakuPrefs = PlayerDanmakuPrefs.cached;
   List<DanmakuItem> _danmakuItems = const [];
   int _danmakuLoadToken = 0;
@@ -146,43 +152,40 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
   Timer? _sleepTimer;
   final _videoShotKey = GlobalKey();
   final _stallLoading = ValueNotifier<bool>(false);
-  bool _lastStallFlag = false;
 
-  /// HLS 多清晰度
+  /// HLS ????
   List<VodHlsVariant> _qualityVariants = const [];
   VodHlsVariant? _currentVariant;
   VodQualityTier _qualityPrefer = VodQualityStore.cached;
   String? _activePlayUrl;
-  int _stallDropHits = 0;
-  DateTime? _stallDropWindow;
   bool _qualityBusy = false;
 
-  /// 横向滑动调进度
+  /// ???????
   bool _scrubbing = false;
   int _scrubBaseMs = 0;
   int _scrubTargetMs = 0;
   double _scrubAccumDx = 0;
 
   int get positionMs =>
-      _controller?.value.position.inMilliseconds ?? widget.startPositionMs;
+      _engine?.value.position.inMilliseconds ?? widget.startPositionMs;
 
   Duration get position =>
-      _controller?.value.position ??
+      _engine?.value.position ??
       Duration(milliseconds: widget.startPositionMs);
 
   String get _sourceChromeLabel {
-    if (widget.sourceNames.isEmpty) return '线路';
+    if (widget.sourceNames.isEmpty) return '??';
     final i = widget.sourceIndex.clamp(0, widget.sourceNames.length - 1);
     final raw = widget.sourceNames[i].trim();
-    if (raw.isEmpty) return '线路${i + 1}';
-    // 底栏空间有限，过长截断
+    if (raw.isEmpty) return '??${i + 1}';
+    // ???????????
     if (raw.length <= 6) return raw;
-    return '${raw.substring(0, 5)}…';
+    return '${raw.substring(0, 5)}?';
   }
 
   Future<void> _pickSource([BuildContext? anchor]) async {
     if (widget.sourceNames.length <= 1 || widget.onSourceSelect == null) {
-      DialogX.showWarning('当前影片只有一条播放线路');
+      DialogX.showWarning('????????????');
       return;
     }
     if (_preferSidePopups) {
@@ -204,35 +207,35 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
   }
 
   Future<void> _markSkipAtCurrent({required bool intro}) async {
-    final c = _controller;
+    final c = _engine;
     if (c == null || !c.value.isInitialized) return;
     final pos = c.value.position.inSeconds.clamp(0, 600);
     final dur = c.value.duration.inSeconds;
     PlayerSkipPrefs next;
     if (intro) {
       next = _skipPrefs.copyWith(enabled: true, introSeconds: pos);
-      DialogX.showSuccess('已设片头结束于 ${pos}s（进度条绿标）');
+      DialogX.showSuccess('??????? ${pos}s???????');
     } else {
       final remain = dur > 0 ? (dur - pos).clamp(0, 600) : 90;
       next = _skipPrefs.copyWith(enabled: true, outroSeconds: remain);
-      DialogX.showSuccess('已设片尾开始（距片尾 ${remain}s，进度条橙标）');
+      DialogX.showSuccess('?????????? ${remain}s???????');
     }
     await _saveSkipPrefs(next);
   }
 
   Future<void> pause() async {
-    await _controller?.pause();
+    await _engine?.pause();
   }
 
   Future<void> play() async {
-    await _controller?.play();
+    await _engine?.play();
   }
 
   Future<void> seekTo(Duration position) async {
-    await _controller?.seekTo(position);
+    await _engine?.seekTo(position);
   }
 
-  /// 进入画中画前收起控件，小窗只留画面
+  /// ?????????????????
   void hideChrome() {
     if (!_showChrome && !_showSideSettings && !_showCastSide) return;
     _hideTimer?.cancel();
@@ -244,7 +247,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     });
   }
 
-  /// 播放器在屏幕上的区域（画中画 sourceRectHint，物理像素）
+  /// ?????????????? sourceRectHint??????
   Rect? playerScreenRect() {
     final box = context.findRenderObject() as RenderBox?;
     if (box == null || !box.hasSize) return null;
@@ -264,9 +267,10 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     final rect = playerScreenRect();
     await PlayerPip.enter(
       sourceRect: rect,
-      controller: _controller,
+      iosPlayerId: _engine?.nativePlayerId,
+      videoAspect: _engine?.value.aspectRatio ?? 16 / 9,
     );
-    // 进窗后再播，避免和系统动画抢同一帧
+    // ?????????????????
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       unawaited(play());
@@ -275,7 +279,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
 
   void _onPipFlag() {
     if (!mounted) return;
-    // 仅刷新本控件透明度，绝不挪动 VideoPlayer 节点
+    // ?????????????? VideoPlayer ??
     setState(() {});
     if (PlayerPip.isInPip) {
       hideChrome();
@@ -285,11 +289,11 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     }
   }
 
-  /// 顶栏快进等外部入口
+  /// ?????????
   Future<void> seekBySeconds(int seconds) => _seekRelative(seconds);
 
   Future<void> _seekRelative(int seconds) async {
-    final c = _controller;
+    final c = _engine;
     if (c == null || !c.value.isInitialized) return;
     final cur = c.value.position.inMilliseconds;
     final total = c.value.duration.inMilliseconds;
@@ -329,8 +333,10 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
   }
 
   void _onScrubStart() {
+    StreamAheadCache.instance.setPaused(true);
+    StreamAheadCache.instance.abortInFlight();
     if (_locked || !_ready || _holdBoost) return;
-    final c = _controller;
+    final c = _engine;
     if (c == null || !c.value.isInitialized) return;
     _scrubbing = true;
     _scrubBaseMs = c.value.position.inMilliseconds;
@@ -341,12 +347,12 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
 
   void _onScrubUpdate(DragUpdateDetails d, double width) {
     if (!_scrubbing || width <= 0) return;
-    final c = _controller;
+    final c = _engine;
     if (c == null || !c.value.isInitialized) return;
     _scrubAccumDx += d.delta.dx;
     final total = c.value.duration.inMilliseconds;
     if (total <= 0) return;
-    // 整屏横向约扫过片长的 40%，手感接近主流播放器
+    // ?????????? 40%??????????
     final deltaMs = (_scrubAccumDx / width * total * 0.4).round();
     _scrubTargetMs = (_scrubBaseMs + deltaMs).clamp(0, total);
     final deltaSec = ((_scrubTargetMs - _scrubBaseMs) / 1000).round();
@@ -363,14 +369,17 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     final target = _scrubTargetMs;
     _seekHintTimer?.cancel();
     if (mounted) setState(() => _seekHint = null);
-    final c = _controller;
+    final c = _engine;
     if (c == null || !c.value.isInitialized) return;
+    StreamAheadCache.instance.updatePosition(target);
+    unawaited(StreamAheadCache.instance.warmSeekTarget(target, count: 2));
     await c.seekTo(Duration(milliseconds: target));
     await c.play();
+    StreamAheadCache.instance.setPaused(false);
     _onInteract();
   }
 
-  Future<void> _applySkipIntro(VideoPlayerController c) async {
+  Future<void> _applySkipIntro(VodEngine c) async {
     _skipPrefs = await PlayerSkipStore.load();
     if (!_skipPrefs.enabled || _skipPrefs.introSeconds <= 0) return;
     if (widget.startPositionMs > 3000) return;
@@ -385,7 +394,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     if (_playerSettings.loopSingle) return;
     if (!_playerSettings.autoPlayNext) return;
     if (!widget.showNextEpisode || widget.onNextEpisode == null) return;
-    final c = _controller;
+    final c = _engine;
     if (c == null || !c.value.isInitialized) return;
     final dur = c.value.duration.inSeconds;
     if (dur <= 0) return;
@@ -408,7 +417,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     });
   }
 
-  /// 沉浸播放：一律右侧滑出（点遮罩关闭）；内嵌矮窗才用底部 sheet
+  /// ??????????????????????????? sheet
   Future<void> openSettings({String page = 'home'}) async {
     if (!mounted) return;
     if (widget.immersiveTop) {
@@ -451,7 +460,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
       playbackRate: _playbackRate,
       onPlaybackRate: (r) async {
         _playbackRate = r;
-        await _controller?.setPlaybackSpeed(r);
+        await _engine?.setPlaybackSpeed(r);
         if (r >= 1.5) {
           await _savePlayerSettings(
             _playerSettings.copyWith(
@@ -470,7 +479,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
       onSettings: (p) => unawaited(_savePlayerSettings(p)),
       sleepMinutes: _sleepMinutes,
       onSleepMinutes: _setSleepMinutes,
-      // 勿在此 Navigator.pop：面板按钮已 onClose，再 pop 会退出详情页
+      // ??? Navigator.pop?????? onClose?? pop ??????
       onToggleLock: _toggleLock,
       locked: _locked,
       onSendDanmaku: () => unawaited(_sendDanmaku()),
@@ -496,7 +505,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
       onQualityPrefer: (t) => unawaited(_applyQualityPrefer(t)),
       onQualityVariant: (v) => unawaited(_switchToVariant(v, prefer: v.tier)),
       positionSec: position.inSeconds,
-      durationSec: _controller?.value.duration.inSeconds ?? 0,
+      durationSec: _engine?.value.duration.inSeconds ?? 0,
       sourceNames: widget.sourceNames,
       sourceIndex: widget.sourceIndex,
       sourceProbeUrls: widget.sourceProbeUrls,
@@ -529,7 +538,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
   }
 
   void openCast() {
-    // 横屏全屏用侧栏；竖屏小窗用底部投屏面板，避免未全屏看不到入口
+    // ??????????????????????????????
     final wide =
         MediaQuery.sizeOf(context).width > MediaQuery.sizeOf(context).height;
     if (widget.immersiveTop && wide) {
@@ -540,16 +549,16 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
   }
 
   Future<void> _reportPlayError() async {
-    final c = _controller;
+    final c = _engine;
     var err = _lastErrorMsg.trim();
     if (err.isEmpty && c != null && c.value.hasError) {
       err = c.value.errorDescription?.trim() ?? '';
     }
     if (err.isEmpty && _failed) {
-      err = '播放失败';
+      err = '????';
     }
     if (err.isEmpty) {
-      err = '用户手动报错（播放异常/卡顿/错源等）';
+      err = '???????/??/????';
     }
     final sourceName = (widget.sourceIndex >= 0 &&
             widget.sourceIndex < widget.sourceNames.length)
@@ -575,14 +584,135 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
   }
 
   Future<void> _savePlayerSettings(PlayerSettingsPrefs prefs) async {
+    final prev = _playerSettings;
+    // 仅系统内核
+    prefs = prefs.copyWith(kernel: PlayerKernel.exo);
     await PlayerSettingsStore.save(prefs);
     if (!mounted) return;
     setState(() => _playerSettings = prefs);
-    await _controller?.setLooping(prefs.loopSingle);
+    await _engine?.setLooping(prefs.loopSingle);
     if (prefs.keepScreenOn) {
       await PlaybackWakelock.acquire();
     } else {
       await PlaybackWakelock.release();
+    }
+    final kernelChanged = prev.kernel != prefs.kernel;
+    final modeChanged = prev.playMode != prefs.playMode;
+    final cacheChanged = prev.streamCacheEnabled != prefs.streamCacheEnabled;
+    if (kernelChanged) {
+      _suppressSourceFailover = true;
+      StreamAheadCache.instance.stop();
+      final resume = positionMs;
+      final wasPlaying = !_failed && (_engine?.value.isPlaying ?? true);
+      if (mounted) {
+        setState(() {
+          _ready = false;
+          _failed = false;
+          _lastErrorMsg = '';
+          // ???????????????????????????????
+          _currentVariant = null;
+          _qualityVariants = const [];
+          _activePlayUrl = null;
+        });
+      }
+      // ???????????? media_kit ??????? Exo
+      await _disposeController(keepWakelock: false);
+      await Future<void>.delayed(const Duration(milliseconds: 450));
+      if (!mounted) return;
+      try {
+        await _init(resumeMs: resume, autoPlay: wasPlaying);
+      } finally {
+        _suppressSourceFailover = false;
+      }
+      return;
+    }
+    if (modeChanged &&
+        _qualityPrefer == VodQualityTier.auto &&
+        _qualityVariants.length > 1) {
+      final v = VodPlayback.pickVariant(
+        _qualityVariants,
+        VodQualityTier.auto,
+        playMode: prefs.playMode,
+      );
+      if (v != null && v.url != _currentVariant?.url) {
+        unawaited(_switchToVariant(v, prefer: VodQualityTier.auto));
+        return;
+      }
+    }
+    if (modeChanged || cacheChanged) {
+      _syncStreamAheadCache();
+    }
+  }
+
+
+  Future<void> _enrichVariantsLater(String masterUrl, int token) async {
+    try {
+      final resolved = await VodPlayback.resolveStream(
+        masterUrl,
+        prefer: _qualityPrefer,
+        playMode: _playerSettings.playMode,
+      );
+      if (!mounted || token != _initToken) return;
+      if (resolved.variants.length < 2) return;
+      setState(() {
+        _qualityVariants = resolved.variants;
+        _currentVariant ??= resolved.selected ??
+            VodPlayback.pickVariant(
+              resolved.variants,
+              _qualityPrefer,
+              playMode: _playerSettings.playMode,
+            );
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _deferredAfterPlay(int token) async {
+    // ?????? 2.5s ???
+    await Future<void>.delayed(const Duration(milliseconds: 2500));
+    if (!mounted || token != _initToken) return;
+    unawaited(_loadDanmaku());
+    // ????????????????????????
+    for (var i = 0; i < 12; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      if (!mounted || token != _initToken) return;
+      final c = _engine;
+      if (c == null || !c.value.isInitialized || c.value.hasError) return;
+      if (c.value.isBuffering) continue;
+      final ahead = _bufferedAheadMsOf(c.value);
+      if (ahead < 0 || ahead >= 8000 || i >= 8) {
+        _syncStreamAheadCache();
+        return;
+      }
+    }
+  }
+
+  int _bufferedAheadMsOf(VodEngineValue v) {
+    final pos = v.position;
+    Duration end = Duration.zero;
+    for (final r in v.buffered) {
+      if (r.end > end) end = r.end;
+    }
+    if (v.buffered.isEmpty) return -1;
+    if (end <= pos) return 0;
+    return (end - pos).inMilliseconds;
+  }
+
+  void _syncStreamAheadCache() {
+    final profile = PlaybackProfile.of(_playerSettings);
+    final url = _activePlayUrl?.trim() ?? '';
+    if (_ready &&
+        !_failed &&
+        url.isNotEmpty &&
+        _playerSettings.streamCacheEnabled &&
+        profile.warmSegmentCount > 0 &&
+        !_isLocalMedia) {
+      StreamAheadCache.instance.start(
+        playUrl: url,
+        warmSegmentCount: profile.warmSegmentCount,
+        positionMs: positionMs,
+      );
+    } else {
+      StreamAheadCache.instance.stop();
     }
   }
 
@@ -604,11 +734,11 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     if (minutes > 0) {
       _sleepTimer = Timer(Duration(minutes: minutes), () async {
         if (!mounted) return;
-        await _controller?.pause();
+        await _engine?.pause();
         setState(() => _sleepMinutes = 0);
-        DialogX.showSuccess('定时关闭：已暂停播放');
+        DialogX.showSuccess('??????????');
       });
-      DialogX.showSuccess('将在 $minutes 分钟后暂停');
+      DialogX.showSuccess('?? $minutes ?????');
     }
     if (mounted) setState(() {});
   }
@@ -618,28 +748,28 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
       final allowed = await AppPermission.requestWithRationale(
         AppPermissionKind.saveMedia,
         context: context,
-        title: '需要保存到相册',
-        message: '截图会保存到系统相册，方便你查看与分享。',
+        title: '????',
+        message: '??????????????????????',
       );
       if (!allowed) return;
-      final boundary = _videoShotKey.currentContext?.findRenderObject()
-          as RenderRepaintBoundary?;
+      final ro = _videoShotKey.currentContext?.findRenderObject();
+      final boundary = ro is RenderRepaintBoundary ? ro : null;
       if (boundary == null) {
-        DialogX.showWarning('截图失败');
+        DialogX.showWarning('?????????????/?????');
         return;
       }
       final image = await boundary.toImage(pixelRatio: 2);
       final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
       image.dispose();
       if (bytes == null) {
-        DialogX.showWarning('截图失败');
+        DialogX.showWarning('????');
         return;
       }
       await Gal.putImageBytes(bytes.buffer.asUint8List());
-      DialogX.showSuccess('已保存到相册');
+      DialogX.showSuccess('??????');
     } catch (e) {
       debugPrint('[player] screenshot fail: $e');
-      DialogX.showWarning('截图失败（部分机型硬解画面无法截取）');
+      DialogX.showWarning('??????????????????');
     }
   }
   Future<void> _openEpisodes([BuildContext? anchor]) async {
@@ -647,7 +777,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     if (eps.length <= 1 || widget.onEpisodeSelect == null) return;
     final ctx = anchor ?? context;
     if (!ctx.mounted) return;
-    // 横屏右侧侧栏；竖屏底部面板
+    // ?????????????
     await showPlayerEpisodeSheet(
       context: ctx,
       episodes: eps,
@@ -657,11 +787,8 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     _onInteract();
   }
 
-  bool get _preferSidePopups {
-    if (!widget.immersiveTop || !mounted) return false;
-    final size = MediaQuery.sizeOf(context);
-    return size.width > size.height;
-  }
+  // ????/??/???/????????????????????
+  bool get _preferSidePopups => false;
 
   Future<void> _pickPlaybackSpeed([BuildContext? anchor]) async {
     if (_preferSidePopups) {
@@ -673,8 +800,8 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     final picked = await showChromeSpeedMenu(ctx, current: _playbackRate);
     if (picked == null || !mounted) return;
     _playbackRate = picked;
-    await _controller?.setPlaybackSpeed(picked);
-    // 所选倍速 ≥1.5 时同步为长按快进倍率，避免「设了倍速按住仍是 2x」
+    await _engine?.setPlaybackSpeed(picked);
+    // ???? ?1.5 ?????????????????????? 2x?
     if (picked >= 1.5) {
       await _savePlayerSettings(
         _playerSettings.copyWith(holdBoostRate: picked.clamp(1.5, 3.0)),
@@ -722,16 +849,16 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
       if (i != null && widget.onSourceSelect != null) {
         widget.onSourceSelect!(i);
       } else if (i != null) {
-        DialogX.showWarning('请从详情页切换播放线路');
+        DialogX.showWarning('???????????');
       }
       _onInteract();
       return;
     }
     if (picked == '_sole') {
       if (widget.sourceNames.length > 1) {
-        DialogX.showWarning('当前线路仅单一清晰度，请换播放线路');
+        DialogX.showWarning('?????????????????');
       } else {
-        DialogX.showWarning('当前片源无多清晰度可选');
+        DialogX.showWarning('???????????');
       }
       _onInteract();
       return;
@@ -751,8 +878,8 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     if (_qualityVariants.length < 2) {
       DialogX.showWarning(
         widget.sourceNames.length > 1
-            ? '当前线路无多清晰度，请换播放线路试试'
-            : '当前片源无多清晰度可选',
+            ? '?????????????????'
+            : '???????????',
       );
       return;
     }
@@ -771,11 +898,11 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
         await VodQualityStore.save(prefer);
         if (mounted) setState(() => _qualityPrefer = prefer);
       }
-      DialogX.showSuccess('已是 ${variant.shortLabel}');
+      DialogX.showSuccess('?? ${variant.shortLabel}');
       return;
     }
     final resume = positionMs;
-    final wasPlaying = _controller?.value.isPlaying ?? true;
+    final wasPlaying = _engine?.value.isPlaying ?? true;
     if (prefer != null) {
       await VodQualityStore.save(prefer);
     }
@@ -783,7 +910,6 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     setState(() {
       _qualityPrefer = prefer ?? variant.tier;
       _currentVariant = variant;
-      _stallDropHits = 0;
     });
     await _init(
       forceUrl: variant.url,
@@ -791,45 +917,13 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
       autoPlay: wasPlaying,
     );
     if (mounted && !_failed) {
-      DialogX.showSuccess('已切换到 ${variant.shortLabel}');
+      DialogX.showSuccess('???? ${variant.shortLabel}');
     }
   }
 
-  /// 卡顿过多时自动降一档；单档线路则尝试换线
-  Future<void> _maybeAutoDropQuality() async {
-    final now = DateTime.now();
-    if (_stallDropWindow == null ||
-        now.difference(_stallDropWindow!).inSeconds > 60) {
-      _stallDropWindow = now;
-      _stallDropHits = 0;
-    }
-    _stallDropHits++;
-    if (_stallDropHits < 2) return;
-
-    if (_qualityBusy) return;
-
-    if (_qualityVariants.length >= 2) {
-      final cur = _currentVariant;
-      if (cur == null) return;
-      final lower = VodPlayback.lowerThan(_qualityVariants, cur);
-      if (lower == null) return;
-      _stallDropHits = 0;
-      DialogX.showWarning('网络不稳，已切换到 ${lower.shortLabel}');
-      await _switchToVariant(lower, prefer: VodQualityTier.auto);
-      return;
-    }
-
-    // 单档：仅在开启「自动切换线路」时换线
-    if (_playerSettings.autoSourceFailover &&
-        widget.sourceNames.length > 1 &&
-        widget.onRequestSourceFailover != null) {
-      _stallDropHits = 0;
-      await _trySourceFailover('播放卡顿，切换线路');
-    }
-  }
 
   Future<bool> _trySourceFailover(String reason) async {
-    // 默认关闭自动切线，需在设置中开启
+    // ????????????????
     if (!_playerSettings.autoSourceFailover) return false;
     if (_failoverBusy) return false;
     final cb = widget.onRequestSourceFailover;
@@ -854,8 +948,10 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
 
   Future<void> _onPlayFailed(String reason) async {
     if (!mounted) return;
-    final switched = await _trySourceFailover(reason);
-    if (switched) return;
+    if (!_suppressSourceFailover) {
+      final switched = await _trySourceFailover(reason);
+      if (switched) return;
+    }
     if (!mounted) return;
     setState(() {
       _failed = true;
@@ -865,12 +961,12 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
   }
 
   void _onPlaybackStatus() {
-    final c = _controller;
+    final c = _engine;
     if (c == null || !_ready || _failoverBusy || _failed) return;
     if (!c.value.hasError) return;
     final msg = c.value.errorDescription?.trim();
     unawaited(_onPlayFailed(
-      (msg == null || msg.isEmpty) ? '播放中断' : msg,
+      (msg == null || msg.isEmpty) ? '????' : msg,
     ));
   }
 
@@ -878,7 +974,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     final before = widget.url;
     await widget.onPrepareRetry?.call();
     if (!mounted) return;
-    // 父级切回最优源改了 url 时，交给 didUpdateWidget 拉流
+    // ????????? url ???? didUpdateWidget ??
     await Future<void>.delayed(Duration.zero);
     if (!mounted) return;
     if (widget.url != before) return;
@@ -897,7 +993,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
   Future<void> _sendDanmaku() async {
     final id = widget.vodId?.trim();
     if (id == null || id.isEmpty) {
-      DialogX.showWarning('当前影片暂不支持弹幕');
+      DialogX.showWarning('??????????');
       return;
     }
     if (!_danmakuPrefs.enabled) {
@@ -906,7 +1002,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
       setState(() => _danmakuPrefs = PlayerDanmakuPrefs.cached);
     }
     if (!mounted) return;
-    final c = _controller;
+    final c = _engine;
     final timeSec = (c?.value.position.inMilliseconds ?? 0) / 1000.0;
     final draft = await showSendDanmakuSheet(context, timeSec: timeSec);
     if (draft == null || !mounted) return;
@@ -924,7 +1020,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
       item: item,
       title: widget.danmakuTitle,
       episodeLabel: widget.danmakuEpisodeLabel,
-      author: (author == null || author.isEmpty) ? '游客' : author,
+      author: (author == null || author.isEmpty) ? '?' : author,
     );
     await DanmakuStore.append(
       vodId: id,
@@ -937,9 +1033,9 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
         ..sort((a, b) => a.timeSec.compareTo(b.timeSec));
     });
     if (remoteOk) {
-      DialogX.showSuccess('弹幕已发送');
+      DialogX.showSuccess('?????');
     } else {
-      DialogX.showWarning('已显示，同步第三方失败（仍保存在本地）');
+      DialogX.showWarning('???????????????????');
     }
     _onInteract();
   }
@@ -958,7 +1054,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     _holdRateBackup = _playbackRate;
     final rate = _playerSettings.holdBoostRate;
     _playbackRate = rate;
-    await _controller?.setPlaybackSpeed(rate);
+    await _engine?.setPlaybackSpeed(rate);
     if (mounted) setState(() {});
   }
 
@@ -966,7 +1062,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     if (!_holdBoost) return;
     _holdBoost = false;
     _playbackRate = _holdRateBackup;
-    await _controller?.setPlaybackSpeed(_holdRateBackup);
+    await _engine?.setPlaybackSpeed(_holdRateBackup);
     if (mounted) setState(() {});
   }
 
@@ -1024,14 +1120,14 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
       await DanmakuStore.save(vodId: id, ep: ep, items: merged);
       if (!mounted || token != _danmakuLoadToken) return;
       setState(() => _danmakuItems = merged);
-      // 静默：有弹幕也不弹 Toast
+      // ????????? Toast
     } else if (cached.isEmpty) {
       setState(() => _danmakuItems = const []);
-      // 静默：无弹幕也不提示
+      // ??????????
     }
   }
 
-  /// 立即停止并释放（切页、热重载、新实例抢占时调用）
+  /// ????????????????????????
   Future<void> forceStop() async {
     _initToken++;
     _holdBoost = false;
@@ -1041,17 +1137,19 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     _outroTimer?.cancel();
     _seekHintTimer?.cancel();
     _sleepTimer?.cancel();
+    StreamAheadCache.instance.stop();
     _stallLoading.value = false;
     _stopInitSpeedTracking();
-    final c = _controller;
-    _controller = null;
+    final c = _engine;
+    _engine = null;
     if (c != null) {
       try {
         if (c.value.isInitialized) await c.pause();
       } catch (_) {}
       try {
-        await c.dispose();
+        await c.release();
       } catch (_) {}
+      c.dispose();
     }
     await PlaybackWakelock.release();
     try {
@@ -1087,23 +1185,15 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     unawaited(VodQualityStore.load().then((q) {
       if (mounted) setState(() => _qualityPrefer = q);
     }));
-    _stallLoading.addListener(_onStallLoadingFlag);
-    unawaited(_loadDanmaku());
+    // ??????????????????
     _init();
   }
 
-  void _onStallLoadingFlag() {
-    final stalled = _stallLoading.value;
-    if (stalled && !_lastStallFlag) {
-      unawaited(_maybeAutoDropQuality());
-    }
-    _lastStallFlag = stalled;
-  }
 
   @override
   void reassemble() {
     super.reassemble();
-    // 热重载不会走 dispose，必须主动停掉原生 ExoPlayer
+    // ?????? dispose????????? ExoPlayer
     unawaited(forceStop());
   }
 
@@ -1127,14 +1217,6 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     }
   }
 
-  VideoFormat? _formatHintFor(String url) {
-    final lower = url.toLowerCase();
-    if (lower.contains('.m3u8') || lower.contains('m3u8?')) {
-      return VideoFormat.hls;
-    }
-    return null;
-  }
-
   Future<void> _init({
     String? forceUrl,
     int? resumeMs,
@@ -1145,7 +1227,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     final url = widget.url.trim();
     if (url.isEmpty && (forceUrl == null || forceUrl.trim().isEmpty)) {
       if (!mounted || token != _initToken) return;
-      await _onPlayFailed('播放地址为空');
+      await _onPlayFailed('??????');
       return;
     }
 
@@ -1163,81 +1245,99 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
 
     try {
       String playUrl;
+      final preservedVariants =
+          forceUrl != null ? List<VodHlsVariant>.from(_qualityVariants) : null;
+      final preservedCurrent = forceUrl != null ? _currentVariant : null;
       if (forceUrl != null && forceUrl.trim().isNotEmpty) {
         playUrl = forceUrl.trim();
       } else {
-        final prefer = await VodQualityStore.load();
-        if (!mounted || token != _initToken) return;
-        _qualityPrefer = prefer;
-        final resolved = await VodPlayback.resolveStream(url, prefer: prefer);
-        if (!mounted || token != _initToken) return;
-        playUrl = resolved.playUrl;
-        _qualityVariants = resolved.variants;
-        _currentVariant = resolved.selected;
-        if (_currentVariant == null && resolved.variants.isNotEmpty) {
-          _currentVariant = VodPlayback.pickVariant(resolved.variants, prefer);
+        // ????????????? 1.2s????????
+        playUrl = url;
+        try {
+          final loaded = await VodQualityStore.load()
+              .timeout(const Duration(milliseconds: 400));
+          if (!mounted || token != _initToken) return;
+          _qualityPrefer = loaded;
+        } catch (_) {}
+        try {
+          final resolved = await VodPlayback.resolveStream(
+            url,
+            prefer: _qualityPrefer,
+            playMode: _playerSettings.playMode,
+          ).timeout(
+            const Duration(milliseconds: 1200),
+            onTimeout: () => VodResolvedStream(playUrl: url),
+          );
+          if (!mounted || token != _initToken) return;
+          playUrl = resolved.playUrl.isNotEmpty ? resolved.playUrl : url;
+          if (resolved.variants.isNotEmpty) {
+            _qualityVariants = resolved.variants;
+            _currentVariant = resolved.selected ??
+                VodPlayback.pickVariant(
+                  resolved.variants,
+                  _qualityPrefer,
+                  playMode: _playerSettings.playMode,
+                );
+          } else {
+            unawaited(_enrichVariantsLater(url, token));
+          }
+        } catch (_) {
+          playUrl = url;
+          unawaited(_enrichVariantsLater(url, token));
         }
       }
       _activePlayUrl = playUrl;
       if (!mounted || token != _initToken) return;
-      final uri = Uri.parse(playUrl);
-      final isFile = uri.scheme == 'file' ||
-          (!playUrl.contains('://') &&
-              (playUrl.startsWith('/') ||
-                  RegExp(r'^[A-Za-z]:[\\/]').hasMatch(playUrl)));
-      final VideoPlayerController c;
-      final opts = VideoPlayerOptions(
-        mixWithOthers: false,
-        // 更大回退缓冲：拖进度 / 小幅回看更少重新加载
-        backBufferDurationMs: 90000,
-        // iOS 画中画需要 AVPlayerLayer（PlatformView）
-        allowBackgroundPlayback: true,
-      );
-      // iOS：PlatformView 才能挂 AVPictureInPictureController
-      final viewType = (!kIsWeb &&
-              defaultTargetPlatform == TargetPlatform.iOS)
-          ? VideoViewType.platformView
-          : VideoViewType.textureView;
+      final isFile = VodPlayback.isLocalMediaPath(playUrl);
+      _isLocalMedia = isFile;
+      final profile = PlaybackProfile.of(_playerSettings);
+
       if (isFile) {
-        final path = uri.scheme == 'file' ? uri.toFilePath() : playUrl;
-        c = VideoPlayerController.file(
-          File(path),
-          videoPlayerOptions: opts,
-          viewType: viewType,
-        );
-      } else {
-        c = VideoPlayerController.networkUrl(
-          uri,
-          httpHeaders: VodPlayback.httpHeaders,
-          formatHint: _formatHintFor(playUrl),
-          videoPlayerOptions: opts,
-          viewType: viewType,
-        );
+        var path = playUrl;
+        if (path.startsWith('file:')) {
+          path = Uri.parse(path).toFilePath();
+        }
+        path = await VodCacheStore.instance.prepareLocalMediaPath(path);
+        if (!mounted || token != _initToken) return;
+        playUrl = path;
+        _activePlayUrl = path;
+        final file = File(path);
+        if (!await file.exists()) {
+          throw StateError('???????');
+        }
       }
-      _controller = c;
-      c.addListener(_onInitControllerTick);
+
+      _initSurfaceBuilt = false;
+      final engine = createVodEngine(PlayerKernel.exo);
+      _engine = engine;
+      engine.addListener(_onInitControllerTick);
       _initSpeedTimer?.cancel();
       _initSpeedTimer = Timer.periodic(const Duration(milliseconds: 650), (_) {
         _onInitControllerTick();
       });
-      await c.initialize();
+      await engine.open(
+        url: playUrl,
+        httpHeaders: VodPlayback.httpHeaders,
+        backBufferMs: isFile ? 15000 : profile.backBufferMs,
+        preferPlatformView: false,
+      );
       if (!mounted || token != _initToken) {
-        await c.dispose();
+        await _disposeController();
         return;
       }
 
       final start = resumeMs ?? widget.startPositionMs;
-      final total = c.value.duration.inMilliseconds;
+      final total = engine.value.duration.inMilliseconds;
       if (start > 1500 && total > 0 && start < total - 2000) {
-        await c.seekTo(Duration(milliseconds: start));
+        await engine.seekTo(Duration(milliseconds: start));
       }
       if (resumeMs == null) {
-        await _applySkipIntro(c);
+        await _applySkipIntro(engine);
       }
-      await c.setPlaybackSpeed(_playbackRate);
-      await c.setLooping(_playerSettings.loopSingle);
+      await engine.setPlaybackSpeed(_playbackRate);
+      await engine.setLooping(_playerSettings.loopSingle);
       if (autoPlay) {
-        await c.play();
+        await engine.play();
       }
       if (_playerSettings.keepScreenOn) {
         await PlaybackWakelock.acquire();
@@ -1252,8 +1352,16 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
       });
       _progressTimer = Timer.periodic(const Duration(seconds: 1), (_) {
         _progressTick++;
-        final ctrl = _controller;
+        final ctrl = _engine;
         if (ctrl == null || !ctrl.value.isInitialized) return;
+        final aheadMs = _bufferedAheadMsOf(ctrl.value);
+        StreamAheadCache.instance.updatePosition(
+          ctrl.value.position.inMilliseconds,
+        );
+        // ????????????????????
+        StreamAheadCache.instance.setPaused(
+          ctrl.value.isBuffering || (aheadMs >= 0 && aheadMs < 10000),
+        );
         if (_progressTick % 5 == 0) {
           widget.onProgress?.call(ctrl.value.position, ctrl.value.duration);
         }
@@ -1261,14 +1369,23 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
 
       if (!mounted || token != _initToken) return;
       _stopInitSpeedTracking();
-      c.removeListener(_onInitControllerTick);
-      c.addListener(_onPlaybackStatus);
+      engine.removeListener(_onInitControllerTick);
+      engine.addListener(_onPlaybackStatus);
       setState(() {
         _ready = true;
         _qualityBusy = false;
-        // 单路媒体流：用真实分辨率补一条清晰度标签
-        if (_qualityVariants.isEmpty && c.value.size.height > 0) {
-          final sz = c.value.size;
+        if (preservedVariants != null && preservedVariants.length > 1) {
+          _qualityVariants = preservedVariants;
+          VodHlsVariant? matched;
+          for (final v in preservedVariants) {
+            if (v.url == playUrl) {
+              matched = v;
+              break;
+            }
+          }
+          _currentVariant = matched ?? preservedCurrent;
+        } else if (_qualityVariants.isEmpty && engine.value.size.height > 0) {
+          final sz = engine.value.size;
           final synthetic = VodHlsVariant(
             url: playUrl,
             bandwidth: 0,
@@ -1277,12 +1394,13 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
           );
           _qualityVariants = [synthetic];
           _currentVariant = synthetic;
-        } else if (_currentVariant == null &&
-            _qualityVariants.length == 1) {
+        } else if (_currentVariant == null && _qualityVariants.length == 1) {
           _currentVariant = _qualityVariants.first;
         }
       });
       _scheduleHideChrome();
+      // ???????????? / ????????????
+      unawaited(_deferredAfterPlay(token));
     } catch (e) {
       if (!mounted || token != _initToken) return;
       _qualityBusy = false;
@@ -1290,24 +1408,30 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     }
   }
 
+  bool _initSurfaceBuilt = false;
+
   void _onInitControllerTick() {
-    final c = _controller;
+    final c = _engine;
     _bufferSpeedTracker.setLoading(true);
     if (c != null && c.value.isInitialized) {
       _bufferSpeedTracker.tick(
         c.value.buffered,
         isBuffering: c.value.isBuffering || !_ready,
       );
+      // ?????? Surface ? rebuild ????? position ?? setState
+      if (mounted && !_ready && !_failed && !_initSurfaceBuilt) {
+        _initSurfaceBuilt = true;
+        setState(() {});
+      }
     } else {
       _bufferSpeedTracker.tick(const [], isBuffering: true);
     }
-    // 不 setState：加载 HUD 自己读 tracker，避免整页狂刷导致掉帧/黑屏
   }
 
   void _stopInitSpeedTracking() {
     _initSpeedTimer?.cancel();
     _initSpeedTimer = null;
-    final c = _controller;
+    final c = _engine;
     if (c != null) {
       try {
         c.removeListener(_onInitControllerTick);
@@ -1322,13 +1446,17 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     _outroTimer?.cancel();
     _seekHintTimer?.cancel();
     _stopInitSpeedTracking();
-    final c = _controller;
-    _controller = null;
+    final c = _engine;
+    _engine = null;
     if (c != null) {
       try {
         c.removeListener(_onPlaybackStatus);
       } catch (_) {}
-      await c.dispose();
+      try {
+        c.removeListener(_onInitControllerTick);
+      } catch (_) {}
+      await c.releaseSafe();
+      c.dispose();
     }
     if (!keepWakelock) {
       await PlaybackWakelock.release();
@@ -1338,7 +1466,6 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
   @override
   void dispose() {
     PlayerPip.inPip.removeListener(_onPipFlag);
-    _stallLoading.removeListener(_onStallLoadingFlag);
     _PlaybackSession.detach(this);
     PlayerPip.setOnEntered(null);
     unawaited(forceStop());
@@ -1358,7 +1485,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     final sec = _playerSettings.chromeAutoHideSec.clamp(2, 12);
     _hideTimer = Timer(Duration(seconds: sec), () {
       if (!mounted) return;
-      final c = _controller;
+      final c = _engine;
       if (c != null && c.value.isPlaying) {
         setState(() => _showChrome = false);
       }
@@ -1372,14 +1499,14 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
 
   @override
   Widget build(BuildContext context) {
-    final c = _controller;
+    final c = _engine;
     final topInset =
         widget.immersiveTop ? 0.0 : MediaQuery.paddingOf(context).top;
-    // 小窗模式只留画面，不叠控件，避免卡死
+    // ??????????????????
     final inPip = PlayerPip.isInPip;
     final showChrome = _showChrome && !inPip;
     final showSide = (_showSideSettings || _showCastSide) && !inPip;
-    // 锁屏：右侧垂直居中（横屏全屏同样右侧）
+    // ???????????????????
     final vp = MediaQuery.viewPaddingOf(context);
     final landscape =
         MediaQuery.sizeOf(context).width > MediaQuery.sizeOf(context).height;
@@ -1431,7 +1558,8 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                           const ColoredBox(color: Colors.black),
                     ),
                   ),
-                if (_ready && c != null && c.value.isInitialized)
+                // ?????????media_kit ? Surface ???????
+                if (!_failed && c != null && c.value.isInitialized)
                   Positioned.fill(
                     child: RepaintBoundary(
                       key: _videoShotKey,
@@ -1441,6 +1569,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                         immersiveTop: widget.immersiveTop,
                         mirrorX: _playerSettings.mirrorX,
                         mirrorY: _playerSettings.mirrorY,
+                        enhanceLevel: _playerSettings.enhanceLevel,
                       ),
                     ),
                   )
@@ -1450,7 +1579,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         const Text(
-                          '播放失败，已尝试可用线路',
+                          '????????????',
                           style: TextStyle(
                             fontFamily: 'AppSans',
                             color: Colors.white70,
@@ -1494,7 +1623,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                                   ),
                                 ),
                                 child: const Text(
-                                  '重试',
+                                  '??',
                                   style: TextStyle(
                                     fontFamily: 'AppSans',
                                     fontSize: 15,
@@ -1523,7 +1652,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                                   ),
                                 ),
                                 child: const Text(
-                                  '报错',
+                                  '??',
                                   style: TextStyle(
                                     fontFamily: 'AppSans',
                                     fontSize: 15,
@@ -1541,7 +1670,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                 if (_holdBoost)
                   IgnorePointer(
                     child: Align(
-                      // 横屏时偏上，避免挡画面中心
+                      // ?????????????
                       alignment: const Alignment(0, -0.52),
                       child: PlayerHoldBoostHud(
                         rate: _playerSettings.holdBoostRate,
@@ -1555,18 +1684,20 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                       child: PlayerSeekHintChip(text: _seekHint!),
                     ),
                   ),
-                // 缓冲中也照常画弹幕
+                // ?????????
                 if (c != null && !_failed)
-                  _DanmakuOverlay(
-                    controller: c,
-                    items: _danmakuItems,
-                    enabled: widget.enableDanmaku &&
-                        _danmakuPrefs.enabled &&
-                        widget.vodId?.trim().isNotEmpty == true,
-                    prefs: _danmakuPrefs,
-                    fitCover: widget.immersiveTop ||
-                        _playerSettings.aspect == PlayerAspectMode.cover ||
-                        _playerSettings.aspect == PlayerAspectMode.fill,
+                  IgnorePointer(
+                    child: _DanmakuOverlay(
+                      controller: c,
+                      items: _danmakuItems,
+                      enabled: widget.enableDanmaku &&
+                          _danmakuPrefs.enabled &&
+                          widget.vodId?.trim().isNotEmpty == true,
+                      prefs: _danmakuPrefs,
+                      fitCover: widget.immersiveTop ||
+                          _playerSettings.aspect == PlayerAspectMode.cover ||
+                          _playerSettings.aspect == PlayerAspectMode.fill,
+                    ),
                   ),
                 if (c != null && !_failed && _locked)
                   Positioned(
@@ -1617,7 +1748,12 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                           curve: Curves.easeOutCubic,
                           child: _ThrottledChrome(
                             controller: c,
+                            chromeVisible: showChrome,
                             ready: _ready,
+                            holdEnterAheadMs:
+                                PlaybackProfile.of(_playerSettings).holdEnterAheadMs,
+                            holdResumeAheadMs:
+                                PlaybackProfile.of(_playerSettings).holdResumeAheadMs,
                             speedTracker: _bufferSpeedTracker,
                             showNetSpeed: _playerSettings.showNetSpeed,
                             onLoadingChanged: (v) {
@@ -1667,15 +1803,30 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                                     widget.onEpisodeSelect != null
                                 ? (anchor) => unawaited(_openEpisodes(anchor))
                                 : null,
-                            onSources: widget.sourceNames.length > 1 &&
-                                    widget.onSourceSelect != null
+                            // ???????????/??/??/??
+                            onSources: (widget.immersiveTop &&
+                                    MediaQuery.sizeOf(context).width >
+                                        MediaQuery.sizeOf(context).height &&
+                                    widget.sourceNames.length > 1 &&
+                                    widget.onSourceSelect != null)
                                 ? (anchor) => unawaited(_pickSource(anchor))
                                 : null,
-                            onAspect: (anchor) => unawaited(_pickAspect(anchor)),
-                            onSpeed: (anchor) =>
-                                unawaited(_pickPlaybackSpeed(anchor)),
-                            onQuality: (anchor) =>
-                                unawaited(_pickQuality(anchor)),
+                            onAspect: (widget.immersiveTop &&
+                                    MediaQuery.sizeOf(context).width >
+                                        MediaQuery.sizeOf(context).height)
+                                ? (anchor) => unawaited(_pickAspect(anchor))
+                                : null,
+                            onSpeed: (widget.immersiveTop &&
+                                    MediaQuery.sizeOf(context).width >
+                                        MediaQuery.sizeOf(context).height)
+                                ? (anchor) =>
+                                    unawaited(_pickPlaybackSpeed(anchor))
+                                : null,
+                            onQuality: (widget.immersiveTop &&
+                                    MediaQuery.sizeOf(context).width >
+                                        MediaQuery.sizeOf(context).height)
+                                ? (anchor) => unawaited(_pickQuality(anchor))
+                                : null,
                             aspectLabel: _playerSettings.aspect.label,
                             speedLabel: VodPlayback.rateLabel(_playbackRate),
                             qualityLabel: _currentVariant?.shortLabel ??
@@ -1693,9 +1844,9 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                             onMarkIntro: () => unawaited(_markSkipAtCurrent(intro: true)),
                             onMarkOutro: () =>
                                 unawaited(_markSkipAtCurrent(intro: false)),
-                            onSkip: () => _openSideSettings(page: 'skip'),
+                            onSkip: (_) => _openSideSettings(page: 'skip'),
                             skipEnabled: _skipPrefs.enabled,
-                            // 仅全屏/横屏显示设置与投屏
+                            // ???/?????????
                             onSettings: widget.immersiveTop &&
                                     MediaQuery.sizeOf(context).width >
                                         MediaQuery.sizeOf(context).height
@@ -1771,7 +1922,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                       ),
                     ),
                   ),
-                // 加载置顶正中：盖在顶栏/底栏之上，视觉落在画面正中央
+                // ???????????/??????????????
                 if (!_failed && !_ready)
                   Positioned.fill(
                     child: IgnorePointer(
@@ -1854,7 +2005,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                                           child: CastPanel(
                                             mediaUrl: widget.url,
                                             title: widget.danmakuTitle.isEmpty
-                                                ? '正在播放'
+                                                ? '????'
                                                 : widget.danmakuTitle,
                                             asSide: true,
                                             onClose: _closeCastSide,
@@ -1867,9 +2018,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                                           ),
                                         )
                                       : PlayerSideSettingsPanel(
-                                          key: ValueKey(
-                                            'side-$_sideSettingsPage',
-                                          ),
+                                          key: const ValueKey('player-side-settings'),
                                           flatMode: true,
                                           initialPage: _sideSettingsPage,
                                           onClose: _closeSideSettings,
@@ -1893,7 +2042,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
   }
 }
 
-/// 随播放进度刷新弹幕；非 cover 模式时对齐视频画面区域
+/// ??????????? cover ???????????
 class _DanmakuOverlay extends StatefulWidget {
   const _DanmakuOverlay({
     required this.controller,
@@ -1903,7 +2052,7 @@ class _DanmakuOverlay extends StatefulWidget {
     this.fitCover = false,
   });
 
-  final VideoPlayerController controller;
+  final VodEngine controller;
   final List<DanmakuItem> items;
   final bool enabled;
   final DanmakuDisplayPrefs prefs;
@@ -1988,7 +2137,7 @@ class _DanmakuOverlayState extends State<_DanmakuOverlay> {
   }
 }
 
-/// 稳定视频表面：仅比例/镜像变化时重建
+/// ??????????/???????
 class _StableVideoSurface extends StatelessWidget {
   const _StableVideoSurface({
     required this.controller,
@@ -1996,18 +2145,20 @@ class _StableVideoSurface extends StatelessWidget {
     required this.immersiveTop,
     required this.mirrorX,
     required this.mirrorY,
+    this.enhanceLevel = PlayerEnhanceLevel.off,
   });
 
-  final VideoPlayerController controller;
+  final VodEngine controller;
   final PlayerAspectMode aspect;
   final bool immersiveTop;
   final bool mirrorX;
   final bool mirrorY;
+  final PlayerEnhanceLevel enhanceLevel;
 
   @override
   Widget build(BuildContext context) {
     if (!controller.value.isInitialized) return const SizedBox.shrink();
-    // 尊重用户比例设置；不再横屏强制 cover，避免 1080 被放大裁切发糊
+    // 对齐 git 上传版画面路径：直接 VideoPlayer + FittedBox（功能层 enhance 另包）
     final effectiveAspect = aspect;
     final rawRatio =
         controller.value.aspectRatio == 0 ? 16 / 9 : controller.value.aspectRatio;
@@ -2017,7 +2168,6 @@ class _StableVideoSurface extends StatelessWidget {
       _ => rawRatio,
     };
     final boxFit = switch (effectiveAspect) {
-      // 裁剪填充：铺满 + 贴底，优先保住硬字幕；底部再留一点安全边
       PlayerAspectMode.cover => BoxFit.cover,
       PlayerAspectMode.fill => BoxFit.fill,
       PlayerAspectMode.fit ||
@@ -2026,7 +2176,11 @@ class _StableVideoSurface extends StatelessWidget {
         BoxFit.contain,
     };
 
-    Widget player = VideoPlayer(controller);
+    // 与 git 一致：优先裸 VideoPlayer，避免多余包装
+    final raw = controller.rawVideoPlayer;
+    Widget player = raw != null
+        ? VideoPlayer(raw)
+        : controller.buildSurface();
     if (mirrorX || mirrorY) {
       player = Transform(
         alignment: Alignment.center,
@@ -2039,9 +2193,9 @@ class _StableVideoSurface extends StatelessWidget {
       );
     }
 
-    // 用真实分辨率铺面，避免固定 1600 逻辑画布被放大后发糊
     final sz = controller.value.size;
-    final logicalW = sz.width > 1 ? sz.width : (forcedRatio >= 1 ? 1920.0 : 1080.0);
+    final logicalW =
+        sz.width > 1 ? sz.width : (forcedRatio >= 1 ? 1920.0 : 1080.0);
     final logicalH = sz.height > 1 ? sz.height : (logicalW / forcedRatio);
 
     Widget fittedFor(BoxFit fit, Alignment align) {
@@ -2059,10 +2213,11 @@ class _StableVideoSurface extends StatelessWidget {
       );
     }
 
+    Widget fitted;
     if (effectiveAspect == PlayerAspectMode.cover) {
-      return LayoutBuilder(
+      // git 原版 cover：底边留白 + bottomCenter（不是自定义 alignY）
+      fitted = LayoutBuilder(
         builder: (context, constraints) {
-          // 硬字幕常贴片源底边；留出安全边避免贴齐屏幕被裁切
           final guard = (constraints.maxHeight * 0.05).clamp(10.0, 36.0);
           return Padding(
             padding: EdgeInsets.only(bottom: guard),
@@ -2070,29 +2225,26 @@ class _StableVideoSurface extends StatelessWidget {
           );
         },
       );
+    } else {
+      fitted = fittedFor(boxFit, Alignment.center);
+      if (!(immersiveTop ||
+          effectiveAspect == PlayerAspectMode.fill ||
+          effectiveAspect == PlayerAspectMode.ratio16x9 ||
+          effectiveAspect == PlayerAspectMode.ratio4x3)) {
+        fitted = Center(
+          child: AspectRatio(
+            aspectRatio: forcedRatio,
+            child: fitted,
+          ),
+        );
+      }
     }
 
-    final fitted = fittedFor(
-      boxFit,
-      Alignment.center,
-    );
-
-    if (immersiveTop ||
-        effectiveAspect == PlayerAspectMode.fill ||
-        effectiveAspect == PlayerAspectMode.ratio16x9 ||
-        effectiveAspect == PlayerAspectMode.ratio4x3) {
-      return fitted;
-    }
-    return Center(
-      child: AspectRatio(
-        aspectRatio: forcedRatio,
-        child: fitted,
-      ),
-    );
+    // 功能保留：鲜明等画质增强仍可用，但不改底层 Texture 挂载方式
+    return PlaybackEnhanceFilter(level: enhanceLevel, child: fitted);
   }
 }
 
-/// 全局只允许一个内嵌播放器，防止热重载/切页后残留播放
 class _PlaybackSession {
   _PlaybackSession._();
 
@@ -2117,14 +2269,17 @@ class _PlaybackSession {
   }
 }
 
-/// 供页面退出时停止所有播放
+/// ????????????
 Future<void> stopAllInlinePlayback() => _PlaybackSession.stopAll();
 
-/// 播控层：真正卡顿才提示缓冲
+/// ?????????????
 class _ThrottledChrome extends StatefulWidget {
   const _ThrottledChrome({
     required this.controller,
+    required this.chromeVisible,
     required this.ready,
+    this.holdEnterAheadMs = 2500,
+    this.holdResumeAheadMs = 6000,
     required this.speedTracker,
     required this.onLoadingChanged,
     required this.showBack,
@@ -2143,10 +2298,10 @@ class _ThrottledChrome extends StatefulWidget {
     this.onAspect,
     this.onSpeed,
     this.onQuality,
-    this.aspectLabel = '适应',
-    this.speedLabel = '倍速',
-    this.qualityLabel = '清晰度',
-    this.sourceLabel = '线路',
+    this.aspectLabel = '??',
+    this.speedLabel = '??',
+    this.qualityLabel = '???',
+    this.sourceLabel = '??',
     this.denseLandscape = false,
     this.introMs = 0,
     this.outroMs = 0,
@@ -2158,8 +2313,12 @@ class _ThrottledChrome extends StatefulWidget {
     this.onCast,
   });
 
-  final VideoPlayerController controller;
+  final VodEngine controller;
+  /// 控制栏隐藏时不 setState，避免播放中每 250ms 重建拖慢点击
+  final bool chromeVisible;
   final bool ready;
+  final int holdEnterAheadMs;
+  final int holdResumeAheadMs;
   final PlaybackSpeedTracker speedTracker;
   final ValueChanged<bool> onLoadingChanged;
   final bool showBack;
@@ -2187,7 +2346,7 @@ class _ThrottledChrome extends StatefulWidget {
   final int outroMs;
   final VoidCallback? onMarkIntro;
   final VoidCallback? onMarkOutro;
-  final VoidCallback? onSkip;
+  final void Function(BuildContext anchor)? onSkip;
   final bool skipEnabled;
   final VoidCallback? onSettings;
   final VoidCallback? onCast;
@@ -2200,6 +2359,8 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
   Timer? _uiTimer;
   Timer? _stallTimer;
   bool _showBufferSpinner = false;
+  bool _holdingForBuffer = false;
+  bool _userPaused = false;
   bool _draggingProgress = false;
   bool _seekLoading = false;
   bool _lastLoadingNotified = false;
@@ -2207,7 +2368,7 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
   DateTime? _stallSince;
   Size? _lastMqSize;
   DateTime? _layoutQuietUntil;
-  /// 拖动/seek 目标：进度条与时间先锁在这里，等解码追上再放开
+  /// ??/seek ???????????????????????
   Duration? _uiSeekPos;
 
   static const _stallNeedMs = 2200;
@@ -2221,9 +2382,10 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
     _stallSince = null;
     _stallTimer?.cancel();
     _stallTimer = null;
-    if (_showBufferSpinner || _seekLoading) {
+    if (_showBufferSpinner || _seekLoading || _holdingForBuffer) {
       _showBufferSpinner = false;
       _seekLoading = false;
+      _holdingForBuffer = false;
     }
   }
 
@@ -2231,13 +2393,14 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
     if (!widget.ready) return true;
     if (_inLayoutQuiet) return false;
     if (_draggingProgress) return false;
+    if (_holdingForBuffer) return true;
     final v = widget.controller.value;
-    // 已在播且画面在走：绝不挡画面（Exo 常误报 isBuffering）
+    // ???????????????Exo ??? isBuffering?
     if (v.isPlaying) {
       final pos = v.position.inMilliseconds;
       if (!v.isBuffering) return false;
       if (_lastPosMs >= 0 && pos > _lastPosMs) return false;
-      // 仅真正卡住才转圈
+      // ????????
       return _showBufferSpinner;
     }
     if (_seekLoading) return true;
@@ -2248,7 +2411,7 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
   void _notifyLoading(bool visible) {
     if (_lastLoadingNotified == visible) return;
     _lastLoadingNotified = visible;
-    // ValueListenableBuilder 不能在 build/layout 阶段被通知
+    // ValueListenableBuilder ??? build/layout ?????
     final phase = SchedulerBinding.instance.schedulerPhase;
     if (phase == SchedulerPhase.idle ||
         phase == SchedulerPhase.postFrameCallbacks) {
@@ -2264,15 +2427,24 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
   @override
   void initState() {
     super.initState();
-    widget.controller.addListener(_onController);
+    // 不监听 engine：避免播放进度广播打满主线程；定时器自行读 value
     _uiTimer = Timer.periodic(const Duration(milliseconds: 250), (_) {
       if (!mounted) return;
       final v = widget.controller.value;
+      final beforeSpinner = _showBufferSpinner;
+      final beforeSeek = _seekLoading;
       _evaluateStall(v);
+      _maybeHoldForBuffer(v);
       _maybeReleaseSeekLock(v);
       widget.speedTracker.setLoading(_showLoadingHud);
       widget.speedTracker.tick(v.buffered, isBuffering: _showBufferSpinner);
       _notifyLoading(_showLoadingHud);
+      final hudChanged =
+          beforeSpinner != _showBufferSpinner || beforeSeek != _seekLoading;
+      // 隐藏控制栏时只处理卡顿 HUD，不重建整棵控件树（否则点击会慢几拍）
+      if (!widget.chromeVisible && !hudChanged && !_draggingProgress) {
+        return;
+      }
       setState(() {});
     });
   }
@@ -2285,7 +2457,7 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
     if (prev != null &&
         ((prev.width - s.width).abs() > 48 ||
             (prev.height - s.height).abs() > 48)) {
-      // 横竖屏切换时 surface 短暂缓冲，不展示“重新加载”观感
+      // ?????? surface ????????????????
       _layoutQuietUntil =
           DateTime.now().add(const Duration(milliseconds: 3200));
       _showBufferSpinner = false;
@@ -2304,15 +2476,23 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
   void didUpdateWidget(covariant _ThrottledChrome oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.controller != widget.controller) {
-      oldWidget.controller.removeListener(_onController);
-      widget.controller.addListener(_onController);
       _lastPosMs = -1;
       _stallSince = null;
       _showBufferSpinner = false;
     }
   }
 
-  void _evaluateStall(VideoPlayerValue v) {
+  void _maybeHoldForBuffer(VodEngineValue v) {
+    // ???? pause??????????????????????
+    if (_holdingForBuffer) {
+      _holdingForBuffer = false;
+      if (!_userPaused && !v.isPlaying && widget.ready) {
+        unawaited(widget.controller.play());
+      }
+    }
+  }
+
+  void _evaluateStall(VodEngineValue v) {
     if (_inLayoutQuiet) {
       _stallSince = null;
       _showBufferSpinner = false;
@@ -2327,24 +2507,31 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
     }
 
     final posMs = v.position.inMilliseconds;
-    // 任意进度前进都算在播，清加载（阈值从 120ms 降到 1ms）
+    // ?????????????????? 120ms ?? 1ms?
     final moved = _lastPosMs >= 0 && posMs > _lastPosMs;
 
-    if (v.isPlaying && (moved || !v.isBuffering)) {
+    if (v.isPlaying && moved && !v.isBuffering) {
       _lastPosMs = posMs;
       _clearStallFlags();
       return;
     }
+    if (v.isPlaying && moved) {
+      _lastPosMs = posMs;
+      // ???????? isBuffering ?????
+      _clearStallFlags();
+      return;
+    }
 
-    // 播放中但进度本 tick 未动：先记时间，别立刻转圈
-    if (v.isPlaying) {
+    // ????????????????
+    if (v.isPlaying || (!_userPaused && (v.isBuffering || _showBufferSpinner))) {
       _stallSince ??= DateTime.now();
       final waited = DateTime.now().difference(_stallSince!).inMilliseconds;
-      if (waited < _stallNeedMs) {
+      // ?? buffering ?????
+      final need = v.isBuffering ? (_stallNeedMs ~/ 2) : _stallNeedMs;
+      if (waited < need) {
         if (_lastPosMs < 0) _lastPosMs = posMs;
         return;
       }
-      // 长时间无进度才显示缓冲
       if (!_showBufferSpinner) _showBufferSpinner = true;
       return;
     }
@@ -2363,17 +2550,12 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
     }
   }
 
-  void _onController() {
-    if (!widget.ready) return;
-    _evaluateStall(widget.controller.value);
-    _notifyLoading(_showLoadingHud);
-  }
 
-  void _maybeReleaseSeekLock(VideoPlayerValue v) {
+  void _maybeReleaseSeekLock(VodEngineValue v) {
     final lock = _uiSeekPos;
     if (lock == null || _draggingProgress) return;
     final diff = (v.position.inMilliseconds - lock.inMilliseconds).abs();
-    // 解码位置已贴近目标，或已在播
+    // ??????????????
     if (diff <= 900 ||
         (v.isPlaying && diff <= 2500) ||
         (v.isPlaying && !v.isBuffering)) {
@@ -2387,6 +2569,9 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
   }
 
   void _onSeekStart() {
+    // ??????????????????? seek
+    StreamAheadCache.instance.setPaused(true);
+    StreamAheadCache.instance.abortInFlight();
     setState(() {
       _draggingProgress = true;
       _seekLoading = false;
@@ -2409,6 +2594,7 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
       _uiSeekPos = d;
       _draggingProgress = false;
       _seekLoading = true;
+      _showBufferSpinner = true;
       _stallSince = DateTime.now();
     });
     widget.onInteract();
@@ -2416,55 +2602,20 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
     widget.speedTracker.resetMetrics();
     widget.speedTracker.tick(c.value.buffered, isBuffering: true);
     _notifyLoading(true);
+    // ? seek ?????????CDN???????
+    StreamAheadCache.instance.updatePosition(d.inMilliseconds);
+    unawaited(
+      StreamAheadCache.instance.warmSeekTarget(d.inMilliseconds, count: 2),
+    );
     try {
       await c.seekTo(d);
       await c.play();
     } catch (_) {}
     unawaited(_resumeAfterSeek());
-    _stallTimer?.cancel();
-    _stallTimer = Timer(const Duration(milliseconds: 1200), () {
-      if (!mounted) return;
-      final v = c.value;
-      _maybeReleaseSeekLock(v);
-      if (v.isPlaying &&
-          (v.position.inMilliseconds > 0 || !v.isBuffering)) {
-        setState(() {
-          _seekLoading = false;
-          _showBufferSpinner = false;
-          final lock = _uiSeekPos;
-          if (lock != null) {
-            final diff =
-                (v.position.inMilliseconds - lock.inMilliseconds).abs();
-            if (diff <= 900) _uiSeekPos = null;
-          }
-        });
-        widget.speedTracker.setLoading(false);
-        _notifyLoading(false);
-        return;
-      }
-      if (!v.isPlaying) {
-        setState(() => _showBufferSpinner = true);
-        _notifyLoading(true);
-        unawaited(_resumeAfterSeek());
-      } else {
-        setState(() {
-          _seekLoading = false;
-          _showBufferSpinner = false;
-          final lock = _uiSeekPos;
-          if (lock != null) {
-            final diff =
-                (v.position.inMilliseconds - lock.inMilliseconds).abs();
-            if (diff <= 900) _uiSeekPos = null;
-          }
-        });
-        widget.speedTracker.setLoading(false);
-        _notifyLoading(false);
-      }
-    });
   }
 
   void _onSeekEnd() {
-    // seek 已在 onSeek(commit) 里完成；此处仅作兜底
+    // seek ?? onSeek(commit) ??????????
     if (_draggingProgress) {
       setState(() => _draggingProgress = false);
     }
@@ -2472,23 +2623,67 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
 
   Future<void> _resumeAfterSeek() async {
     final c = widget.controller;
+    final target = _uiSeekPos;
     try {
       await c.play();
-      for (var i = 0; i < 6; i++) {
-        await Future<void>.delayed(const Duration(milliseconds: 180));
+      // ????????????? play???? 6s
+      for (var i = 0; i < 30; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 200));
         if (!mounted || _draggingProgress) return;
         final v = c.value;
-        if (v.isPlaying) return;
-        await c.play();
+        if (!v.isPlaying) {
+          await c.play();
+        }
+        final ahead = _bufferedAheadMsOfEngine(v);
+        final near = target == null ||
+            (v.position.inMilliseconds - target.inMilliseconds).abs() <= 2500;
+        final ready = near &&
+            !v.isBuffering &&
+            v.isPlaying &&
+            (ahead < 0 || ahead >= 900);
+        if (ready || (near && ahead >= 2000)) {
+          if (!mounted) return;
+          setState(() {
+            _seekLoading = false;
+            _showBufferSpinner = false;
+            if (near) _uiSeekPos = null;
+          });
+          widget.speedTracker.setLoading(false);
+          _notifyLoading(false);
+          StreamAheadCache.instance.setPaused(false);
+          return;
+        }
+        if (i >= 4) {
+          setState(() => _showBufferSpinner = true);
+          _notifyLoading(true);
+        }
       }
     } catch (_) {}
+    if (!mounted || _draggingProgress) return;
+    setState(() {
+      _seekLoading = false;
+      _showBufferSpinner = false;
+    });
+    widget.speedTracker.setLoading(false);
+    _notifyLoading(false);
+    StreamAheadCache.instance.setPaused(false);
+  }
+
+  int _bufferedAheadMsOfEngine(VodEngineValue v) {
+    final pos = v.position;
+    var end = Duration.zero;
+    for (final r in v.buffered) {
+      if (r.end > end) end = r.end;
+    }
+    if (v.buffered.isEmpty) return -1;
+    if (end <= pos) return 0;
+    return (end - pos).inMilliseconds;
   }
 
   @override
   void dispose() {
     _uiTimer?.cancel();
     _stallTimer?.cancel();
-    widget.controller.removeListener(_onController);
     super.dispose();
   }
 
@@ -2496,8 +2691,10 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
   Widget build(BuildContext context) {
     final c = widget.controller;
     final displayPos = _uiSeekPos ?? c.value.position;
+    final wantPlay = !_userPaused;
+    final uiPlaying = c.value.isPlaying || (wantPlay && _showBufferSpinner);
     return MangoPlayerChrome(
-      playing: c.value.isPlaying,
+      playing: uiPlaying,
       position: displayPos,
       duration: c.value.duration,
       buffering: !widget.ready || _showBufferSpinner,
@@ -2528,9 +2725,14 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
       onSeekStart: _onSeekStart,
       onSeekEnd: _onSeekEnd,
       onPlayPause: () {
-        if (c.value.isPlaying) {
+        if (c.value.isPlaying || _holdingForBuffer) {
+          _userPaused = true;
+          _holdingForBuffer = false;
+          _clearStallFlags();
           c.pause();
         } else {
+          _userPaused = false;
+          _holdingForBuffer = false;
           c.play();
         }
         widget.onInteract();

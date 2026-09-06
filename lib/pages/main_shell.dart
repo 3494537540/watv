@@ -7,8 +7,11 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 import '../services/app_update_service.dart';
 import '../services/cms_app_config.dart';
+import '../services/cms_message_store.dart';
 import '../services/local_notification_service.dart';
 import '../services/maccms_api.dart';
+import '../services/qq_login_service.dart';
+import '../services/vod_new_collect_service.dart';
 import '../services/vod_update_watch_service.dart';
 import '../state/cms_auth_controller.dart';
 import '../state/theme_controller.dart';
@@ -42,6 +45,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    AppOnboardingGate.restartTick.addListener(_onGoHomeForTour);
     LocalNotificationService.onTapPayload = _onNotificationPayload;
     unawaited(_ensurePortraitFriendly());
     unawaited(_loadConfig());
@@ -56,7 +60,20 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       LocalNotificationService.onTapPayload = null;
     }
     CmsAppConfigStore.instance.removeListener(_onConfig);
+    AppOnboardingGate.restartTick.removeListener(_onGoHomeForTour);
     super.dispose();
+  }
+
+  /// 设置里「重新导览」时切回首页，避免在「我的/设置」上盖引导
+  void _onGoHomeForTour() {
+    if (!mounted) return;
+    final i = _tabs.indexWhere((e) => e.id == 'home');
+    final target = i >= 0 ? i : 0;
+    if (_index != target) {
+      setState(() => _index = target);
+    }
+    final dark = ThemeController.instance.isDark;
+    SystemChrome.setSystemUIOverlayStyle(_overlayStyle(dark));
   }
 
   @override
@@ -68,12 +85,13 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
           requestPermission: false,
         ),
       );
+      unawaited(VodNewCollectService.check());
     }
   }
 
   Future<void> _bootstrapNotifications() async {
     await LocalNotificationService.init();
-    await Future<void>.delayed(const Duration(milliseconds: 1200));
+    await Future<void>.delayed(const Duration(milliseconds: 800));
     if (!mounted) return;
     final ok = await LocalNotificationService.ensurePermission(
       context: context,
@@ -81,11 +99,20 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     if (!mounted) return;
     if (ok) {
       await LocalNotificationService.maybeSendWelcomeOnce();
+      // 授权后立刻扫一遍公告 → 系统通知
+      try {
+        final api = CmsAuthController.instance.api;
+        await CmsMessageStore.instance.refresh(api);
+      } catch (_) {}
     }
     await VodUpdateWatchService.check(
       context: context,
       force: true,
       requestPermission: false,
+    );
+    await VodNewCollectService.check(
+      force: true,
+      messageApi: CmsAuthController.instance.api,
     );
   }
 
@@ -156,6 +183,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     }
     await CmsAppConfigStore.instance.refresh();
     if (!mounted) return;
+    unawaited(QqLoginService.instance.ensureRegistered());
     unawaited(AppUpdateService.check(context: context, silent: true));
   }
 
@@ -172,8 +200,14 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   }
 
   Future<void> _onTabSelected(int i) async {
+    if (i != _index) {
+      HapticFeedback.selectionClick();
+    }
     final was = _index;
     setState(() => _index = i);
+    // 立刻刷新状态栏图标，避免「我的」浅色页仍用首页浅色图标
+    final dark = ThemeController.instance.isDark;
+    SystemChrome.setSystemUIOverlayStyle(_overlayStyle(dark));
     final id = _tabs[i.clamp(0, _tabs.length - 1)].id;
     if (id == 'profile' && !CmsAuthController.instance.isLoggedIn) {
       if (_authSheetShowing) return;
@@ -236,8 +270,8 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
 
   bool get _onDarkChromeTab {
     final id = _tabs[_index.clamp(0, _tabs.length - 1)].id;
-    // 首页 / 我的顶栏偏深色，状态栏图标用浅色
-    return id == 'home' || id == 'profile';
+    // 仅首页顶栏偏深色用浅色状态栏图标；片库/资讯/我的用深色图标
+    return id == 'home';
   }
 
   SystemUiOverlayStyle _overlayStyle(bool dark) {
@@ -252,6 +286,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       systemNavigationBarIconBrightness:
           dark ? Brightness.light : Brightness.dark,
       systemNavigationBarContrastEnforced: false,
+      // 关闭系统强制白底对比条，用深色图标保证醒目
       systemStatusBarContrastEnforced: false,
     );
   }
@@ -279,6 +314,8 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
 
         final body = Material(
           type: MaterialType.transparency,
+          // 勿用 AnimatedSwitcher + ValueKey(_index) 包 IndexedStack：
+          // 切 Tab 时新旧两棵树并存，TourTarget 的 GlobalKey 会重复报错。
           child: IndexedStack(
             index: _index.clamp(0, pages.length - 1),
             children: pages,

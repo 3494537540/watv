@@ -4,7 +4,6 @@ import 'dart:math' show Rectangle;
 import 'package:floating/floating.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
-import 'package:video_player/video_player.dart';
 import 'package:video_player_pip/video_player_pip.dart';
 import 'package:video_player_pip/video_player_pip_platform_interface.dart';
 
@@ -115,7 +114,8 @@ abstract final class PlayerPip {
   static Future<void> enter({
     Rational aspect = const Rational.landscape(),
     Rect? sourceRect,
-    VideoPlayerController? controller,
+    int? iosPlayerId,
+    double videoAspect = 16 / 9,
   }) async {
     if (kIsWeb) {
       DialogX.showWarning('当前环境不支持画中画');
@@ -147,9 +147,9 @@ abstract final class PlayerPip {
     }
 
     if (_isIos) {
-      final c = controller;
-      if (c == null || !c.value.isInitialized) {
-        DialogX.showWarning('请先开始播放再开画中画');
+      final playerId = iosPlayerId;
+      if (playerId == null) {
+        DialogX.showWarning('当前内核不支持 iOS 画中画，请切换「系统(Exo)」内核');
         return;
       }
       try {
@@ -157,12 +157,9 @@ abstract final class PlayerPip {
           DialogX.showWarning('当前设备不支持画中画');
           return;
         }
-        final ar = c.value.aspectRatio == 0 ? 16 / 9 : c.value.aspectRatio;
+        final ar = videoAspect <= 0 ? 16 / 9 : videoAspect;
         final w = 320;
         final h = (w / ar).round().clamp(120, 480);
-        // playerId 在 video_player 标为 visibleForTesting，但原生 PiP 需要它
-        // ignore: invalid_use_of_visible_for_testing_member
-        final playerId = c.playerId;
         final ok = await VideoPlayerPipPlatform.instance.enterPipMode(
           playerId,
           width: w,
@@ -172,7 +169,6 @@ abstract final class PlayerPip {
           DialogX.showWarning('无法进入画中画，请确认在真机且已播放');
           return;
         }
-        // 系统回调也会更新；先乐观标记并续播
         _setInPip(true);
       } catch (e) {
         debugPrint('[pip] ios enable fail: $e');

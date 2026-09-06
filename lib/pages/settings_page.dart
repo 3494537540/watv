@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -14,6 +13,8 @@ import '../state/app_settings_controller.dart';
 import '../state/cms_auth_controller.dart';
 import '../state/theme_controller.dart';
 import '../theme/app_colors.dart';
+import '../widgets/anchored_choice_menu.dart';
+import '../widgets/app_onboarding.dart';
 import '../widgets/auth_sheet.dart';
 import '../widgets/app_page_route.dart';
 import '../widgets/dialogx/dialogx.dart';
@@ -45,6 +46,13 @@ class _SettingsPageState extends State<SettingsPage> {
     // 默认地址不回填明文，避免界面泄露
     _cmsCtrl = TextEditingController(text: cur);
     unawaited(_loadNotifyPrefs());
+    if (CmsAuthController.instance.isLoggedIn) {
+      unawaited(
+        CmsAuthController.instance.refreshProfile().then((_) {
+          if (mounted) setState(() {});
+        }).catchError((_) {}),
+      );
+    }
   }
 
   Future<void> _loadNotifyPrefs() async {
@@ -90,130 +98,89 @@ class _SettingsPageState extends State<SettingsPage> {
 
   static bool _looksMasked(String s) => s.contains('*');
 
-  /// 贴在列表项旁的锚定菜单（非底部整页弹层）
   Future<void> _showAnchoredOptions(
     BuildContext anchor, {
-    required List<
-            ({
-              String label,
-              String? subtitle,
-              bool selected,
-              VoidCallback onPick
-            })>
-        options,
-  }) async {
-    HapticFeedback.selectionClick();
-    final box = anchor.findRenderObject() as RenderBox?;
-    final overlay = Overlay.maybeOf(anchor)?.context.findRenderObject()
-        as RenderBox?;
-    if (box == null || overlay == null || !anchor.mounted) return;
-
-    final bottomRight =
-        box.localToGlobal(box.size.bottomRight(Offset.zero), ancestor: overlay);
-    // 贴在该行右侧下方，避免贴左缘
-    const menuW = 268.0;
-    final maxLeft = math.max(12.0, overlay.size.width - menuW - 12);
-    final left = (bottomRight.dx - menuW).clamp(12.0, maxLeft).toDouble();
-    final position = RelativeRect.fromLTRB(
-      left,
-      bottomRight.dy + 4,
-      overlay.size.width - left - menuW,
-      12,
+    required List<AnchoredChoice> Function() buildOptions,
+    Widget? Function(BuildContext context)? previewBuilder,
+    bool applyAndClose = true,
+  }) {
+    return showAnchoredChoiceMenu(
+      anchor,
+      buildOptions: buildOptions,
+      previewBuilder: previewBuilder,
+      applyAndClose: applyAndClose,
     );
-
-    final dark = ThemeController.instance.isDark;
-    final text = dark ? const Color(0xFFE5E5EA) : const Color(0xFF3A3A3C);
-    const hint = Color(0xFF8E8E93);
-    final bg = dark ? const Color(0xFF2C2C2E) : const Color(0xFFF2F2F7);
-
-    final picked = await showMenu<int>(
-      context: anchor,
-      position: position,
-      color: bg,
-      elevation: 10,
-      shadowColor: const Color(0x33000000),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      constraints: const BoxConstraints(
-        minWidth: menuW,
-        maxWidth: menuW,
-        maxHeight: 420,
-      ),
-      items: [
-        for (var i = 0; i < options.length; i++)
-          PopupMenuItem<int>(
-            value: i,
-            height: options[i].subtitle == null ? 44 : 56,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  options[i].selected
-                      ? '✓  ${options[i].label}'
-                      : options[i].label,
-                  style: TextStyle(
-                    fontFamily: 'AppSans',
-                    fontSize: 14,
-                    fontWeight: options[i].selected
-                        ? FontWeight.w700
-                        : FontWeight.w600,
-                    color: text,
-                  ),
-                ),
-                if (options[i].subtitle != null) ...[
-                  const SizedBox(height: 2),
-                  Text(
-                    options[i].subtitle!,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontFamily: 'AppSans',
-                      fontSize: 11,
-                      color: hint,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-      ],
-    );
-    if (picked == null) return;
-    options[picked].onPick();
   }
 
-  Future<void> _showAnchoredMotionMenu(BuildContext anchor) async {
-    final tc = ThemeController.instance;
-    await _showAnchoredOptions(
+  Future<void> _showAnchoredMotionMenu(BuildContext anchor) {
+    return showAnchoredChoiceMenu(
       anchor,
-      options: [
-        (
-          label: tc.motionEnabled ? '动效：开' : '动效：关',
-          subtitle: '点击开关页面过渡与控件动效',
-          selected: false,
-          onPick: () => tc.setMotionEnabled(!tc.motionEnabled),
-        ),
-        for (final s in AppPageTransition.values)
+      applyAndClose: false,
+      previewBuilder: (ctx) {
+        final tc = ThemeController.instance;
+        return MotionPreviewPane(
+          enabled: tc.motionEnabled,
+          transition: tc.pageTransition,
+          speed: tc.motionSpeed,
+        );
+      },
+      buildOptions: () {
+        final tc = ThemeController.instance;
+        return [
           (
-            label: '过渡 · ${s.label}',
-            subtitle: s.subtitle,
-            selected: tc.pageTransition == s,
-            onPick: () {
-              if (!tc.motionEnabled) tc.setMotionEnabled(true);
-              tc.setPageTransition(s);
-            },
+            label: tc.motionEnabled ? '动效：开' : '动效：关',
+            subtitle: '点击开关页面过渡与控件动效',
+            selected: false,
+            leading: null,
+            onPick: () => tc.setMotionEnabled(!tc.motionEnabled),
           ),
-        for (final s in AppMotionSpeed.values)
-          (
-            label: '速度 · ${s.label}',
-            subtitle: '时长系数 ×${s.factor.toStringAsFixed(2)}',
-            selected: tc.motionSpeed == s,
-            onPick: () {
-              if (!tc.motionEnabled) tc.setMotionEnabled(true);
-              tc.setMotionSpeed(s);
-            },
-          ),
-      ],
+          for (final s in AppPageTransition.values)
+            (
+              label: s.label,
+              subtitle: s.subtitle,
+              selected: tc.pageTransition == s,
+              leading: null,
+              onPick: () {
+                if (!tc.motionEnabled) tc.setMotionEnabled(true);
+                tc.setPageTransition(s);
+              },
+            ),
+          for (final s in AppMotionSpeed.values)
+            (
+              label: '速度 · ${s.label}',
+              subtitle: '时长系数 ×${s.factor.toStringAsFixed(2)}',
+              selected: tc.motionSpeed == s,
+              leading: null,
+              onPick: () {
+                if (!tc.motionEnabled) tc.setMotionEnabled(true);
+                tc.setMotionSpeed(s);
+              },
+            ),
+        ];
+      },
+    );
+  }
+
+  Future<void> _showAnchoredLoadingMenu(BuildContext anchor) {
+    return showAnchoredChoiceMenu(
+      anchor,
+      applyAndClose: false,
+      menuWidth: 308,
+      previewBuilder: (_) => const LoadingPreviewPane(),
+      buildOptions: () {
+        final tc = ThemeController.instance;
+        // 不把动画塞进左侧窄槽（会裁切 Lottie/圆环），只靠顶部大预览
+        return [
+          for (final s in AppLoadingStyle.values)
+            (
+              label: s.label,
+              subtitle: s.subtitle,
+              selected: tc.loadingStyle == s,
+              leading: null,
+              onPick: () => tc.setLoadingStyle(s),
+            ),
+        ];
+      },
     );
   }
 
@@ -257,10 +224,20 @@ class _SettingsPageState extends State<SettingsPage> {
             dark ? const Color(0xFF2C2C2E) : const Color(0xFFF5F5F7);
         final navFg = dark ? Colors.white : AppColors.text;
 
-        return CupertinoPageScaffold(
+        return AnnotatedRegion<SystemUiOverlayStyle>(
+          value: SystemUiOverlayStyle(
+            statusBarColor: pageBg,
+            statusBarIconBrightness:
+                dark ? Brightness.light : Brightness.dark,
+            statusBarBrightness: dark ? Brightness.dark : Brightness.light,
+            systemStatusBarContrastEnforced: false,
+            systemNavigationBarColor: Colors.transparent,
+            systemNavigationBarContrastEnforced: false,
+          ),
+          child: CupertinoPageScaffold(
           backgroundColor: pageBg,
           navigationBar: CupertinoNavigationBar(
-            backgroundColor: pageBg.withValues(alpha: 0.94),
+            backgroundColor: pageBg,
             border: null,
             middle: Text(
               '设置',
@@ -272,6 +249,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
           child: SafeArea(
+            top: false,
             child: ListView(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 40),
               children: [
@@ -330,6 +308,10 @@ class _SettingsPageState extends State<SettingsPage> {
                             await VodUpdateWatchService.setEnabled(true);
                             if (!mounted) return;
                             setState(() => _vodNotify = true);
+                            await LocalNotificationService.showTest(
+                              context: context,
+                            );
+                            if (!mounted) return;
                             DialogX.showSuccess('已开启更新通知');
                             unawaited(
                               VodUpdateWatchService.check(
@@ -395,6 +377,12 @@ class _SettingsPageState extends State<SettingsPage> {
                               .setInboxNotifyEnabled(v);
                           if (!mounted) return;
                           setState(() => _inboxNotify = v);
+                          if (v) {
+                            await LocalNotificationService.showTest(
+                              context: context,
+                            );
+                          }
+                          if (!mounted) return;
                           DialogX.showSuccess(v ? '已开启消息通知' : '已关闭消息通知');
                         },
                       ),
@@ -447,13 +435,15 @@ class _SettingsPageState extends State<SettingsPage> {
                         subtitle: ThemeController.instance.uiStyle.label,
                         onTap: () => _showAnchoredOptions(
                           tileCtx,
-                          options: [
+                          applyAndClose: true,
+                          buildOptions: () => [
                             for (final s in AppUiStyle.values)
                               (
                                 label: s.label,
                                 subtitle: s.subtitle,
                                 selected:
                                     ThemeController.instance.uiStyle == s,
+                                leading: null,
                                 onPick: () =>
                                     ThemeController.instance.setUiStyle(s),
                               ),
@@ -466,21 +456,23 @@ class _SettingsPageState extends State<SettingsPage> {
                       builder: (tileCtx) => _Tile(
                         title: '加载动画',
                         subtitle: ThemeController.instance.loadingStyle.label,
-                        onTap: () => _showAnchoredOptions(
-                          tileCtx,
-                          options: [
-                            for (final s in AppLoadingStyle.values)
-                              (
-                                label: s.label,
-                                subtitle: s.subtitle,
-                                selected: ThemeController
-                                        .instance.loadingStyle ==
-                                    s,
-                                onPick: () => ThemeController.instance
-                                    .setLoadingStyle(s),
-                              ),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            AppLoadingIndicator(
+                              size: 28,
+                              color: AppColors.brand,
+                              style: ThemeController.instance.loadingStyle,
+                            ),
+                            const SizedBox(width: 6),
+                            Icon(
+                              CupertinoIcons.chevron_right,
+                              size: 16,
+                              color: hint,
+                            ),
                           ],
                         ),
+                        onTap: () => _showAnchoredLoadingMenu(tileCtx),
                       ),
                     ),
                     _CardDivider(color: line),
@@ -490,6 +482,29 @@ class _SettingsPageState extends State<SettingsPage> {
                         subtitle: ThemeController.instance.motionEnabled
                             ? '${ThemeController.instance.pageTransition.label} · ${ThemeController.instance.motionSpeed.label}'
                             : '已关闭',
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            SizedBox(
+                              width: 56,
+                              height: 36,
+                              child: MotionPreviewPane(
+                                enabled:
+                                    ThemeController.instance.motionEnabled,
+                                transition:
+                                    ThemeController.instance.pageTransition,
+                                speed: ThemeController.instance.motionSpeed,
+                                compact: true,
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            Icon(
+                              CupertinoIcons.chevron_right,
+                              size: 16,
+                              color: hint,
+                            ),
+                          ],
+                        ),
                         onTap: () => _showAnchoredMotionMenu(tileCtx),
                       ),
                     ),
@@ -505,6 +520,24 @@ class _SettingsPageState extends State<SettingsPage> {
                       _Tile(
                         title: '当前账号',
                         subtitle: cms.user?.displayName ?? '会员',
+                        onTap: null,
+                      ),
+                      _CardDivider(color: line),
+                      _Tile(
+                        title: '上次登录时间',
+                        subtitle: () {
+                          final t = cms.user?.loginTimeLabel ?? '';
+                          return t.isEmpty ? '暂无记录' : t;
+                        }(),
+                        onTap: null,
+                      ),
+                      _CardDivider(color: line),
+                      _Tile(
+                        title: '上次登录 IP',
+                        subtitle: () {
+                          final ip = (cms.user?.loginIp ?? '').trim();
+                          return ip.isEmpty ? '暂无记录' : ip;
+                        }(),
                         onTap: null,
                       ),
                       _CardDivider(color: line),
@@ -656,6 +689,17 @@ class _SettingsPageState extends State<SettingsPage> {
                   dark: dark,
                   children: [
                     _Tile(
+                      title: '重新导览',
+                      subtitle: '回到首页后再次显示功能引导',
+                      onTap: () async {
+                        await AppOnboardingGate.reset();
+                        if (!context.mounted) return;
+                        DialogX.showSuccess('已开启新手引导，正在回到首页');
+                        Navigator.of(context).popUntil((r) => r.isFirst);
+                      },
+                    ),
+                    _CardDivider(color: line),
+                    _Tile(
                       title: '检查更新',
                       subtitle:
                           '${HuihuoPanelApi.currentPlatform.toUpperCase()} · ${ApiConfig.appVersionName} (${ApiConfig.appVersionCode})',
@@ -709,6 +753,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ],
             ),
           ),
+        ),
         );
       },
     );
@@ -825,8 +870,20 @@ class _AccentChip extends StatelessWidget {
               ),
             ),
             if (selected) ...[
-              const SizedBox(width: 6),
-              Icon(CupertinoIcons.checkmark_alt, size: 16, color: preset.color),
+              const SizedBox(width: 8),
+              Container(
+                width: 18,
+                height: 18,
+                decoration: BoxDecoration(
+                  color: preset.color,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.check_rounded,
+                  size: 12,
+                  color: Colors.white,
+                ),
+              ),
             ],
           ],
         ),
@@ -947,6 +1004,7 @@ class _ChangelogPageState extends State<_ChangelogPage> {
   bool _loading = true;
   String? _error;
   HuihuoAppUpdate? _update;
+  List<HuihuoChangelogEntry> _entries = const [];
 
   @override
   void initState() {
@@ -960,10 +1018,14 @@ class _ChangelogPageState extends State<_ChangelogPage> {
       _error = null;
     });
     try {
-      final u = await AppUpdateService.fetch();
+      final results = await Future.wait([
+        AppUpdateService.fetch(),
+        HuihuoPanelApi.fetchChangelogs(),
+      ]);
       if (!mounted) return;
       setState(() {
-        _update = u;
+        _update = results[0] as HuihuoAppUpdate?;
+        _entries = results[1] as List<HuihuoChangelogEntry>;
         _loading = false;
       });
     } catch (e) {
@@ -975,6 +1037,22 @@ class _ChangelogPageState extends State<_ChangelogPage> {
     }
   }
 
+  String _timeLabel(int ts) {
+    if (ts <= 0) return '近期';
+    final ms = ts > 2000000000 ? ts : ts * 1000;
+    final d = DateTime.fromMillisecondsSinceEpoch(ms);
+    return '${d.year}.${d.month.toString().padLeft(2, '0')}.${d.day.toString().padLeft(2, '0')}';
+  }
+
+  List<String> _linesOf(String log) {
+    if (log.trim().isEmpty) return const [];
+    return log
+        .split(RegExp(r'[\r\n]+'))
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+  }
+
   @override
   Widget build(BuildContext context) {
     final dark = ThemeController.instance.isDark;
@@ -982,21 +1060,24 @@ class _ChangelogPageState extends State<_ChangelogPage> {
     final text = AppPalette.text(context);
     final hint = AppPalette.textHint(context);
     final u = _update;
-    final log = u?.changelog.trim() ?? '';
-    final lines = log.isEmpty
-        ? <String>[]
-        : log
-            .split(RegExp(r'[\r\n]+'))
-            .map((e) => e.trim())
-            .where((e) => e.isNotEmpty)
-            .toList();
+    final plat = HuihuoPanelApi.currentPlatform.toUpperCase();
 
-    String timeLabel() {
-      final ts = u?.updatedAt ?? 0;
-      if (ts <= 0) return '近期';
-      final ms = ts > 2000000000 ? ts : ts * 1000;
-      final d = DateTime.fromMillisecondsSinceEpoch(ms);
-      return '${d.year}.${d.month.toString().padLeft(2, '0')}.${d.day.toString().padLeft(2, '0')}';
+    // 有归档用归档；否则用当前端 app_update 拼一条
+    final items = <HuihuoChangelogEntry>[
+      ..._entries,
+    ];
+    if (items.isEmpty && u != null) {
+      items.add(
+        HuihuoChangelogEntry(
+          platform: u.platform,
+          version: u.version,
+          versionCode: u.versionCode,
+          downloadUrl: u.downloadUrl,
+          changelog: u.changelog,
+          appName: u.appName,
+          createdAt: u.updatedAt,
+        ),
+      );
     }
 
     return _SettingsSubScaffold(
@@ -1030,78 +1111,108 @@ class _ChangelogPageState extends State<_ChangelogPage> {
                     children: [
                       Row(
                         children: [
-                          Text(
-                            '当前 ${ApiConfig.appVersionName}',
-                            style: TextStyle(
-                              fontFamily: 'AppSans',
-                              fontSize: 13,
-                              color: hint,
+                          Expanded(
+                            child: Text(
+                              '当前 $plat ${ApiConfig.appVersionName}',
+                              style: TextStyle(
+                                fontFamily: 'AppSans',
+                                fontSize: 13,
+                                color: hint,
+                              ),
                             ),
                           ),
-                          const Spacer(),
                           TextButton(
                             onPressed: _loading ? null : _load,
-                            child: const Text('刷新',
-                                style: TextStyle(fontFamily: 'AppSans')),
+                            child: const Text(
+                              '刷新',
+                              style: TextStyle(fontFamily: 'AppSans'),
+                            ),
                           ),
                         ],
                       ),
                       const SizedBox(height: 8),
-                      _ChangelogTimelineItem(
-                        title: u == null
-                            ? '本地版本 ${ApiConfig.appVersionName}'
-                            : 'v${u.version}',
-                        time: timeLabel(),
-                        active: true,
-                        isLast: true,
-                        children: [
-                          if (lines.isEmpty)
+                      if (items.isEmpty)
+                        _ChangelogTimelineItem(
+                          title: 'v${ApiConfig.appVersionName}',
+                          time: '本机',
+                          active: true,
+                          isLast: true,
+                          children: [
                             Text(
-                              u == null ? '暂无远程更新配置' : '暂无更新说明',
+                              '服务器尚未配置 $plat 端更新日志。\n'
+                              '请在面板「更新」中保存该端版本与说明后刷新。',
                               style: TextStyle(
                                 fontFamily: 'AppSans',
                                 fontSize: 14,
                                 height: 1.5,
                                 color: hint,
                               ),
-                            )
-                          else
-                            for (final line in lines)
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 8),
-                                child: Row(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Padding(
-                                      padding: const EdgeInsets.only(top: 7),
-                                      child: Container(
-                                        width: 5,
-                                        height: 5,
-                                        decoration: BoxDecoration(
-                                          color: AppColors.brand
-                                              .withValues(alpha: 0.7),
-                                          shape: BoxShape.circle,
+                            ),
+                          ],
+                        )
+                      else
+                        for (var i = 0; i < items.length; i++) ...[
+                          _ChangelogTimelineItem(
+                            title: items[i].version.isEmpty
+                                ? '版本更新'
+                                : 'v${items[i].version}',
+                            time: _timeLabel(items[i].createdAt),
+                            active: i == 0,
+                            isLast: i == items.length - 1,
+                            children: [
+                              if (_linesOf(items[i].changelog).isEmpty)
+                                Text(
+                                  '暂无更新说明',
+                                  style: TextStyle(
+                                    fontFamily: 'AppSans',
+                                    fontSize: 14,
+                                    height: 1.5,
+                                    color: hint,
+                                  ),
+                                )
+                              else
+                                for (final line
+                                    in _linesOf(items[i].changelog))
+                                  Padding(
+                                    padding: const EdgeInsets.only(bottom: 8),
+                                    child: Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Padding(
+                                          padding:
+                                              const EdgeInsets.only(top: 7),
+                                          child: Container(
+                                            width: 5,
+                                            height: 5,
+                                            decoration: BoxDecoration(
+                                              color: AppColors.brand
+                                                  .withValues(alpha: 0.7),
+                                              shape: BoxShape.circle,
+                                            ),
+                                          ),
                                         ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: Text(
-                                        line.replaceFirst(
-                                            RegExp(r'^[-•·]\s*'), ''),
-                                        style: TextStyle(
-                                          fontFamily: 'AppSans',
-                                          fontSize: 14,
-                                          height: 1.45,
-                                          color: text,
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            line.replaceFirst(
+                                              RegExp(r'^[-•·]\s*'),
+                                              '',
+                                            ),
+                                            style: TextStyle(
+                                              fontFamily: 'AppSans',
+                                              fontSize: 14,
+                                              height: 1.45,
+                                              color: text,
+                                            ),
+                                          ),
                                         ),
-                                      ),
+                                      ],
                                     ),
-                                  ],
-                                ),
-                              ),
+                                  ),
+                            ],
+                          ),
                         ],
-                      ),
                     ],
                   ),
                 ),

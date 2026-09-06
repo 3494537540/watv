@@ -125,7 +125,31 @@ Future<Object?> showChromeQualityMenu(
         selected: prefer == VodQualityTier.auto,
       ),
     );
+    // 标准档位入口（含 1080），再按实际流列一遍，避免只显示当前低档
+    const tiers = [
+      VodQualityTier.q1080,
+      VodQualityTier.q720,
+      VodQualityTier.q480,
+      VodQualityTier.q360,
+    ];
+    final seenUrls = <String>{};
+    for (final tier in tiers) {
+      final match = VodPlayback.pickVariant(variants, tier);
+      if (match == null) continue;
+      // 该档在片源里确实够高才展示（避免 480 源冒充 1080）
+      if (match.height + 40 < tier.minHeight && match.tier != tier) continue;
+      if (!seenUrls.add(match.url)) continue;
+      items.add(
+        _item<Object>(
+          value: tier,
+          label: tier.label,
+          selected: prefer == tier ||
+              (prefer != VodQualityTier.auto && current?.url == match.url),
+        ),
+      );
+    }
     for (final v in [...variants].reversed) {
+      if (seenUrls.contains(v.url)) continue;
       items.add(
         _item<Object>(
           value: v,
@@ -192,6 +216,40 @@ Future<int?> showChromeSourceMenu(
           label: names[i].trim().isEmpty ? '线路${i + 1}' : names[i].trim(),
           selected: i == selected,
         ),
+    ],
+  );
+}
+
+/// 跳过片头片尾：锚点小菜单
+Future<String?> showChromeSkipMenu(
+  BuildContext anchor, {
+  required bool enabled,
+  required int introSec,
+  required int outroSec,
+}) {
+  HapticFeedback.selectionClick();
+  return showMenu<String>(
+    context: anchor,
+    position: _anchorRect(anchor),
+    color: _menuBg,
+    elevation: 8,
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+    items: [
+      _item(
+        value: 'toggle',
+        label: enabled ? '跳过：开（点关）' : '跳过：关（点开）',
+        selected: enabled,
+      ),
+      _item(
+        value: 'intro',
+        label: introSec > 0 ? '将当前位置设为片头（现 ${introSec}s）' : '将当前位置设为片头结束',
+        selected: false,
+      ),
+      _item(
+        value: 'outro',
+        label: outroSec > 0 ? '将当前位置设为片尾（现 ${outroSec}s）' : '将当前位置设为片尾开始',
+        selected: false,
+      ),
     ],
   );
 }

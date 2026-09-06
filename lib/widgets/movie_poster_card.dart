@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../models/movie_models.dart';
 import '../theme/app_colors.dart';
 import 'media_placeholder.dart';
+import 'press_scale.dart';
 
 /// 竖版海报卡（优先展示 CMS 封面）
 class MoviePosterCard extends StatelessWidget {
@@ -24,20 +24,18 @@ class MoviePosterCard extends StatelessWidget {
     final sub = movie.remarks.trim().isNotEmpty
         ? movie.remarks.trim()
         : '${movie.year} · ${movie.subtitle}';
+    final heroTag = moviePosterHeroTag(movie.id);
 
-    return GestureDetector(
-      onTap: () {
-        HapticFeedback.selectionClick();
-        onTap?.call();
-      },
-      behavior: HitTestBehavior.opaque,
+    return PressScale(
+      onTap: onTap,
+      scale: 0.97,
       child: SizedBox(
         width: width,
         child: LayoutBuilder(
           builder: (context, constraints) {
             final hasBoundedH = constraints.maxHeight.isFinite &&
                 constraints.maxHeight < double.infinity;
-            final poster = DecoratedBox(
+            final posterInner = DecoratedBox(
               decoration: BoxDecoration(
                 color: AppColors.posterPlaceholder,
                 borderRadius: BorderRadius.circular(10),
@@ -55,33 +53,39 @@ class MoviePosterCard extends StatelessWidget {
                   fit: StackFit.expand,
                   children: [
                     if (url.isNotEmpty)
-                      Image.network(
-                        url,
-                        fit: BoxFit.cover,
-                        alignment: Alignment.topCenter,
-                        filterQuality: FilterQuality.medium,
-                        errorBuilder: (_, _, _) => const MediaPlaceholder(
-                          kind: MediaPlaceholderKind.film,
-                          radius: 10,
+                      Hero(
+                        tag: heroTag,
+                        child: Material(
+                          type: MaterialType.transparency,
+                          child: Image.network(
+                            url,
+                            fit: BoxFit.cover,
+                            alignment: Alignment.topCenter,
+                            filterQuality: FilterQuality.medium,
+                            gaplessPlayback: true,
+                            errorBuilder: (_, _, _) => const MediaPlaceholder(
+                              kind: MediaPlaceholderKind.film,
+                              radius: 10,
+                            ),
+                            loadingBuilder: (context, child, progress) {
+                              if (progress == null) return child;
+                              return Stack(
+                                fit: StackFit.expand,
+                                children: [
+                                  ColoredBox(color: movie.coverColor),
+                                  Opacity(
+                                    opacity: progress.expectedTotalBytes != null
+                                        ? (progress.cumulativeBytesLoaded /
+                                                progress.expectedTotalBytes!)
+                                            .clamp(0.15, 1.0)
+                                        : 0.35,
+                                    child: child,
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
                         ),
-                        loadingBuilder: (context, child, progress) {
-                          if (progress == null) return child;
-                          // 浅色底 + 淡入，避免骨架结束仍长时间空白
-                          return Stack(
-                            fit: StackFit.expand,
-                            children: [
-                              ColoredBox(color: movie.coverColor),
-                              Opacity(
-                                opacity: progress.expectedTotalBytes != null
-                                    ? (progress.cumulativeBytesLoaded /
-                                            progress.expectedTotalBytes!)
-                                        .clamp(0.15, 1.0)
-                                    : 0.35,
-                                child: child,
-                              ),
-                            ],
-                          );
-                        },
                       )
                     else
                       const MediaPlaceholder(
@@ -189,12 +193,11 @@ class MoviePosterCard extends StatelessWidget {
               ],
             );
 
-            // Grid 等有限高场景：海报吃剩余高度，避免 BOTTOM OVERFLOW
             if (hasBoundedH) {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(child: poster),
+                  Expanded(child: posterInner),
                   const SizedBox(height: 6),
                   texts,
                 ],
@@ -206,7 +209,7 @@ class MoviePosterCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                SizedBox(width: width, height: posterH, child: poster),
+                SizedBox(width: width, height: posterH, child: posterInner),
                 const SizedBox(height: 6),
                 texts,
               ],

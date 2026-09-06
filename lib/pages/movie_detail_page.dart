@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:ui';
 
 import 'package:flutter/cupertino.dart';
@@ -8,9 +7,11 @@ import 'package:flutter/services.dart';
 
 import '../models/movie_models.dart';
 import '../player/player_pip.dart';
+import '../player/source_latency.dart';
 import '../services/cms_fav_store.dart';
 import '../services/vod_cache_store.dart';
 import '../services/local_play_store.dart';
+import '../services/local_my_comments_store.dart';
 import '../services/maccms_api.dart';
 import '../services/maccms_user_api.dart';
 import '../services/movie_watch_store.dart';
@@ -19,15 +20,20 @@ import '../theme/app_colors.dart';
 import '../utils/relative_time.dart';
 import '../widgets/cast_avatar.dart';
 import '../widgets/cast_sheet.dart';
+import '../widgets/comment_avatar.dart';
 import '../widgets/dialogx/dialogx.dart';
 import '../widgets/media_placeholder.dart';
 import '../widgets/player/mango_inline_player.dart';
 import '../widgets/player/mango_player_chrome.dart';
 import '../widgets/player/mango_watch_panel.dart';
 import '../widgets/player/player_loading_hud.dart';
-import 'vod_cache_list_page.dart';
 import '../widgets/app_page_route.dart';
+import '../widgets/auth_sheet.dart';
 import '../widgets/ios_edge_back.dart';
+import '../widgets/press_scale.dart';
+import 'membership_shop_page.dart';
+import 'redeem_page.dart';
+import 'vod_cache_list_page.dart';
 
 const _ink = Color(0xFF181818);
 const _muted = Color(0xFF6B6B6B);
@@ -69,6 +75,9 @@ class _MovieDetailPageState extends State<MovieDetailPage>
   late final AnimationController _enter;
   int _selectedEpisode = 0;
   int _sourceIndex = 0;
+  /// 用户手动点过线路后，不再被自动测速改线
+  bool _sourceLockedByUser = false;
+  int _autoPickGen = 0;
   /// 当前集已失败过的线路，自动切换时跳过
   final Set<int> _failedSources = <int>{};
   int _tab = 0; // 0 详情 1 评论
@@ -108,20 +117,26 @@ class _MovieDetailPageState extends State<MovieDetailPage>
   Movie get movie => _movie;
   List<MoviePlayEpisode> get _episodes => movie.episodesOf(_sourceIndex);
 
-  /// 有本机缓存则优先播本地文件
+  /// 有本机缓存则优先播本地文件（不限当前线路）
   String? _resolvePlayUrl(int episodeIndex) {
-    final cached = VodCacheStore.instance.find(
+    final hit = VodCacheStore.instance.findDoneEpisode(
       vodId: movie.id,
       episodeIndex: episodeIndex,
-      sourceIndex: _sourceIndex,
+      preferSourceIndex: _sourceIndex,
     );
-    if (cached != null &&
-        cached.isDone &&
-        cached.localPath.isNotEmpty &&
-        File(cached.localPath).existsSync()) {
-      return cached.localPath;
-    }
+    if (hit != null) return hit.localPath;
     return movie.playUrlAt(episodeIndex, sourceIndex: _sourceIndex);
+  }
+
+  void _alignSourceToCacheIfNeeded(int episodeIndex) {
+    final hit = VodCacheStore.instance.findDoneEpisode(
+      vodId: movie.id,
+      episodeIndex: episodeIndex,
+      preferSourceIndex: _sourceIndex,
+    );
+    if (hit != null && hit.sourceIndex != _sourceIndex) {
+      _sourceIndex = hit.sourceIndex;
+    }
   }
 
   /// 当前线路挂了 → 自动切到下一条可用源（保持当前集尽量不变）
@@ -168,6 +183,84 @@ class _MovieDetailPageState extends State<MovieDetailPage>
     return _tryNextPlaySource(keepEpisode: _selectedEpisode);
   }
 
+  List<String> _probeUrlsForCurrentEpisode() {
+    final ep = _selectedEpisode;
+    return [
+      for (final s in movie.playSources)
+        () {
+          final eps = s.episodes;
+          if (eps.isEmpty) return '';
+          return eps[ep.clamp(0, eps.length - 1)].url;
+        }(),
+    ];
+  }
+
+  /// 进页后测速，自动落到可播且最快的线路
+  Future<void> _autoPickBestSource() async {
+    if (_sourceLockedByUser) return;
+    if (widget.initialSourceIndex != null) return;
+    // 已有本集缓存：不要测速切走网线
+    if (VodCacheStore.instance.findDoneEpisode(
+          vodId: movie.id,
+          episodeIndex: _selectedEpisode,
+          preferSourceIndex: _sourceIndex,
+        ) !=
+        null) {
+      return;
+    }
+    final sources = movie.playSources;
+    if (sources.length <= 1) return;
+    final gen = ++_autoPickGen;
+    final urls = _probeUrlsForCurrentEpisode();
+    final best = await SourceLatency.pickBestIndex(
+      urls,
+      budget: const Duration(milliseconds: 3200),
+      fallback: _sourceIndex,
+      concurrency: 3,
+    );
+    if (!mounted || gen != _autoPickGen || _sourceLockedByUser) return;
+    if (best == _sourceIndex) return;
+    // 已开播且进度 >5 秒：勿打断流畅播放去切线
+    if (_watching) {
+      final pos = _inlinePlayerKey.currentState?.positionMs ?? 0;
+      if (pos > 5000) return;
+    }
+    _switchSourceQuiet(best);
+  }
+
+  /// UI 测速完成后：若当前线测挂了、另有可播线，自动切过去
+  void _onSourceProbeDone(Map<int, int?> scores) {
+    if (_sourceLockedByUser) return;
+    if (movie.playSources.length <= 1) return;
+    final cur = scores[_sourceIndex];
+    if (cur != null && cur > 0) return;
+    var best = -1;
+    var bestBps = -1;
+    scores.forEach((i, bps) {
+      if (_failedSources.contains(i)) return;
+      if (bps != null && bps > bestBps) {
+        bestBps = bps;
+        best = i;
+      }
+    });
+    if (best < 0 || best == _sourceIndex) return;
+    _switchSourceQuiet(best);
+  }
+
+  void _switchSourceQuiet(int i) {
+    if (i < 0 || i >= movie.playSources.length) return;
+    if (i == _sourceIndex) return;
+    final resume =
+        _inlinePlayerKey.currentState?.positionMs ?? _playStartMs;
+    setState(() {
+      _sourceIndex = i;
+      _playStartMs = resume;
+    });
+    if (_watching) {
+      _play(episodeIndex: _selectedEpisode);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -176,6 +269,7 @@ class _MovieDetailPageState extends State<MovieDetailPage>
     _autoPlayPending = widget.autoPlay || widget.forceWatch;
     if (widget.initialSourceIndex != null) {
       _sourceIndex = widget.initialSourceIndex!;
+      _sourceLockedByUser = true;
     }
     if (widget.initialEpisodeIndex != null) {
       _selectedEpisode = widget.initialEpisodeIndex!;
@@ -190,7 +284,10 @@ class _MovieDetailPageState extends State<MovieDetailPage>
         _loading = false;
         _relatedLoading = true;
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) _maybeAutoPlay();
+          if (mounted) {
+            _maybeAutoPlay();
+            unawaited(_autoPickBestSource());
+          }
         });
       } else {
         // 列表未带片源：先进播放壳，封面+骨架占位
@@ -857,7 +954,8 @@ class _MovieDetailPageState extends State<MovieDetailPage>
           _sourceIndex = maxSrc > 0
               ? widget.initialSourceIndex!.clamp(0, maxSrc - 1)
               : 0;
-        } else {
+          _sourceLockedByUser = true;
+        } else if (!_sourceLockedByUser) {
           _sourceIndex = 0;
         }
         final maxEp = detail.episodesOf(_sourceIndex).length;
@@ -868,6 +966,8 @@ class _MovieDetailPageState extends State<MovieDetailPage>
           _selectedEpisode = 0;
         }
       });
+      // 测速选最优线路（用户未手动选线时）
+      unawaited(_autoPickBestSource());
       // 详情到位后按最终片名/ID 再拉一次评论
       unawaited(_loadComments(force: true));
       // 详情带 typeId/题材后，按题材重拉同类型（覆盖进页时的粗结果）
@@ -928,6 +1028,8 @@ class _MovieDetailPageState extends State<MovieDetailPage>
         _commentsLoading = false;
         _commentsLoaded = true;
       });
+      // 把「当前用户」在本片下的评论写入本机「我的评论」
+      unawaited(_cacheMyCommentsFromList(list, id, title));
     } catch (e) {
       if (!mounted || token != _commentsLoadToken) return;
       setState(() {
@@ -938,7 +1040,108 @@ class _MovieDetailPageState extends State<MovieDetailPage>
     }
   }
 
+  Future<void> _cacheMyCommentsFromList(
+    List<MovieComment> list,
+    String vodId,
+    String vodTitle,
+  ) async {
+    final u = CmsAuthController.instance.user;
+    if (u == null || list.isEmpty) return;
+    final names = <String>{
+      u.displayName.trim(),
+      u.userName.trim(),
+      u.nickName.trim(),
+      if (u.userId > 0) '用户${u.userId}',
+      if (u.userId > 0) '${u.userId}',
+      '我',
+    }..removeWhere((e) => e.isEmpty);
+    final cover = _movie.coverUrl ?? '';
+    for (final c in list) {
+      final n = c.userName.trim();
+      if (n.isEmpty || !names.contains(n)) continue;
+      await LocalMyCommentsStore.add(
+        comment: MovieComment(
+          id: c.id,
+          userName: c.userName,
+          content: c.content,
+          timeText: c.timeText,
+          timeMs: c.timeMs,
+          avatarUrl: c.avatarUrl,
+          vodId: vodId,
+          vodName: vodTitle,
+          vodPic: cover,
+        ),
+        ownerUid: u.userId,
+        vodName: vodTitle,
+        vodPic: cover,
+      );
+    }
+  }
+
+  /// 播放前校验 CMS 会员：未登录先登录，非会员引导开通/兑换
+  Future<bool> _ensureMemberToPlay() async {
+    final auth = CmsAuthController.instance;
+    if (!auth.isLoggedIn) {
+      final ok = await showAuthSheet(context);
+      if (!ok || !mounted) return false;
+    }
+    // 刷新资料，避免本地缓存过期
+    try {
+      await auth.refreshProfile();
+    } catch (_) {}
+    if (!mounted) return false;
+    final user = CmsAuthController.instance.user;
+    if (user != null && user.isVip) return true;
+
+    final action = await showCupertinoDialog<String>(
+      context: context,
+      builder: (ctx) => CupertinoAlertDialog(
+        title: const Text('开通会员后观看'),
+        content: const Text('本片需会员权限。开通会员或使用兑换码后即可播放。'),
+        actions: [
+          CupertinoDialogAction(
+            onPressed: () => Navigator.pop(ctx, 'cancel'),
+            child: const Text('取消'),
+          ),
+          CupertinoDialogAction(
+            onPressed: () => Navigator.pop(ctx, 'redeem'),
+            child: const Text('兑换码'),
+          ),
+          CupertinoDialogAction(
+            isDefaultAction: true,
+            onPressed: () => Navigator.pop(ctx, 'shop'),
+            child: const Text('开通会员'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return false;
+    if (action == 'shop') {
+      await showMembershipShopSheet(context);
+      try {
+        await CmsAuthController.instance.refreshProfile();
+      } catch (_) {}
+      return CmsAuthController.instance.user?.isVip == true;
+    }
+    if (action == 'redeem') {
+      await Navigator.of(context).push(
+        AppPageRoute<void>(builder: (_) => const RedeemPage()),
+      );
+      try {
+        await CmsAuthController.instance.refreshProfile();
+      } catch (_) {}
+      return CmsAuthController.instance.user?.isVip == true;
+    }
+    return false;
+  }
+
   void _play({int? episodeIndex}) {
+    unawaited(_playGuarded(episodeIndex: episodeIndex));
+  }
+
+  Future<void> _playGuarded({int? episodeIndex}) async {
+    if (!await _ensureMemberToPlay()) return;
+    if (!mounted) return;
     HapticFeedback.mediumImpact();
     final ep = episodeIndex ?? (movie.isSeries ? _selectedEpisode : 0);
     if (_loading) {
@@ -951,6 +1154,7 @@ class _MovieDetailPageState extends State<MovieDetailPage>
     if (ep != _selectedEpisode) {
       _failedSources.clear();
     }
+    _alignSourceToCacheIfNeeded(ep);
     var url = _resolvePlayUrl(ep);
     if (url == null || url.isEmpty) {
       if (_tryNextPlaySource(keepEpisode: ep)) return;
@@ -1118,12 +1322,18 @@ class _MovieDetailPageState extends State<MovieDetailPage>
         fit: StackFit.expand,
         children: [
           if (cover.isNotEmpty)
-            Image.network(
-              cover,
-              fit: BoxFit.cover,
-              gaplessPlayback: true,
-              errorBuilder: (_, _, _) =>
-                  const ColoredBox(color: Colors.black),
+            Hero(
+              tag: moviePosterHeroTag(movie.id),
+              child: Material(
+                type: MaterialType.transparency,
+                child: Image.network(
+                  cover,
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                  errorBuilder: (_, _, _) =>
+                      const ColoredBox(color: Colors.black),
+                ),
+              ),
             )
           else
             const ColoredBox(color: Colors.black),
@@ -1177,6 +1387,7 @@ class _MovieDetailPageState extends State<MovieDetailPage>
             onSourceSelect: (i) {
               if (i == _sourceIndex) return;
               _failedSources.clear();
+              _sourceLockedByUser = true;
               final resume =
                   _inlinePlayerKey.currentState?.positionMs ?? _playStartMs;
               setState(() {
@@ -1191,12 +1402,28 @@ class _MovieDetailPageState extends State<MovieDetailPage>
             },
             onRequestSourceFailover: _onPlayerSourceFailover,
             onPrepareRetry: () async {
-              _failedSources.clear();
-              if (_sourceIndex != 0) {
+              // 重试：优先测速换线，避免死磕失败的默认线
+              _failedSources.add(_sourceIndex);
+              final urls = _probeUrlsForCurrentEpisode();
+              final n = movie.playSources.length;
+              final fallback = n <= 0 ? 0 : (_sourceIndex + 1) % n;
+              final best = await SourceLatency.pickBestIndex(
+                urls,
+                budget: const Duration(milliseconds: 2500),
+                fallback: fallback,
+                concurrency: 3,
+              );
+              if (!mounted) return;
+              if (best != _sourceIndex) {
                 setState(() {
-                  _sourceIndex = 0;
+                  _sourceIndex = best;
                   _playStartMs = 0;
                 });
+              } else if (!_tryNextPlaySource(
+                keepEpisode: _selectedEpisode,
+                notify: false,
+              )) {
+                _failedSources.clear();
               }
             },
             onFullscreen: _toggleFullscreen,
@@ -1250,6 +1477,8 @@ class _MovieDetailPageState extends State<MovieDetailPage>
                   unawaited(PlayerPip.enter());
                 }
               },
+              onSeekRewind: () =>
+                  unawaited(_inlinePlayerKey.currentState?.seekBySeconds(-10)),
               onSeekForward: () =>
                   unawaited(_inlinePlayerKey.currentState?.seekBySeconds(10)),
               onSettings: expand
@@ -1338,7 +1567,7 @@ class _MovieDetailPageState extends State<MovieDetailPage>
               if (i == 1) _loadComments();
             },
             onFavorite: _toggleFav,
-            onCast: null,
+            onCast: _onCastTap,
             favored: _favored,
             onShare: _shareMovie,
             onCache: () => unawaited(_openDownloadPick()),
@@ -1426,6 +1655,7 @@ class _MovieDetailPageState extends State<MovieDetailPage>
                                     (episodes.isEmpty &&
                                         movie.playSources.isEmpty),
                                 hideChrome: true,
+                                sourceProbeEnabled: true,
                                 sourceNames: [
                                   for (final s in movie.playSources) s.name,
                                 ],
@@ -1440,9 +1670,11 @@ class _MovieDetailPageState extends State<MovieDetailPage>
                                       return eps[i].url;
                                     }(),
                                 ],
+                                onSourceProbeDone: _onSourceProbeDone,
                                 onSourceSelect: (i) {
                                   if (i == _sourceIndex) return;
                                   _failedSources.clear();
+                                  _sourceLockedByUser = true;
                                   final resume = _inlinePlayerKey
                                           .currentState?.positionMs ??
                                       _playStartMs;
@@ -1476,6 +1708,8 @@ class _MovieDetailPageState extends State<MovieDetailPage>
                                 commentPanel: _CommentPanel(
                                   cms: _cms,
                                   movieId: movie.id,
+                                  movieTitle: movie.title,
+                                  movieCover: movie.coverUrl ?? '',
                                   comments: _comments,
                                   loading: _commentsLoading,
                                   error: _commentsError,
@@ -1662,12 +1896,19 @@ class _MovieDetailPageState extends State<MovieDetailPage>
                 children: [
                   const MediaPlaceholder(kind: MediaPlaceholderKind.film),
                   if (cover.isNotEmpty)
-                    Image.network(
-                      cover,
-                      fit: BoxFit.cover,
-                      alignment: const Alignment(0, -0.12),
-                      errorBuilder: (_, _, _) => const MediaPlaceholder(
-                        kind: MediaPlaceholderKind.film,
+                    Hero(
+                      tag: moviePosterHeroTag(movie.id),
+                      child: Material(
+                        type: MaterialType.transparency,
+                        child: Image.network(
+                          cover,
+                          fit: BoxFit.cover,
+                          alignment: const Alignment(0, -0.12),
+                          gaplessPlayback: true,
+                          errorBuilder: (_, _, _) => const MediaPlaceholder(
+                            kind: MediaPlaceholderKind.film,
+                          ),
+                        ),
                       ),
                     ),
                   const DecoratedBox(
@@ -1911,6 +2152,8 @@ class _MovieDetailPageState extends State<MovieDetailPage>
                       child: _CommentPanel(
                         cms: _cms,
                         movieId: movie.id,
+                        movieTitle: movie.title,
+                        movieCover: movie.coverUrl ?? '',
                         comments: _comments,
                         loading: _commentsLoading,
                         error: _commentsError,
@@ -3017,6 +3260,8 @@ class _CommentPanel extends StatefulWidget {
     required this.error,
     required this.onRefresh,
     required this.onPosted,
+    this.movieTitle = '',
+    this.movieCover = '',
     this.onLocalComment,
     this.onClose,
   });
@@ -3028,6 +3273,8 @@ class _CommentPanel extends StatefulWidget {
   final String? error;
   final Future<void> Function() onRefresh;
   final Future<void> Function() onPosted;
+  final String movieTitle;
+  final String movieCover;
   final ValueChanged<MovieComment>? onLocalComment;
   final VoidCallback? onClose;
 
@@ -3157,6 +3404,18 @@ class _CommentPanelState extends State<_CommentPanel> {
         timeText: '刚刚',
         timeMs: DateTime.now().millisecondsSinceEpoch,
         avatarUrl: CmsAuthController.instance.user?.avatarUrl,
+        vodId: widget.movieId,
+        vodName: widget.movieTitle,
+        vodPic: widget.movieCover,
+      );
+      final uid = CmsAuthController.instance.user?.userId ?? 0;
+      unawaited(
+        LocalMyCommentsStore.add(
+          comment: optimistic,
+          ownerUid: uid,
+          vodName: widget.movieTitle,
+          vodPic: widget.movieCover,
+        ),
       );
       _content.clear();
       _verify.clear();
@@ -3273,8 +3532,8 @@ class _CommentPanelState extends State<_CommentPanel> {
             controller: _content,
             focusNode: _focus,
             autofocus: false,
-            maxLines: 4,
-            minLines: 3,
+            maxLines: 3,
+            minLines: 2,
             maxLength: 255,
             style: const TextStyle(
               fontFamily: 'AppSans',
@@ -3400,13 +3659,6 @@ class _CommentPanelState extends State<_CommentPanel> {
                 decoration: BoxDecoration(
                   color: _lime,
                   borderRadius: BorderRadius.circular(12),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Color(0x33C8F000),
-                      blurRadius: 10,
-                      offset: Offset(0, 3),
-                    ),
-                  ],
                 ),
                 child: _posting
                     ? const CupertinoActivityIndicator()
@@ -3431,138 +3683,115 @@ class _CommentPanelState extends State<_CommentPanel> {
   @override
   Widget build(BuildContext context) {
     final comments = _sorted;
-    return Stack(
-      children: [
-        _GlassCard(
-          padding: const EdgeInsets.fromLTRB(10, 10, 10, 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    return _GlassCard(
+      padding: const EdgeInsets.fromLTRB(10, 10, 10, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
-              Row(
-                children: [
-                  _sortTextTab('最新', false),
-                  const SizedBox(width: 8),
-                  _sortTextTab('最热', true),
-                  const Spacer(),
-                  GestureDetector(
-                    onTap: widget.onRefresh,
-                    child: const Padding(
-                      padding: EdgeInsets.all(6),
-                      child: Icon(
-                        Icons.refresh_rounded,
-                        size: 20,
-                        color: _faint,
-                      ),
-                    ),
+              _sortTextTab('最新', false),
+              const SizedBox(width: 8),
+              _sortTextTab('最热', true),
+              const Spacer(),
+              GestureDetector(
+                onTap: widget.onRefresh,
+                child: const Padding(
+                  padding: EdgeInsets.all(6),
+                  child: Icon(
+                    Icons.refresh_rounded,
+                    size: 20,
+                    color: _faint,
                   ),
-                  GestureDetector(
-                    onTap: () => _toggleCompose(),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      child: Text(
-                        _composeOpen ? '收起' : '写评论',
-                        style: TextStyle(
-                          fontFamily: 'AppSans',
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: _composeOpen ? _ink : _lime,
-                          decoration: TextDecoration.none,
-                        ),
-                      ),
-                    ),
-                  ),
-                  if (widget.onClose != null)
-                    IconButton(
-                      onPressed: widget.onClose,
-                      visualDensity: VisualDensity.compact,
-                      icon: const Icon(
-                        CupertinoIcons.xmark,
-                        size: 18,
-                        color: _faint,
-                      ),
-                    ),
-                ],
+                ),
               ),
-              const SizedBox(height: 12),
-              if (widget.loading)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 24),
-                  child: Center(child: CupertinoActivityIndicator()),
-                )
-              else if (widget.error != null)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  child: GestureDetector(
-                    onTap: widget.onRefresh,
-                    child: Text(
-                      '${widget.error}\n点击重试',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontFamily: 'AppSans',
-                        fontSize: 13,
-                        color: Color(0xFFB54708),
-                        decoration: TextDecoration.none,
-                      ),
+              GestureDetector(
+                onTap: () => _toggleCompose(),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Text(
+                    _composeOpen ? '收起' : '写评论',
+                    style: TextStyle(
+                      fontFamily: 'AppSans',
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: _composeOpen ? _ink : _lime,
+                      decoration: TextDecoration.none,
                     ),
                   ),
-                )
-              else if (comments.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 28),
-                  child: Center(
-                    child: Text(
-                      '暂无评论，来说两句吧',
-                      style: TextStyle(
-                        fontFamily: 'AppSans',
-                        fontSize: 14,
-                        color: _faint,
-                        decoration: TextDecoration.none,
-                      ),
-                    ),
+                ),
+              ),
+              if (widget.onClose != null)
+                IconButton(
+                  onPressed: widget.onClose,
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(
+                    CupertinoIcons.xmark,
+                    size: 18,
+                    color: _faint,
                   ),
-                )
-              else
-                for (final c in comments) ...[
-                  _CommentTile(
-                    comment: c,
-                    onUp: () => _digg(c, 'up'),
-                    onDown: () => _digg(c, 'down'),
-                    onReply: () => _toggleCompose(
-                      replyTo: c.userName.trim().isEmpty
-                          ? '访客'
-                          : c.userName.trim(),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                ],
+                ),
             ],
           ),
-        ),
-        if (_composeOpen)
-          Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onTap: () {
-                _focus.unfocus();
-                setState(() {
-                  _composeOpen = false;
-                  _replyHint = null;
-                });
-              },
-              child: const ColoredBox(color: Color(0x22000000)),
-            ),
-          ),
-        if (_composeOpen)
-          Positioned(
-            left: 10,
-            right: 10,
-            top: 52,
-            child: Material(
-              color: Colors.transparent,
-              child: _composeEditor(),
-            ),
-          ),
-      ],
+          if (_composeOpen) ...[
+            const SizedBox(height: 10),
+            _composeEditor(),
+            const SizedBox(height: 10),
+          ] else
+            const SizedBox(height: 12),
+          if (widget.loading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 24),
+              child: Center(child: CupertinoActivityIndicator()),
+            )
+          else if (widget.error != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              child: GestureDetector(
+                onTap: widget.onRefresh,
+                child: Text(
+                  '${widget.error}\n点击重试',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontFamily: 'AppSans',
+                    fontSize: 13,
+                    color: Color(0xFFB54708),
+                    decoration: TextDecoration.none,
+                  ),
+                ),
+              ),
+            )
+          else if (comments.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 28),
+              child: Center(
+                child: Text(
+                  '暂无评论，来说两句吧',
+                  style: TextStyle(
+                    fontFamily: 'AppSans',
+                    fontSize: 14,
+                    color: _faint,
+                    decoration: TextDecoration.none,
+                  ),
+                ),
+              ),
+            )
+          else
+            for (final c in comments) ...[
+              _CommentTile(
+                comment: c,
+                onUp: () => _digg(c, 'up'),
+                onDown: () => _digg(c, 'down'),
+                onReply: () => _toggleCompose(
+                  replyTo: c.userName.trim().isEmpty
+                      ? '访客'
+                      : c.userName.trim(),
+                ),
+              ),
+              const SizedBox(height: 10),
+            ],
+        ],
+      ),
     );
   }
 }
@@ -3608,36 +3837,10 @@ class _CommentTile extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          CircleAvatar(
-            radius: 18,
-            backgroundColor: _soft,
-            child: (comment.avatarUrl ?? '').isEmpty
-                ? Text(
-                    name.isNotEmpty ? name[0] : '?',
-                    style: const TextStyle(
-                      fontFamily: 'AppSans',
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      color: _muted,
-                    ),
-                  )
-                : ClipOval(
-                    child: Image.network(
-                      comment.avatarUrl!,
-                      width: 36,
-                      height: 36,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, error, stackTrace) => Text(
-                        name.isNotEmpty ? name[0] : '?',
-                        style: const TextStyle(
-                          fontFamily: 'AppSans',
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: _muted,
-                        ),
-                      ),
-                    ),
-                  ),
+          CommentAvatar(
+            name: name,
+            url: comment.avatarUrl,
+            size: 36,
           ),
           const SizedBox(width: 10),
           Expanded(

@@ -10,7 +10,6 @@ import '../models/movie_models.dart';
 import '../config/api_config.dart';
 import '../theme/app_colors.dart';
 import 'app_onboarding.dart';
-import 'brand_sunlight_text.dart';
 import 'figma_loading.dart';
 import 'media_placeholder.dart';
 import 'movie_watch_menu.dart';
@@ -378,26 +377,24 @@ class HomeStickyTopBar extends StatelessWidget {
     final top = MediaQuery.paddingOf(context).top;
     final t = lightProgress.clamp(0.0, 1.0);
     final h = top + HomeImmersiveHeader.chromeBodyH;
-    final dark = AppPalette.isDark(context);
-    final solid = AppPalette.page(context);
-    final bg = Color.lerp(Colors.transparent, solid, t)!;
+    final bg = Color.lerp(Colors.transparent, Colors.white, t)!;
     final scrimOpacity = (1.0 - t).clamp(0.0, 1.0);
     final blurSigma = 16.0 * (1.0 - t);
     final barLift = 6.0 * t;
 
     final searchFill = Color.lerp(
       Colors.black.withValues(alpha: 0.38),
-      dark ? const Color(0xFF2C2C2E) : const Color(0xFFF2F3F5),
+      const Color(0xFFF2F3F5),
       t,
     )!;
     final searchFg = Color.lerp(
       Colors.white.withValues(alpha: 0.78),
-      dark ? const Color(0xFF8E8E93) : const Color(0xFF8E8E93),
+      const Color(0xFF8E8E93),
       t,
     )!;
     final iconBtnFg = Color.lerp(
       Colors.white,
-      dark ? AppColors.textDark : const Color(0xFF1C1C1E),
+      const Color(0xFF1C1C1E),
       t,
     )!;
     final iconShadow = (1.0 - t).clamp(0.0, 1.0);
@@ -456,11 +453,11 @@ class HomeStickyTopBar extends StatelessWidget {
                     height: 34,
                     child: Row(
                       children: [
-                        // 左侧品牌字标（持续日照扫光）
+                        // 左侧品牌字标
                         Padding(
                           padding: const EdgeInsets.only(right: 8),
-                          child: BrandSunlightText(
-                            text: '哇TV',
+                          child: Text(
+                            '哇TV',
                             style: TextStyle(
                               fontFamily: 'ZCOOLKuaiLe',
                               fontSize: 22,
@@ -761,7 +758,7 @@ class _BannerMetaBadges extends StatelessWidget {
   }
 }
 
-/// 轮播进度：分段条 + 当前段加长高亮，切换更顺
+/// 轮播进度：圆点指示
 class _BannerPageIndicator extends StatelessWidget {
   const _BannerPageIndicator({
     required this.count,
@@ -776,41 +773,33 @@ class _BannerPageIndicator extends StatelessWidget {
     final n = count.clamp(1, 12);
     final i = index.clamp(0, n - 1);
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.28),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          for (var k = 0; k < n; k++) ...[
-            if (k > 0) const SizedBox(width: 3),
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 280),
-              curve: Curves.easeOutCubic,
-              width: k == i ? 16 : 6,
-              height: 3.5,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(2),
-                color: k == i
-                    ? Colors.white
-                    : Colors.white.withValues(alpha: 0.38),
-                boxShadow: k == i
-                    ? [
-                        BoxShadow(
-                          color: AppColors.brand.withValues(alpha: 0.55),
-                          blurRadius: 6,
-                          spreadRadius: 0.2,
-                        ),
-                      ]
-                    : null,
-              ),
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var k = 0; k < n; k++) ...[
+          if (k > 0) const SizedBox(width: 5),
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            width: k == i ? 7 : 5,
+            height: k == i ? 7 : 5,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: k == i
+                  ? Colors.white
+                  : Colors.white.withValues(alpha: 0.42),
+              boxShadow: k == i
+                  ? const [
+                      BoxShadow(
+                        color: Color(0x66000000),
+                        blurRadius: 3,
+                      ),
+                    ]
+                  : null,
             ),
-          ],
+          ),
         ],
-      ),
+      ],
     );
   }
 }
@@ -1180,13 +1169,11 @@ class _OverlayTabs extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = lightProgress.clamp(0.0, 1.0);
-    final dark = AppPalette.isDark(context);
-    final solidInk = dark ? AppColors.textDark : const Color(0xFF1A1A1A);
-    final solidMuted = dark ? const Color(0xFF8E8E93) : const Color(0xFF8E8E93);
-    final activeColor = Color.lerp(Colors.white, solidInk, t)!;
+    final activeColor =
+        Color.lerp(Colors.white, const Color(0xFF1A1A1A), t)!;
     final idleColor = Color.lerp(
       Colors.white.withValues(alpha: 0.88),
-      solidMuted,
+      const Color(0xFF8E8E93),
       t,
     )!;
     final indicator = Color.lerp(Colors.white, AppColors.brand, t)!;
@@ -1214,9 +1201,9 @@ class _OverlayTabs extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.end,
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                // 角标飘在文字外，不撑宽布局，染色条才能相对文字居中
                 Stack(
                   clipBehavior: Clip.none,
+                  alignment: Alignment.center,
                   children: [
                     Text(
                       label,
@@ -1265,6 +1252,7 @@ class _OverlayTabs extends StatelessWidget {
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
+                // 下滑白底顶栏时，染色条与底边留出间距
                 const SizedBox(height: 6),
               ],
             ),
@@ -1364,11 +1352,11 @@ class HomeQuickEntries extends StatelessWidget {
                       items[i].label,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
+                      style: const TextStyle(
                         fontFamily: 'AppSans',
                         fontSize: 12,
                         fontWeight: FontWeight.w500,
-                        color: AppPalette.text(context),
+                        color: Color(0xFF333333),
                         decoration: TextDecoration.none,
                       ),
                     ),
@@ -1455,15 +1443,12 @@ class _GenreChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dark = AppPalette.isDark(context);
     final bg = selected
         ? AppColors.brand
         : outlined
-            ? (dark ? const Color(0xFF2C2C2E) : Colors.white)
-            : (dark ? const Color(0xFF2C2C2E) : const Color(0xFFF2F3F5));
-    final fg = selected
-        ? Colors.white
-        : (dark ? const Color(0xFFD1D1D6) : const Color(0xFF555555));
+            ? Colors.white
+            : const Color(0xFFF2F3F5);
+    final fg = selected ? Colors.white : const Color(0xFF555555);
 
     return GestureDetector(
       onTap: () {
@@ -1558,14 +1543,14 @@ class _HomeGenreFilterSheet extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(16, 14, 8, 6),
             child: Row(
               children: [
-                Expanded(
+                const Expanded(
                   child: Text(
                     '扩展筛选',
                     style: TextStyle(
                       fontFamily: 'AppSans',
                       fontSize: 17,
                       fontWeight: FontWeight.w800,
-                      color: AppPalette.text(context),
+                      color: Color(0xFF181818),
                       decoration: TextDecoration.none,
                     ),
                   ),
@@ -1573,7 +1558,7 @@ class _HomeGenreFilterSheet extends StatelessWidget {
                 IconButton(
                   onPressed: () => Navigator.pop(context),
                   icon: const Icon(Icons.close_rounded, size: 22),
-                  color: AppPalette.textHint(context),
+                  color: const Color(0xFF888888),
                 ),
               ],
             ),
@@ -1699,10 +1684,8 @@ class HomeGenreChips extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
               decoration: BoxDecoration(
                 color: selected
-                    ? (AppPalette.isDark(context)
-                        ? Colors.white
-                        : const Color(0xFF1A1A1A))
-                    : AppPalette.softFill(context),
+                    ? const Color(0xFF1A1A1A)
+                    : const Color(0xFFF2F3F5),
                 borderRadius: BorderRadius.circular(14),
               ),
               alignment: Alignment.center,
@@ -1712,11 +1695,7 @@ class HomeGenreChips extends StatelessWidget {
                   fontFamily: 'AppSans',
                   fontSize: 13,
                   fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                  color: selected
-                      ? (AppPalette.isDark(context)
-                          ? const Color(0xFF1A1A1A)
-                          : Colors.white)
-                      : AppPalette.textSecondary(context),
+                  color: selected ? Colors.white : const Color(0xFF555555),
                   decoration: TextDecoration.none,
                 ),
               ),
@@ -1824,12 +1803,12 @@ class HomeLandscapeCard extends StatelessWidget {
             movie.title,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: TextStyle(
+            style: const TextStyle(
               fontFamily: 'AppSans',
               fontSize: 14,
               fontWeight: FontWeight.w700,
               height: 1.25,
-              color: AppPalette.text(context),
+              color: Color(0xFF181818),
               decoration: TextDecoration.none,
             ),
           ),
@@ -1895,12 +1874,12 @@ class HomeSectionTitle extends StatelessWidget {
                 ),
                 Text(
                   title,
-                  style: TextStyle(
+                  style: const TextStyle(
                     fontFamily: 'AppSans',
                     fontSize: 18,
                     fontWeight: FontWeight.w800,
                     height: 1.2,
-                    color: AppPalette.text(context),
+                    color: Color(0xFF181818),
                     decoration: TextDecoration.none,
                   ),
                 ),
@@ -2072,11 +2051,11 @@ class HomeMediaListTile extends StatelessWidget {
                       movie.title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
+                      style: const TextStyle(
                         fontFamily: 'AppSans',
                         fontSize: 15,
                         fontWeight: FontWeight.w700,
-                        color: AppPalette.text(context),
+                        color: Color(0xFF181818),
                         decoration: TextDecoration.none,
                       ),
                     ),

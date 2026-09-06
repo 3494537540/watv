@@ -10,6 +10,7 @@ import '../theme/app_colors.dart';
 import '../widgets/dialogx/dialogx.dart';
 import '../widgets/ios_edge_back.dart';
 import '../widgets/login_brand_widgets.dart';
+import '../widgets/press_scale.dart';
 
 enum LoginPageMode { login, register }
 
@@ -447,7 +448,7 @@ class _LoginPageState extends State<LoginPage>
           ),
           _fadeSlide(
             animation: a3,
-            child: _PressScale(
+            child: PressScale(
               child: SizedBox(
                 width: double.infinity,
                 height: 54,
@@ -474,7 +475,7 @@ class _LoginPageState extends State<LoginPage>
           const SizedBox(height: 12),
           _fadeSlide(
             animation: a4,
-            child: _PressScale(
+            child: PressScale(
               child: SizedBox(
                 width: double.infinity,
                 height: 54,
@@ -702,7 +703,7 @@ class _LoginPageState extends State<LoginPage>
                         ),
                       ),
                       const SizedBox(width: 10),
-                      _PressScale(
+                      PressScale(
                         child: GestureDetector(
                           onTap: _captchaLoading ? null : _reloadCaptcha,
                           child: AnimatedContainer(
@@ -767,7 +768,7 @@ class _LoginPageState extends State<LoginPage>
           const SizedBox(height: 20),
           _fadeSlide(
             animation: a3,
-            child: _PressScale(
+            child: PressScale(
               child: SizedBox(
                 height: 54,
                 child: FilledButton(
@@ -796,7 +797,7 @@ class _LoginPageState extends State<LoginPage>
             const SizedBox(height: 12),
             _fadeSlide(
               animation: a3,
-              child: _PressScale(
+              child: PressScale(
                 child: SizedBox(
                   height: 54,
                   child: OutlinedButton(
@@ -949,35 +950,6 @@ class _RoundField extends StatelessWidget {
       child: Material(
         type: MaterialType.transparency,
         child: child,
-      ),
-    );
-  }
-}
-
-class _PressScale extends StatefulWidget {
-  const _PressScale({required this.child});
-
-  final Widget child;
-
-  @override
-  State<_PressScale> createState() => _PressScaleState();
-}
-
-class _PressScaleState extends State<_PressScale> {
-  bool _down = false;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      behavior: HitTestBehavior.translucent,
-      onTapDown: (_) => setState(() => _down = true),
-      onTapUp: (_) => setState(() => _down = false),
-      onTapCancel: () => setState(() => _down = false),
-      child: AnimatedScale(
-        scale: _down ? 0.97 : 1,
-        duration: const Duration(milliseconds: 120),
-        curve: Curves.easeOutCubic,
-        child: widget.child,
       ),
     );
   }

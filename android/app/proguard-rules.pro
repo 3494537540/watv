@@ -7,5 +7,9 @@
 -keep class io.flutter.plugins.**  { *; }
 -keep class com.watv.app.** { *; }
 
+# 腾讯 QQ OpenSDK
+-keep class com.tencent.** { *; }
+-dontwarn com.tencent.**
+
 -dontwarn io.flutter.embedding.**
 -dontwarn android.window.**

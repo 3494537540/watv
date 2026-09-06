@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../theme/app_colors.dart';
+import '../press_scale.dart';
 import 'player_loading_hud.dart';
 import 'player_network_indicator.dart';
 import 'player_sys_status.dart';
@@ -10,43 +11,91 @@ import 'player_sys_status.dart';
 /// 播放器强调色：品牌青
 Color get _playerAccent => AppColors.brand;
 
-/// 播放器图标按钮：纯图标，无圆底、无描边
+/// 播放器图标按钮
+/// [outlined] 圆形描边；[card] 圆角卡片描边（返回键）
 class PlayerCircleButton extends StatelessWidget {
   const PlayerCircleButton({
     super.key,
     required this.icon,
     required this.onTap,
     this.size = 36,
-    this.iconSize = 20,
+    this.iconSize = 22,
+    this.outlined = false,
+    this.card = false,
+    this.weight = 700,
   });
 
   final IconData icon;
   final VoidCallback onTap;
   final double size;
   final double iconSize;
+  final bool outlined;
+  final bool card;
+  /// 字重感：越大越「粗」
+  final int weight;
 
   @override
   Widget build(BuildContext context) {
+    final iconWidget = Icon(
+      icon,
+      color: Colors.white,
+      size: iconSize,
+      weight: weight.toDouble(),
+      grade: 200,
+      opticalSize: iconSize,
+      shadows: const [
+        Shadow(color: Color(0xCC000000), blurRadius: 6),
+      ],
+    );
+    Widget body = iconWidget;
+    if (card) {
+      body = DecoratedBox(
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.28),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.88),
+            width: 1.3,
+          ),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x66000000),
+              blurRadius: 6,
+            ),
+          ],
+        ),
+        child: Center(child: iconWidget),
+      );
+    } else if (outlined) {
+      body = DecoratedBox(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.88),
+            width: 1.6,
+          ),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x66000000),
+              blurRadius: 4,
+              spreadRadius: 0,
+            ),
+          ],
+        ),
+        child: Center(child: iconWidget),
+      );
+    }
+
     return Focus(
       canRequestFocus: false,
       descendantsAreFocusable: false,
-      child: GestureDetector(
-        onTap: () {
-          HapticFeedback.selectionClick();
-          onTap();
-        },
-        behavior: HitTestBehavior.opaque,
+      child: PressScale(
+        onTap: onTap,
+        scale: 0.88,
         child: SizedBox(
           width: size,
           height: size,
-          child: Icon(
-            icon,
-            color: Colors.white,
-            size: iconSize,
-            shadows: const [
-              Shadow(color: Color(0xCC000000), blurRadius: 6),
-            ],
-          ),
+          child: body,
         ),
       ),
     );
@@ -69,19 +118,17 @@ class PlayerCenterSeekButton extends StatelessWidget {
     return Focus(
       canRequestFocus: false,
       descendantsAreFocusable: false,
-      child: GestureDetector(
-        onTap: () {
-          HapticFeedback.selectionClick();
-          onTap();
-        },
-        behavior: HitTestBehavior.opaque,
+      child: PressScale(
+        onTap: onTap,
+        scale: 0.9,
         child: SizedBox(
           width: 52,
           height: 52,
           child: Icon(
             icon,
             color: Colors.white,
-            size: 28,
+            size: 30,
+            weight: 700,
             shadows: const [
               Shadow(color: Color(0xCC000000), blurRadius: 8),
             ],
@@ -105,6 +152,7 @@ class MangoWatchTopBar extends StatelessWidget {
     this.onCast,
     this.onSettings,
     this.onSeekForward,
+    this.onSeekRewind,
     this.onPip,
     this.showSysStatus = false,
     this.safeInset,
@@ -118,6 +166,7 @@ class MangoWatchTopBar extends StatelessWidget {
   final VoidCallback? onCast;
   final VoidCallback? onSettings;
   final VoidCallback? onSeekForward;
+  final VoidCallback? onSeekRewind;
   final VoidCallback? onPip;
   final bool showSysStatus;
   /// 全屏去掉 MediaQuery padding 后，仍用原始挖孔边距避让控件
@@ -162,37 +211,50 @@ class MangoWatchTopBar extends StatelessWidget {
     final showClock = showSysStatus && landscape;
 
     final actions = <Widget>[
+      if (onSeekRewind != null)
+        PlayerCircleButton(
+          icon: Icons.replay_10_rounded,
+          onTap: onSeekRewind!,
+          iconSize: 24,
+          weight: 800,
+        ),
       if (onSeekForward != null)
         PlayerCircleButton(
           icon: Icons.forward_10_rounded,
           onTap: onSeekForward!,
-          iconSize: 22,
+          iconSize: 24,
+          weight: 800,
         ),
       if (onCast != null)
         PlayerCircleButton(
           icon: Icons.cast_rounded,
           onTap: onCast!,
-          iconSize: 20,
+          iconSize: 22,
+          weight: 800,
         ),
       if (onPip != null)
         PlayerCircleButton(
-          icon: Icons.picture_in_picture_rounded,
+          icon: Icons.picture_in_picture_alt_rounded,
           onTap: onPip!,
           iconSize: 22,
+          weight: 800,
         ),
       if (onSettings != null)
         PlayerCircleButton(
           icon: Icons.settings_rounded,
           onTap: onSettings!,
-          iconSize: 21,
+          iconSize: 22,
+          weight: 800,
         ),
     ];
 
     final bar = Padding(
       padding: EdgeInsets.fromLTRB(
-        10 + padLeft,
-        // 横屏顶部通常无大刘海，少加一点；竖屏保留状态栏避让
-        landscape ? (padTop > 0 ? padTop + 2 : 8.0) : padTop + 6,
+        16 + padLeft,
+        // 全屏顶栏略下移，避开刘海/状态栏更舒服
+        landscape
+            ? (padTop > 0 ? padTop + 10 : 14.0)
+            : padTop + 12,
         10 + padRight,
         8,
       ),
@@ -201,7 +263,9 @@ class MangoWatchTopBar extends StatelessWidget {
           PlayerCircleButton(
             icon: Icons.chevron_left_rounded,
             onTap: onBack,
-            iconSize: 26,
+            size: 32,
+            iconSize: 28,
+            weight: 700,
           ),
           const SizedBox(width: 8),
           Expanded(
@@ -267,16 +331,22 @@ class MangoWatchTopBar extends StatelessWidget {
 
     if (!showClock) return bar;
 
+    // 与两侧圆形按钮同高对齐（按钮默认 36）
+    final barTop = landscape ? (padTop > 0 ? padTop + 2 : 8.0) : padTop + 6;
     return Stack(
       clipBehavior: Clip.none,
       children: [
         bar,
         Positioned(
-          top: landscape ? (padTop > 0 ? padTop + 4 : 10.0) : padTop + 10,
+          top: barTop,
           left: 0,
           right: 0,
+          height: 36,
           child: const IgnorePointer(
-            child: Center(child: PlayerSysStatus()),
+            child: Align(
+              alignment: Alignment.center,
+              child: PlayerSysStatus(compact: true),
+            ),
           ),
         ),
       ],
@@ -364,7 +434,8 @@ class MangoPlayerChrome extends StatelessWidget {
   final int outroMs;
   final VoidCallback? onMarkIntro;
   final VoidCallback? onMarkOutro;
-  final VoidCallback? onSkip;
+  /// 传入按钮 context，便于弹出锚点小菜单
+  final void Function(BuildContext anchor)? onSkip;
   final bool skipEnabled;
   final VoidCallback? onSettings;
   final VoidCallback? onCast;
@@ -402,11 +473,14 @@ class MangoPlayerChrome extends StatelessWidget {
       children: [
         if (showBack && onBack != null)
           Positioned(
-            left: 12,
-            top: topInset + 4,
+            left: 16,
+            top: topInset + 12,
             child: PlayerCircleButton(
-              icon: CupertinoIcons.chevron_left,
+              icon: Icons.chevron_left_rounded,
               onTap: onBack!,
+              size: 32,
+              iconSize: 28,
+              weight: 700,
             ),
           ),
         if (showLoadingHud)
@@ -478,19 +552,7 @@ class MangoPlayerChrome extends StatelessWidget {
         ),
         if (showDanmakuToggle && onDanmakuToggle != null)
           _DanmakuToggleButton(enabled: danmakuEnabled, onTap: onDanmakuToggle!),
-        if (onSources != null)
-          Builder(
-            builder: (ctx) => _ChromeTextButton(
-              label: sourceLabel,
-              onTap: () => onSources!(ctx),
-            ),
-          ),
-        if (onCast != null)
-          _ChromeIconButton(
-            icon: Icons.cast_rounded,
-            onTap: onCast!,
-            size: 20,
-          ),
+        // 竖屏/非全屏底栏不放线路·画质·倍速，避免挤掉进度条（仅横屏全屏栏显示）
         _ChromeIconButton(
           icon: Icons.stay_current_landscape,
           onTap: onFullscreen,
@@ -545,9 +607,11 @@ class MangoPlayerChrome extends StatelessWidget {
               ],
               if (onSkip != null) ...[
                 const SizedBox(width: 2),
-                _ChromeTextButton(
-                  label: skipEnabled ? '跳过·开' : '跳过',
-                  onTap: onSkip!,
+                Builder(
+                  builder: (ctx) => _ChromeTextButton(
+                    label: skipEnabled ? '跳过·开' : '跳过',
+                    onTap: () => onSkip!(ctx),
+                  ),
                 ),
               ],
               if (showDanmakuToggle && onDanmakuToggle != null) ...[
@@ -571,54 +635,57 @@ class MangoPlayerChrome extends StatelessWidget {
                   ),
                 const Spacer(),
               ],
-              if (onEpisodes != null)
-                Builder(
-                  builder: (ctx) => _ChromeTextButton(
-                    label: '选集',
-                    onTap: () => onEpisodes!(ctx),
+              Flexible(
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    reverse: true,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (onEpisodes != null)
+                          Builder(
+                            builder: (ctx) => _ChromeTextButton(
+                              label: '选集',
+                              onTap: () => onEpisodes!(ctx),
+                            ),
+                          ),
+                        if (onSources != null)
+                          Builder(
+                            builder: (ctx) => _ChromeTextButton(
+                              label: sourceLabel,
+                              onTap: () => onSources!(ctx),
+                            ),
+                          ),
+                        if (onAspect != null)
+                          Builder(
+                            builder: (ctx) => _ChromeTextButton(
+                              label: aspectLabel,
+                              onTap: () => onAspect!(ctx),
+                            ),
+                          ),
+                        if (onQuality != null)
+                          Builder(
+                            builder: (ctx) => _ChromeTextButton(
+                              label: qualityLabel,
+                              onTap: () => onQuality!(ctx),
+                            ),
+                          ),
+                        if (onSpeed != null)
+                          Builder(
+                            builder: (ctx) => _ChromeTextButton(
+                              label: speedLabel,
+                              onTap: () => onSpeed!(ctx),
+                            ),
+                          ),
+                        // 投屏/设置移到顶栏，仅全屏显示
+                        _FullscreenExitButton(onTap: onFullscreen),
+                      ],
+                    ),
                   ),
                 ),
-              if (onSources != null)
-                Builder(
-                  builder: (ctx) => _ChromeTextButton(
-                    label: sourceLabel,
-                    onTap: () => onSources!(ctx),
-                  ),
-                ),
-              if (onAspect != null)
-                Builder(
-                  builder: (ctx) => _ChromeTextButton(
-                    label: aspectLabel,
-                    onTap: () => onAspect!(ctx),
-                  ),
-                ),
-              if (onQuality != null)
-                Builder(
-                  builder: (ctx) => _ChromeTextButton(
-                    label: qualityLabel,
-                    onTap: () => onQuality!(ctx),
-                  ),
-                ),
-              if (onSpeed != null)
-                Builder(
-                  builder: (ctx) => _ChromeTextButton(
-                    label: speedLabel,
-                    onTap: () => onSpeed!(ctx),
-                  ),
-                ),
-              if (onCast != null)
-                _ChromeIconButton(
-                  icon: Icons.cast_rounded,
-                  onTap: onCast!,
-                  size: 20,
-                ),
-              if (onSettings != null)
-                _ChromeIconButton(
-                  icon: Icons.settings_rounded,
-                  onTap: onSettings!,
-                  size: 20,
-                ),
-              _FullscreenExitButton(onTap: onFullscreen),
+              ),
             ],
           ),
         ),
@@ -792,20 +859,16 @@ class _DanmakuInputChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: () {
-          HapticFeedback.selectionClick();
-          onTap();
-        },
-        borderRadius: BorderRadius.circular(18),
-        child: Ink(
+    return PressScale(
+      onTap: onTap,
+      scale: 0.94,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: SizedBox(
           height: 32,
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(18),
-          ),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Row(
@@ -844,12 +907,9 @@ class _ChromeTextButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        HapticFeedback.selectionClick();
-        onTap();
-      },
-      behavior: HitTestBehavior.opaque,
+    return PressScale(
+      onTap: onTap,
+      scale: 0.9,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         child: Text(
@@ -857,7 +917,7 @@ class _ChromeTextButton extends StatelessWidget {
           style: const TextStyle(
             fontFamily: 'AppSans',
             fontSize: 13,
-            fontWeight: FontWeight.w700,
+            fontWeight: FontWeight.w800,
             color: Colors.white,
             shadows: [Shadow(color: Color(0x99000000), blurRadius: 4)],
           ),
@@ -878,19 +938,17 @@ class _PlayPauseButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        HapticFeedback.selectionClick();
-        onTap();
-      },
-      behavior: HitTestBehavior.opaque,
+    return PressScale(
+      onTap: onTap,
+      scale: 0.86,
       child: SizedBox(
         width: 36,
         height: 36,
         child: Icon(
-          playing ? CupertinoIcons.pause_fill : CupertinoIcons.play_fill,
+          playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
           color: Colors.white,
-          size: 26,
+          size: 28,
+          weight: 800,
           shadows: const [
             Shadow(color: Color(0x99000000), blurRadius: 4),
           ],
@@ -934,12 +992,9 @@ class _DanmakuToggleButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        HapticFeedback.selectionClick();
-        onTap();
-      },
-      behavior: HitTestBehavior.opaque,
+    return PressScale(
+      onTap: onTap,
+      scale: 0.88,
       child: SizedBox(
         width: 28,
         height: 36,
@@ -996,20 +1051,17 @@ class _FullscreenExitButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        HapticFeedback.selectionClick();
-        onTap();
-      },
-      behavior: HitTestBehavior.opaque,
+    return PressScale(
+      onTap: onTap,
+      scale: 0.88,
       child: const SizedBox(
         width: 36,
         height: 36,
         child: Icon(
-          // 退出全屏 / 回小屏（替换四角括号图标）
           Icons.fullscreen_exit_rounded,
           color: Colors.white,
           size: 28,
+          weight: 800,
           shadows: [
             Shadow(color: Color(0xCC000000), blurRadius: 6),
           ],
@@ -1032,19 +1084,17 @@ class _ChromeIconButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        HapticFeedback.selectionClick();
-        onTap();
-      },
-      behavior: HitTestBehavior.opaque,
+    return PressScale(
+      onTap: onTap,
+      scale: 0.88,
       child: SizedBox(
         width: 36,
         height: 36,
         child: Icon(
           icon,
           color: Colors.white,
-          size: size + 2,
+          size: size + 4,
+          weight: 800,
           shadows: const [
             Shadow(color: Color(0xCC000000), blurRadius: 6),
           ],

@@ -12,12 +12,15 @@ import 'package:path_provider/path_provider.dart';
 import '../services/app_permission.dart';
 import '../services/cms_fav_store.dart';
 import '../services/cms_message_store.dart';
+import '../services/huihuo_panel_api.dart';
 import '../services/local_play_store.dart';
 import '../services/maccms_api.dart';
 import '../services/maccms_user_api.dart';
+import '../services/vod_cache_store.dart';
 import '../state/cms_auth_controller.dart';
 import '../state/theme_controller.dart';
 import '../theme/app_colors.dart';
+import '../utils/qq_avatar.dart';
 import '../widgets/app_pull_refresh.dart';
 import '../widgets/auth_sheet.dart';
 import '../widgets/cms_cover_image.dart';
@@ -28,6 +31,7 @@ import 'cms_favs_page.dart';
 import 'cms_messages_page.dart';
 import 'membership_shop_page.dart';
 import 'movie_detail_page.dart';
+import 'my_comments_page.dart';
 import 'settings_page.dart';
 import 'vod_cache_list_page.dart';
 import 'watch_history_page.dart';
@@ -47,8 +51,13 @@ class _ProfilePageState extends State<ProfilePage> {
   List<CmsUlogItem> _plays = const [];
   List<CmsUlogItem> _favs = const [];
   List<String> _favDecorCovers = const [];
+  int _commentCount = 0;
   String? _listError;
   int _tab = 0;
+  bool _checkinBusy = false;
+  bool _checkedToday = false;
+  int _checkinStreak = 0;
+  int _checkinReward = 10;
 
   @override
   void initState() {
@@ -56,13 +65,40 @@ class _ProfilePageState extends State<ProfilePage> {
     CmsAuthController.instance.addListener(_onAuth);
     CmsMessageStore.instance.addListener(_onMessages);
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(VodCacheStore.instance.ensureLoaded().then((_) {
+        if (mounted) setState(() {});
+      }));
       unawaited(_refreshAll());
+      unawaited(_loadCheckinStatus());
+      unawaited(_loadCommentCount());
       unawaited(CmsMessageStore.instance
           .bootstrap(userId: CmsAuthController.instance.user?.userId ?? 0)
           .then((_) {
         if (mounted) setState(() {});
       }));
     });
+  }
+
+  Future<void> _loadCommentCount() async {
+    final auth = CmsAuthController.instance;
+    if (!auth.isLoggedIn) {
+      if (mounted) setState(() => _commentCount = 0);
+      return;
+    }
+    final u = auth.user;
+    try {
+      final cms = MacCmsApi();
+      cms.adoptCmsSessionCookie(auth.api.sessionCookie);
+      final list = await cms.fetchMyComments(
+        userId: u?.userId ?? 0,
+        userName: u?.userName ?? '',
+        nickName: u?.nickName ?? '',
+      );
+      if (!mounted) return;
+      setState(() => _commentCount = list.length);
+    } catch (_) {
+      // 数量失败不打断主流程
+    }
   }
 
   @override
@@ -80,6 +116,8 @@ class _ProfilePageState extends State<ProfilePage> {
     if (!mounted) return;
     setState(() {});
     _loadLists(showSkeleton: false);
+    unawaited(_loadCheckinStatus());
+    unawaited(_loadCommentCount());
   }
 
   Future<void> _refreshAll() async {
@@ -97,10 +135,90 @@ class _ProfilePageState extends State<ProfilePage> {
         try {
           await CmsAuthController.instance.refreshProfile();
         } catch (_) {}
+        await _loadCheckinStatus();
+      } else if (mounted) {
+        setState(() {
+          _checkedToday = false;
+          _checkinStreak = 0;
+          _commentCount = 0;
+        });
       }
       await _loadLists(showSkeleton: false);
+      unawaited(_loadCommentCount());
     } finally {
       if (mounted) setState(() => _refreshing = false);
+    }
+  }
+
+  Future<void> _loadCheckinStatus() async {
+    final uid = CmsAuthController.instance.user?.userId ?? 0;
+    if (uid <= 0) {
+      if (mounted) {
+        setState(() {
+          _checkedToday = false;
+          _checkinStreak = 0;
+        });
+      }
+      return;
+    }
+    try {
+      final s = await HuihuoPanelApi.fetchCheckinStatus(uid);
+      if (!mounted) return;
+      setState(() {
+        _checkedToday = s.checkedToday;
+        _checkinStreak = s.streak;
+        if (s.rewardPoints > 0) _checkinReward = s.rewardPoints;
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _doCheckin() async {
+    if (_checkinBusy) return;
+    HapticFeedback.mediumImpact();
+    if (!CmsAuthController.instance.isLoggedIn) {
+      final ok = await showAuthSheet(context);
+      if (!ok || !mounted) return;
+    }
+    final uid = CmsAuthController.instance.user?.userId ?? 0;
+    if (uid <= 0) {
+      DialogX.showWarning('请先登录');
+      return;
+    }
+    if (_checkedToday) {
+      DialogX.showWarning('今日已打卡');
+      return;
+    }
+
+    setState(() => _checkinBusy = true);
+    DialogX.showWait('打卡中…');
+    try {
+      final s = await HuihuoPanelApi.checkIn(userId: uid);
+      DialogX.dismiss();
+      DialogX.showSuccess(
+        s.message.isEmpty ? '打卡成功，积分 +${s.rewardPoints}' : s.message,
+      );
+      if (mounted) {
+        setState(() {
+          _checkedToday = true;
+          _checkinStreak = s.streak;
+          if (s.rewardPoints > 0) _checkinReward = s.rewardPoints;
+        });
+      }
+      try {
+        await CmsAuthController.instance.refreshProfile();
+      } catch (_) {}
+      if (mounted) setState(() {});
+    } catch (e) {
+      DialogX.dismiss();
+      final msg =
+          '$e'.replaceFirst('Bad state: ', '').replaceFirst('StateError: ', '');
+      if (msg.contains('已打卡')) {
+        if (mounted) setState(() => _checkedToday = true);
+      }
+      DialogX.showWarning(msg.isEmpty ? '打卡失败' : msg);
+      await _loadCheckinStatus();
+    } finally {
+      if (mounted) setState(() => _checkinBusy = false);
     }
   }
 
@@ -485,7 +603,19 @@ class _ProfilePageState extends State<ProfilePage> {
 
         return Scaffold(
           backgroundColor: bodyBg,
-          body: ColoredBox(
+          body: AnnotatedRegion<SystemUiOverlayStyle>(
+            value: SystemUiOverlayStyle(
+              statusBarColor: Colors.transparent,
+              // 「我的」页始终浅底深图标 / 深底浅图标，避免看不清
+              statusBarIconBrightness:
+                  dark ? Brightness.light : Brightness.dark,
+              statusBarBrightness: dark ? Brightness.dark : Brightness.light,
+              systemStatusBarContrastEnforced: false,
+              systemNavigationBarColor: Colors.transparent,
+              systemNavigationBarIconBrightness:
+                  dark ? Brightness.light : Brightness.dark,
+            ),
+            child: ColoredBox(
             color: bodyBg,
             child: AppPullRefresh(
               color: AppColors.brand,
@@ -502,7 +632,14 @@ class _ProfilePageState extends State<ProfilePage> {
                       loggedIn: loggedIn,
                       user: user,
                       darkMode: dark,
-                      flagDays: loggedIn ? (user?.points ?? 0) : 0,
+                      checkinStreak: _checkinStreak,
+                      checkedToday: _checkedToday,
+                      checkinBusy: _checkinBusy,
+                      checkinReward: _checkinReward,
+                      favCount: _favs.length,
+                      cacheCount: VodCacheStore.instance.items.length,
+                      commentCount: _commentCount,
+                      onCheckin: () => unawaited(_doCheckin()),
                       onLogin: () => showAuthSheet(context),
                       onToggleTheme: _toggleTheme,
                       onSettings: _openSettings,
@@ -532,9 +669,17 @@ class _ProfilePageState extends State<ProfilePage> {
                         HapticFeedback.selectionClick();
                         _push(const VodCacheListPage());
                       },
+                      onComments: () async {
+                        if (!CmsAuthController.instance.isLoggedIn) {
+                          await showAuthSheet(context);
+                          if (!CmsAuthController.instance.isLoggedIn) return;
+                        }
+                        if (!mounted) return;
+                        _push(const MyCommentsPage());
+                      },
                       onVip: () {
                         HapticFeedback.selectionClick();
-                        _push(const MembershipShopPage());
+                        unawaited(showMembershipShopSheet(context));
                       },
                     ),
                   ),
@@ -587,11 +732,11 @@ class _ProfilePageState extends State<ProfilePage> {
                                     const Padding(
                                       padding: EdgeInsets.fromLTRB(
                                         12,
+                                        36,
                                         12,
-                                        12,
-                                        12,
+                                        36,
                                       ),
-                                      child: _HistorySkeleton(),
+                                      child: WatvPageLoader(size: 48),
                                     )
                                   else if (_tab == 0 && _plays.isEmpty)
                                     Padding(
@@ -657,6 +802,7 @@ class _ProfilePageState extends State<ProfilePage> {
                 ],
               ),
             ),
+            ),
           ),
         );
       },
@@ -671,7 +817,14 @@ class _HeroBand extends StatelessWidget {
     required this.loggedIn,
     required this.user,
     required this.darkMode,
-    required this.flagDays,
+    required this.checkinStreak,
+    required this.checkedToday,
+    required this.checkinBusy,
+    required this.checkinReward,
+    required this.favCount,
+    required this.cacheCount,
+    required this.commentCount,
+    required this.onCheckin,
     required this.onLogin,
     required this.onToggleTheme,
     required this.onSettings,
@@ -680,6 +833,7 @@ class _HeroBand extends StatelessWidget {
     required this.onEditAvatar,
     required this.onFavs,
     required this.onCache,
+    required this.onComments,
     required this.onVip,
   });
 
@@ -687,7 +841,14 @@ class _HeroBand extends StatelessWidget {
   final bool loggedIn;
   final CmsUser? user;
   final bool darkMode;
-  final int flagDays;
+  final int checkinStreak;
+  final bool checkedToday;
+  final bool checkinBusy;
+  final int checkinReward;
+  final int favCount;
+  final int cacheCount;
+  final int commentCount;
+  final VoidCallback onCheckin;
   final VoidCallback onLogin;
   final VoidCallback onToggleTheme;
   final VoidCallback onSettings;
@@ -696,6 +857,7 @@ class _HeroBand extends StatelessWidget {
   final VoidCallback onEditAvatar;
   final VoidCallback onFavs;
   final VoidCallback onCache;
+  final VoidCallback onComments;
   final VoidCallback onVip;
 
   @override
@@ -708,9 +870,12 @@ class _HeroBand extends StatelessWidget {
     final cardBg = AppPalette.isDark(context)
         ? const Color(0xFF2A2A2C)
         : const Color(0xFFF3F4F6);
-    final subtitle = loggedIn
-        ? '在哇TV Flag 打卡第$flagDays天'
-        : '登录后开启打卡与会员权益';
+    final points = u?.points ?? 0;
+    final subtitle = !loggedIn
+        ? '登录后开启打卡与会员权益'
+        : (checkinStreak > 0
+            ? '连续打卡 $checkinStreak 天 · 积分 $points'
+            : '积分 $points · 每日打卡 +$checkinReward');
 
     return Padding(
       padding: EdgeInsets.fromLTRB(16, topInset + 4, 12, 8),
@@ -782,37 +947,82 @@ class _HeroBand extends StatelessWidget {
               GestureDetector(
                 onTap: loggedIn ? onEditAvatar : onLogin,
                 child: SizedBox(
-                  width: 68,
-                  height: 68,
-                  child: ClipOval(child: _profileAvatar(u?.avatarUrl)),
+                  width: 72,
+                  height: 72,
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      Positioned.fill(
+                        child: ClipOval(
+                          child: _profileAvatar(
+                            u,
+                            fallbackName: name,
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        right: -2,
+                        bottom: -2,
+                        child: _AvatarCheckInBadge(
+                          done: checkedToday,
+                          busy: checkinBusy,
+                          onTap: loggedIn ? onCheckin : onLogin,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
               const SizedBox(width: 4),
             ],
           ),
           const SizedBox(height: 18),
-          Row(
-            children: [
-              Expanded(
-                child: _QuickEntryCard(
-                  label: '我的收藏',
-                  background: cardBg,
-                  icon: CupertinoIcons.heart_fill,
-                  accent: accent,
-                  onTap: onFavs,
+          SizedBox(
+            height: 148,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: _QuickEntryCard(
+                    label: '我的收藏',
+                    background: cardBg,
+                    icon: CupertinoIcons.heart_fill,
+                    accent: accent,
+                    count: favCount,
+                    onTap: onFavs,
+                    tall: true,
+                  ),
                 ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: _QuickEntryCard(
-                  label: '我的缓存',
-                  background: cardBg,
-                  icon: CupertinoIcons.arrow_down_circle_fill,
-                  accent: accent,
-                  onTap: onCache,
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    children: [
+                      Expanded(
+                        child: _QuickEntryCard(
+                          label: '我的缓存',
+                          background: cardBg,
+                          icon: CupertinoIcons.arrow_down_circle_fill,
+                          accent: accent,
+                          count: cacheCount,
+                          onTap: onCache,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Expanded(
+                        child: _QuickEntryCard(
+                          label: '我的评论',
+                          background: cardBg,
+                          icon: CupertinoIcons.chat_bubble_text_fill,
+                          accent: accent,
+                          count: commentCount,
+                          onTap: onComments,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
           const SizedBox(height: 12),
           _VipEntryCard(
@@ -827,43 +1037,70 @@ class _HeroBand extends StatelessWidget {
   }
 }
 
+class _AvatarCheckInBadge extends StatelessWidget {
+  const _AvatarCheckInBadge({
+    required this.done,
+    required this.busy,
+    required this.onTap,
+  });
+
+  final bool done;
+  final bool busy;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = done ? const Color(0xFF34C759) : AppColors.brand;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () {
+          HapticFeedback.selectionClick();
+          if (!busy) onTap();
+        },
+        customBorder: const StadiumBorder(),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: AppPalette.page(context), width: 2),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x22000000),
+                blurRadius: 4,
+                offset: Offset(0, 1),
+              ),
+            ],
+          ),
+          alignment: Alignment.center,
+          child: busy
+              ? const SizedBox(
+                  width: 12,
+                  height: 12,
+                  child: AppLoadingIndicator(size: 12, color: Colors.white),
+                )
+              : Text(
+                  done ? '已打' : '打卡',
+                  style: const TextStyle(
+                    fontFamily: 'AppSans',
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    color: Colors.white,
+                    height: 1.1,
+                  ),
+                ),
+        ),
+      ),
+    );
+  }
+}
+
+
+
 String _vipExpireLabel(bool loggedIn, CmsUser? user) {
-  if (!loggedIn) return '点击开通';
-  final raw = (user?.endTime ?? '').trim();
-  final group = (user?.groupName ?? '').trim();
-  final looksVip = group.contains('VIP') ||
-      group.contains('vip') ||
-      (group.contains('会员') && !group.contains('游客'));
-
-  if (raw.isEmpty || raw == '0' || raw == '0000-00-00') {
-    // 有会员组但无到期字段 → 多为永久；否则就是未开通
-    return looksVip ? '永久会员' : '未开通';
-  }
-
-  final ts = int.tryParse(raw);
-  if (ts != null && ts > 1000000000) {
-    final sec = ts > 9999999999 ? ts ~/ 1000 : ts;
-    // 常见「永久」占位：远未来或 0 已排除
-    if (sec >= 4102444800) return '永久会员'; // >= 2100-01-01
-    final dt = DateTime.fromMillisecondsSinceEpoch(sec * 1000);
-    final now = DateTime.now();
-    if (dt.isBefore(now)) return '已过期';
-    return '至 ${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
-  }
-
-  final m = RegExp(r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})').firstMatch(raw);
-  if (m != null) {
-    final y = int.parse(m.group(1)!);
-    final mo = int.parse(m.group(2)!);
-    final d = int.parse(m.group(3)!);
-    if (y >= 2099) return '永久会员';
-    final dt = DateTime(y, mo, d);
-    if (dt.isBefore(DateTime.now())) return '已过期';
-    return '至 ${y.toString().padLeft(4, '0')}-${mo.toString().padLeft(2, '0')}-${d.toString().padLeft(2, '0')}';
-  }
-
-  if (raw.contains('永久')) return '永久会员';
-  return looksVip ? raw : '未开通';
+  if (!loggedIn || user == null) return '点击开通';
+  return user.vipExpireOnlyLabel;
 }
 
 class _QuickEntryCard extends StatelessWidget {
@@ -873,6 +1110,8 @@ class _QuickEntryCard extends StatelessWidget {
     required this.icon,
     required this.accent,
     required this.onTap,
+    this.count = 0,
+    this.tall = false,
   });
 
   final String label;
@@ -880,6 +1119,8 @@ class _QuickEntryCard extends StatelessWidget {
   final IconData icon;
   final Color accent;
   final VoidCallback onTap;
+  final int count;
+  final bool tall;
 
   @override
   Widget build(BuildContext context) {
@@ -894,21 +1135,51 @@ class _QuickEntryCard extends StatelessWidget {
         },
         borderRadius: BorderRadius.circular(16),
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 18, 14, 18),
-          child: Row(
+          padding: EdgeInsets.fromLTRB(
+            14,
+            tall ? 16 : 10,
+            12,
+            tall ? 14 : 10,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: Text(
-                  label,
-                  style: TextStyle(
-                    fontFamily: 'AppSans',
-                    fontSize: 15,
-                    fontWeight: FontWeight.w700,
-                    color: ink,
-                  ),
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontFamily: 'AppSans',
+                  fontSize: tall ? 15 : 13,
+                  fontWeight: FontWeight.w700,
+                  color: ink,
                 ),
               ),
-              Icon(icon, size: 30, color: accent),
+              const Spacer(),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Expanded(
+                    child: Text(
+                      '$count',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily: 'AppSans',
+                        fontSize: tall ? 34 : 22,
+                        fontWeight: FontWeight.w800,
+                        color: ink.withValues(alpha: 0.9),
+                        height: 1,
+                      ),
+                    ),
+                  ),
+                  Icon(
+                    icon,
+                    size: tall ? 30 : 22,
+                    color: accent,
+                  ),
+                ],
+              ),
             ],
           ),
         ),
@@ -1146,25 +1417,59 @@ class _ProfileBellButtonState extends State<_ProfileBellButton>
   }
 }
 
-Widget _profileAvatar(String? url) {
-  final u = (url ?? '').trim();
-  if (u.isEmpty) return const _AvatarPh();
-  if (!u.startsWith('http')) {
-    final f = File(u);
-    if (f.existsSync()) {
-      return Image.file(
-        f,
-        key: ValueKey('${u}_${f.lastModifiedSync().millisecondsSinceEpoch}'),
-        fit: BoxFit.cover,
-        errorBuilder: (_, _, _) => const _AvatarPh(),
-      );
+Widget _profileAvatar(CmsUser? user, {String fallbackName = ''}) {
+  final candidates = <String?>[
+    user?.avatarUrl,
+    QqAvatar.urlFromCandidates([
+      user?.qq,
+      user?.userName,
+      user?.nickName,
+      if (user != null && user.userId > 0) '${user.userId}',
+      fallbackName,
+    ]),
+  ];
+
+  for (final raw in candidates) {
+    final u = (raw ?? '').trim();
+    if (u.isEmpty) continue;
+    if (!u.startsWith('http')) {
+      final f = File(u);
+      if (f.existsSync()) {
+        return Image.file(
+          f,
+          key: ValueKey('${u}_${f.lastModifiedSync().millisecondsSinceEpoch}'),
+          fit: BoxFit.cover,
+          errorBuilder: (_, _, _) => const _AvatarPh(),
+        );
+      }
+      continue;
     }
-  }
-  if (u.startsWith('http')) {
     return Image.network(
       u,
       fit: BoxFit.cover,
-      errorBuilder: (_, _, _) => const _AvatarPh(),
+      headers: const {
+        'User-Agent':
+            'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 '
+            '(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+        'Referer': 'https://www.qq.com/',
+      },
+      errorBuilder: (_, _, _) {
+        final qq = QqAvatar.urlFromCandidates([
+          user?.qq,
+          user?.userName,
+          user?.nickName,
+          if (user != null && user.userId > 0) '${user.userId}',
+          fallbackName,
+        ]);
+        if (qq != null && qq != u) {
+          return Image.network(
+            qq,
+            fit: BoxFit.cover,
+            errorBuilder: (_, _, _) => const _AvatarPh(),
+          );
+        }
+        return const _AvatarPh();
+      },
     );
   }
   return const _AvatarPh();
@@ -1542,50 +1847,7 @@ class _RingPainter extends CustomPainter {
       oldDelegate.progress != progress;
 }
 
-class _HistorySkeleton extends StatelessWidget {
-  const _HistorySkeleton();
 
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 248,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        physics: const NeverScrollableScrollPhysics(),
-        itemCount: 4,
-        separatorBuilder: (_, _) => const SizedBox(width: 12),
-        itemBuilder: (_, _) {
-          return _Pulse(
-            child: SizedBox(
-              width: 118,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    width: 48,
-                    height: 10,
-                    color: FigmaSkeletonColors.bone,
-                  ),
-                  const SizedBox(height: 8),
-                  Expanded(
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: FigmaSkeletonColors.bone,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Container(height: 12, color: FigmaSkeletonColors.bone),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
 
 class _ThemeToggleButton extends StatefulWidget {
   const _ThemeToggleButton({

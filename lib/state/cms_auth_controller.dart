@@ -159,6 +159,56 @@ class CmsAuthController extends ChangeNotifier {
     }
   }
 
+  /// QQ 互联：面板已签发 Cookie，注入后拉资料
+  Future<void> loginWithQq({
+    required String cookieHeader,
+    int userId = 0,
+    String userName = '',
+    String nickName = '',
+    String portrait = '',
+  }) async {
+    final cookie = cookieHeader.trim();
+    if (cookie.isEmpty) {
+      throw CmsUserException('QQ 登录未返回会话');
+    }
+    _busy = true;
+    notifyListeners();
+    try {
+      await _api.applySessionCookies(cookie);
+      CmsUser user;
+      try {
+        user = await _api.fetchProfile();
+      } catch (_) {
+        user = CmsUser(
+          userId: userId,
+          userName: userName.trim().isEmpty ? 'QQ用户' : userName.trim(),
+          nickName: nickName,
+          portrait: portrait,
+        );
+      }
+      if (user.userId <= 0 && userId > 0) {
+        user = user.copyWith(userId: userId);
+      }
+      if (user.userName.trim().isEmpty || user.userName == '会员') {
+        if (userName.trim().isNotEmpty) {
+          user = user.copyWith(userName: userName.trim());
+        }
+      }
+      if (user.nickName.trim().isEmpty && nickName.trim().isNotEmpty) {
+        user = user.copyWith(nickName: nickName.trim());
+      }
+      if (user.portrait.trim().isEmpty && portrait.trim().isNotEmpty) {
+        user = user.copyWith(portrait: portrait.trim());
+      }
+      await _clearOverrides();
+      _user = user;
+      await _persist();
+    } finally {
+      _busy = false;
+      notifyListeners();
+    }
+  }
+
   Future<void> register({
     required String userName,
     required String password,
@@ -194,10 +244,20 @@ class CmsAuthController extends ChangeNotifier {
         qq: _preferText(me.qq, local.qq),
         phone: _preferText(me.phone, local.phone),
         portrait: _preferText(me.portrait, local.portrait),
-        points: me.points > 0 ? me.points : local.points,
-        extend: me.extend > 0 ? me.extend : local.extend,
-        groupName: _preferText(me.groupName, local.groupName),
-        endTime: _preferText(me.endTime, local.endTime),
+        // 积分/推广以服务端为准（升级扣积分后可能为 0）
+        points: me.points,
+        extend: me.extend,
+        // 组名/到期以本次拉取为准，避免本地旧缓存把 VIP 显示成「永久」
+        groupName: me.groupName.trim().isNotEmpty
+            ? me.groupName
+            : local.groupName,
+        endTime:
+            me.endTime.trim().isNotEmpty ? me.endTime : local.endTime,
+        loginTime: me.loginTime.trim().isNotEmpty
+            ? me.loginTime
+            : local.loginTime,
+        loginIp:
+            me.loginIp.trim().isNotEmpty ? me.loginIp : local.loginIp,
       );
       _user = _applyOverrides(merged);
       await _persist();
