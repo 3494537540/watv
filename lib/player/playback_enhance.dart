@@ -44,19 +44,21 @@ class PlaybackEnhance {
   }
 }
 
-/// 画质增强叠层。
-/// - 不用 ColorFiltered 包视频（iOS 会发灰雾）
-/// - Android 不做全屏半透明叠层（模拟器/弱 GPU 上会明显掉帧，对齐旧版直接出画）
-/// - iOS 仅极轻氛围，避免再罩一层
+/// 画质增强。
+/// - Texture 路径可用 ColorFiltered（真滤镜）
+/// - PlatformView（PiP）勿套 ColorFiltered，会灰雾 → 退回轻叠层
 class PlaybackEnhanceFilter extends StatelessWidget {
   const PlaybackEnhanceFilter({
     super.key,
     required this.level,
     required this.child,
+    this.allowColorMatrix = true,
   });
 
   final PlayerEnhanceLevel level;
   final Widget child;
+  /// false 时仅轻叠层（PlatformView / 已知会灰雾的路径）
+  final bool allowColorMatrix;
 
   static bool get _android =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
@@ -64,13 +66,22 @@ class PlaybackEnhanceFilter extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (level == PlayerEnhanceLevel.off) return child;
-    // Android：保持与旧版相同的裸 Texture 路径，避免叠层抢合成带宽
+
+    // Texture 路径：真色彩矩阵（iOS / Android 都能看到鲜明度变化）
+    if (allowColorMatrix) {
+      return ColorFiltered(
+        colorFilter: ColorFilter.matrix(PlaybackEnhance.matrixFor(level)),
+        child: child,
+      );
+    }
+
+    // Android PlatformView：避免叠层抢带宽
     if (_android) return child;
 
     final vivid = level == PlayerEnhanceLevel.vivid;
     final standard = level == PlayerEnhanceLevel.standard;
-    final topA = vivid ? 0.016 : (standard ? 0.01 : 0.006);
-    final botA = vivid ? 0.02 : (standard ? 0.012 : 0.008);
+    final topA = vivid ? 0.04 : (standard ? 0.025 : 0.015);
+    final botA = vivid ? 0.05 : (standard ? 0.03 : 0.018);
 
     return Stack(
       fit: StackFit.expand,
@@ -96,9 +107,8 @@ class PlaybackEnhanceFilter extends StatelessWidget {
       ],
     );
   }
-}
 
-Future<ui.ImageFilter?> tryEnhanceImageFilter(PlayerEnhanceLevel level) async {
-  if (level == PlayerEnhanceLevel.off) return null;
-  return null;
+  /// 旧接口保留：当前不走 ImageFilter
+  static ui.ImageFilter? tryEnhanceImageFilter(PlayerEnhanceLevel level) =>
+      null;
 }

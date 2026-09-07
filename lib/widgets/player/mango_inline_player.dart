@@ -304,12 +304,30 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     hideChrome();
     DialogX.dismiss();
     final rect = playerScreenRect();
+    // iOS PiP 更稳：先切 PlatformView 再进小窗（Texture 常进不去）
+    if (!kIsWeb &&
+        defaultTargetPlatform == TargetPlatform.iOS &&
+        !_openedWithPlatformView &&
+        _engine != null &&
+        (_activePlayUrl?.isNotEmpty ?? false)) {
+      final resume = positionMs;
+      final wasPlaying = _engine?.value.isPlaying ?? true;
+      try {
+        await _init(
+          forceUrl: _activePlayUrl,
+          resumeMs: resume,
+          autoPlay: wasPlaying,
+          preferPlatformViewOverride: true,
+        );
+      } catch (e) {
+        debugPrint('[pip] reopen platformView fail: $e');
+      }
+    }
     await PlayerPip.enter(
       sourceRect: rect,
       iosPlayerId: _engine?.nativePlayerId,
       videoAspect: _engine?.value.aspectRatio ?? 16 / 9,
     );
-    // ?????????????????
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       unawaited(play());
@@ -1266,6 +1284,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     String? forceUrl,
     int? resumeMs,
     bool autoPlay = true,
+    bool? preferPlatformViewOverride,
   }) async {
     final token = ++_initToken;
     await _disposeController(keepWakelock: false);
@@ -1377,9 +1396,9 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
       _initSpeedTimer = Timer.periodic(const Duration(milliseconds: 650), (_) {
         _onInitControllerTick();
       });
-      // iOS 正常播放一律 Texture。PlatformView + 任何 Flutter 叠层（弹幕/控件）会发灰白罩。
-      // 仅画中画入口再切 PlatformView。
-      final preferPv = false;
+      // iOS 正常播放一律 Texture。PlatformView + Flutter 叠层会发灰白罩。
+      // 画中画入口可传 preferPlatformViewOverride=true。
+      final preferPv = preferPlatformViewOverride ?? false;
       _openedWithPlatformView = preferPv;
       try {
         await engine
@@ -1658,6 +1677,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                         mirrorX: _playerSettings.mirrorX,
                         mirrorY: _playerSettings.mirrorY,
                         enhanceLevel: _playerSettings.enhanceLevel,
+                        allowColorMatrix: !_openedWithPlatformView,
                       ),
                     ),
                   )
@@ -1976,8 +1996,8 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                     right: 0,
                     child: widget.topOverlay!,
                   ),
-                // ???????????/??????????????
-                if (!_failed && !_ready)
+                // 未就绪：只有引擎也没在播时才盖全屏加载（避免「已经出画还转圈」）
+                if (!_failed && !_ready && !(_engine?.value.isPlaying ?? false))
                   Positioned.fill(
                     child: IgnorePointer(
                       child: ColoredBox(
@@ -1993,13 +2013,18 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                       ),
                     ),
                   )
-                else if (!_failed && _ready)
+                else if (!_failed &&
+                    (_ready || (_engine?.value.isPlaying ?? false)))
                   Positioned.fill(
                     child: IgnorePointer(
                       child: ValueListenableBuilder<bool>(
                         valueListenable: _stallLoading,
                         builder: (_, stalled, _) {
+                          // 双重保险：引擎在播绝不显示卡顿圈
                           if (!stalled) return const SizedBox.shrink();
+                          if (_engine?.value.isPlaying ?? false) {
+                            return const SizedBox.shrink();
+                          }
                           return Center(
                             child: PlayerLoadingHud(
                               compact: true,
@@ -2047,9 +2072,9 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                                 final w = MediaQuery.sizeOf(context).width;
                                 // 横屏侧栏加宽并贴右，避免内容区右侧空一大块
                                 if (_showCastSide) {
-                                  return (w * 0.40).clamp(260.0, 400.0);
+                                  return (w * 0.34).clamp(240.0, 320.0);
                                 }
-                                return (w * 0.50).clamp(300.0, 460.0);
+                                return (w * 0.38).clamp(260.0, 340.0);
                               }(),
                               height: double.infinity,
                               child: Material(
@@ -2209,6 +2234,7 @@ class _StableVideoSurface extends StatelessWidget {
     required this.mirrorX,
     required this.mirrorY,
     this.enhanceLevel = PlayerEnhanceLevel.off,
+    this.allowColorMatrix = true,
   });
 
   final VodEngine controller;
@@ -2217,6 +2243,7 @@ class _StableVideoSurface extends StatelessWidget {
   final bool mirrorX;
   final bool mirrorY;
   final PlayerEnhanceLevel enhanceLevel;
+  final bool allowColorMatrix;
 
   @override
   Widget build(BuildContext context) {
@@ -2260,6 +2287,7 @@ class _StableVideoSurface extends StatelessWidget {
           : Alignment.center;
       return PlaybackEnhanceFilter(
         level: enhanceLevel,
+        allowColorMatrix: allowColorMatrix,
         child: SizedBox.expand(
           child: controller.buildSurface(fit: boxFit, alignment: align),
         ),
@@ -2268,6 +2296,7 @@ class _StableVideoSurface extends StatelessWidget {
 
     return PlaybackEnhanceFilter(
       level: enhanceLevel,
+      allowColorMatrix: allowColorMatrix,
       child: LayoutBuilder(
         builder: (context, constraints) {
           final maxW = constraints.maxWidth;
@@ -2505,12 +2534,18 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
   }
 
   bool get _showLoadingHud {
-    if (!widget.ready) return true;
     if (_inLayoutQuiet) return false;
     if (_draggingProgress) return false;
     final v = widget.controller.value;
-    // 硬规则：引擎已在播 → 绝不盖加载圈（进度上报慢/isBuffering 误报很常见）
+    // 硬规则：引擎已在播 / 画面尺寸已出 → 绝不盖加载圈
     if (v.isPlaying) return false;
+    if (v.isInitialized &&
+        v.size.width > 1 &&
+        v.size.height > 1 &&
+        v.position.inMilliseconds > 400) {
+      return false;
+    }
+    if (!widget.ready) return true;
     if (_holdingForBuffer) return true;
     if (_seekLoading) return true;
     return _showBufferSpinner;

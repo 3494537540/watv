@@ -230,10 +230,15 @@ class CmsUser {
   String get vipExpireOnlyLabel {
     if (!isVip) return '点击开通';
     final expire = formatVipEndDate(endTime);
-    if (expire == null) return '已开通';
-    if (expire == 'permanent') return '永久';
+    if (expire == 'permanent') return '永久会员';
     if (expire == 'expired') return '已过期';
-    return '$expire 到期';
+    if (expire != null && expire.isNotEmpty) return '$expire 到期';
+    // 有 VIP 组但缺到期字段：尽量展示组名，避免只剩「已开通」
+    final group = groupName.trim();
+    if (group.isNotEmpty && !isFreeMemberGroup) {
+      return '$group · 到期时间同步中';
+    }
+    return '会员已开通 · 到期时间同步中';
   }
 
   /// 个人页 / 会员入口展示文案（严格按后台组名+到期，不臆造「永久」）
@@ -988,7 +993,12 @@ class MacCmsUserApi {
       }
     }
     if (map == null) {
-      throw CmsUserException('开通失败：服务器未返回有效结果，积分未扣除');
+      final snippet = raw.length > 80 ? '${raw.substring(0, 80)}…' : raw;
+      throw CmsUserException(
+        raw.isEmpty
+            ? '开通失败：服务器没有返回数据（请确认已部署面板/站点可访问）'
+            : '开通失败：服务器返回异常（$snippet）',
+      );
     }
     final code = int.tryParse('${map['code']}') ?? 0;
     final msg = '${map['msg'] ?? ''}'.trim();

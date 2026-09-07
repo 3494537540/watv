@@ -35,7 +35,7 @@ class _PlayerDanmakuLayerState extends State<PlayerDanmakuLayer>
   int _lastPaintMs = 0;
   final _widthCache = <int, double>{};
 
-  static const _minPaintIntervalMs = 100; // ~10fps, 降内存/主线程压力
+  static const _minPaintIntervalMs = 140; // ~7fps，减轻 iOS 弹幕卡顿
 
   @override
   void initState() {
@@ -44,6 +44,11 @@ class _PlayerDanmakuLayerState extends State<PlayerDanmakuLayer>
     _lastTickMs = DateTime.now().millisecondsSinceEpoch;
     _ticker = createTicker((_) {
       if (!mounted || !widget.enabled || widget.items.isEmpty) return;
+      // 暂停时不刷帧，避免后台空转
+      if (!widget.playing) {
+        _smoothPos = widget.positionSec;
+        return;
+      }
       final now = DateTime.now().millisecondsSinceEpoch;
       final dt = ((now - _lastTickMs) / 1000.0).clamp(0.0, 0.05);
       _lastTickMs = now;
@@ -51,11 +56,9 @@ class _PlayerDanmakuLayerState extends State<PlayerDanmakuLayer>
       final gap = target - _smoothPos;
       if (gap.abs() > 0.8) {
         _smoothPos = target;
-      } else if (widget.playing) {
+      } else {
         _smoothPos += gap * 0.35 + dt;
         if (_smoothPos > target + 0.08) _smoothPos = target + 0.08;
-      } else {
-        _smoothPos = target;
       }
       if (now - _lastPaintMs < _minPaintIntervalMs) return;
       _lastPaintMs = now;
@@ -183,7 +186,7 @@ class _DanmakuPainter extends CustomPainter {
     final maxTracks = max(2, (areaH / trackH).floor());
     final tracks = min(maxTracks, max(2, (6 * prefs.density).round()));
     final laneGap = (0.55 / prefs.density).clamp(0.25, 1.2);
-    final maxDraw = (18 * prefs.density).round().clamp(8, 28);
+    final maxDraw = (14 * prefs.density).round().clamp(6, 20);
 
     final from = pos - flightSec - 0.2;
     final to = pos + 0.05;

@@ -185,6 +185,31 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  /// 当前生效 CMS 根（设置页展示，IP 中间段打码）
+  static String get currentCmsDisplay {
+    final raw = ApiConfig.macCmsBase.trim();
+    final u = Uri.tryParse(raw);
+    if (u == null || u.host.isEmpty) return '未解析';
+    final host = u.host;
+    final ip = RegExp(r'^(\d+)\.(\d+)\.(\d+)\.(\d+)$').firstMatch(host);
+    final shown = ip != null
+        ? '${u.scheme}://${ip[1]}.***.***.${ip[4]}'
+        : '${u.scheme}://$host';
+    return shown;
+  }
+
+  static String get currentCmsSourceLabel {
+    final custom = AppSettingsController.instance.customCmsBase.trim();
+    if (custom.isNotEmpty) return '自定义';
+    final share = CmsEndpointBootstrap.lastResolved?.trim() ?? '';
+    if (share.isNotEmpty) {
+      final a = Uri.tryParse(share)?.host ?? '';
+      final b = Uri.tryParse(ApiConfig.macCmsBase)?.host ?? '';
+      if (a.isNotEmpty && a == b) return 'QQ收藏远程';
+    }
+    return '内置默认';
+  }
+
   /// 默认地址展示用星号遮罩（不泄露真实主机）
   static String get _maskedDefault {
     final u = Uri.tryParse(ApiConfig.productionMacCms);
@@ -580,12 +605,17 @@ class _SettingsPageState extends State<SettingsPage> {
                   dark: dark,
                   children: [
                     _Tile(
+                      title: '当前线路',
+                      subtitle: '$currentCmsDisplay · $currentCmsSourceLabel',
+                    ),
+                    _CardDivider(color: line),
+                    _Tile(
                       title: '自定义服务器地址',
                       subtitle: _customServerOn
                           ? (usingCustom ? '已启用自定义地址' : '开启后填写地址并保存')
                           : (CmsEndpointBootstrap.lastResolved != null
-                              ? '已连接（自动解析）'
-                              : '使用默认服务器'),
+                              ? 'QQ收藏自动解析可用'
+                              : '未开自定义时用上方当前线路'),
                       trailing: CupertinoSwitch(
                         value: _customServerOn,
                         activeTrackColor: AppColors.brand,

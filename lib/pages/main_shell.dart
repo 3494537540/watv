@@ -11,6 +11,7 @@ import '../services/cms_message_store.dart';
 import '../services/local_notification_service.dart';
 import '../services/maccms_api.dart';
 import '../services/qq_login_service.dart';
+import '../services/vod_cache_store.dart';
 import '../services/vod_new_collect_service.dart';
 import '../services/vod_update_watch_service.dart';
 import '../state/cms_auth_controller.dart';
@@ -86,6 +87,8 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
         ),
       );
       unawaited(VodNewCollectService.check());
+      // 后台被系统掐断的缓存任务：回前台自动续下
+      unawaited(VodCacheStore.instance.resumeInterrupted());
     }
   }
 

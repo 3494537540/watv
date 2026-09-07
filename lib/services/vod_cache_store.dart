@@ -600,6 +600,20 @@ class VodCacheStore {
     unawaited(_pump());
   }
 
+  /// App 回前台：把暂停/中断失败的任务重新入队（断点续传）
+  Future<void> resumeInterrupted() async {
+    await ensureLoaded();
+    final ids = <String>[
+      for (final e in _items)
+        if (e.status == VodCacheStatus.paused ||
+            (e.status == VodCacheStatus.failed && e.progress > 0.02))
+          e.id,
+    ];
+    for (final id in ids) {
+      await resume(id);
+    }
+  }
+
   Future<void> remove(String id) async {
     await ensureLoaded();
     await cancel(id);
@@ -817,18 +831,28 @@ class VodCacheStore {
       _upsert(item);
       await _persist();
       return item;
-    } catch (_) {
+    } catch (e) {
       final paused = _pauseInsteadOfFail && _cancelledCurrent;
+      // 网络抖动/客户端被关：有进度则标暂停，便于回前台续传，而不是直接失败
+      final softFail = !paused &&
+          item.progress > 0.02 &&
+          (e is SocketException ||
+              e is TimeoutException ||
+              e is http.ClientException ||
+              '$e'.contains('Connection closed') ||
+              '$e'.contains('ClientException'));
       _pauseInsteadOfFail = false;
       unawaited(LocalNotificationService.cancelDownloadProgress(item.id));
       item = item.copyWith(
-        status: paused ? VodCacheStatus.paused : VodCacheStatus.failed,
+        status: (paused || softFail)
+            ? VodCacheStatus.paused
+            : VodCacheStatus.failed,
         clearSpeed: true,
         updatedAt: DateTime.now().millisecondsSinceEpoch,
       );
       _upsert(item);
       await _persist();
-      if (paused) return item;
+      if (paused || softFail) return item;
       rethrow;
     } finally {
       _currentId = null;
@@ -847,16 +871,42 @@ class VodCacheStore {
   }) async {
     _client?.close();
     _client = http.Client();
+
+    var existing = 0;
+    if (await file.exists()) {
+      existing = await file.length();
+    }
+    // 过小碎片直接重来，避免脏文件卡死
+    if (existing > 0 && existing < 64 * 1024) {
+      try {
+        await file.delete();
+      } catch (_) {}
+      existing = 0;
+    }
+
     final req = http.Request('GET', Uri.parse(url));
     req.headers.addAll(VodPlayback.httpHeaders);
+    if (existing > 0) {
+      req.headers['Range'] = 'bytes=$existing-';
+    }
     final res = await _client!.send(req).timeout(const Duration(seconds: 45));
-    if (res.statusCode < 200 || res.statusCode >= 300) {
+    // 206 = 续传；200 = 服务端不支持 Range，整段重下
+    if (res.statusCode == 200 && existing > 0) {
+      try {
+        await file.delete();
+      } catch (_) {}
+      existing = 0;
+    }
+    if (res.statusCode != 200 && res.statusCode != 206) {
       throw HttpException('下载失败 HTTP ${res.statusCode}');
     }
-    final total = res.contentLength ?? 0;
-    var received = 0;
-    var lastEmit = 0;
-    final sink = file.openWrite();
+    final contentLen = res.contentLength ?? 0;
+    final total = res.statusCode == 206 && contentLen > 0
+        ? existing + contentLen
+        : (contentLen > 0 ? contentLen : 0);
+    var received = existing;
+    var lastEmit = existing;
+    final sink = file.openWrite(mode: existing > 0 ? FileMode.append : FileMode.write);
     try {
       await for (final chunk in res.stream) {
         if (_cancelledCurrent) throw const _CacheCancelled();

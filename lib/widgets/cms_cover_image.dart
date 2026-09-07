@@ -29,7 +29,7 @@ class CmsCoverImage extends StatefulWidget {
   /// 已解码字节缓存（按最终请求 URL）
   static final LinkedHashMap<String, Uint8List> _mem =
       LinkedHashMap<String, Uint8List>();
-  static const _memMax = 96;
+  static const _memMax = 160;
 
   static Uint8List? cacheGet(String url) => _mem[url];
 

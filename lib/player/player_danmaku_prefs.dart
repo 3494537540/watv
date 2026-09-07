@@ -15,12 +15,12 @@ enum DanmakuArea {
 /// 弹幕显示偏好（全局）
 class DanmakuDisplayPrefs {
   const DanmakuDisplayPrefs({
-    this.enabled = true,
+    this.enabled = false,
     this.fontSize = 15,
     this.opacity = 1,
     this.area = DanmakuArea.top,
     this.speed = 1,
-    this.density = 1,
+    this.density = 0.85,
     this.timeOffsetSec = 0,
   });
 
@@ -74,12 +74,12 @@ class DanmakuDisplayPrefs {
       orElse: () => DanmakuArea.top,
     );
     return DanmakuDisplayPrefs(
-      enabled: json['enabled'] != false,
+      enabled: json['enabled'] == true,
       fontSize: ((json['font_size'] as num?)?.toDouble() ?? 15).clamp(12, 28),
       opacity: ((json['opacity'] as num?)?.toDouble() ?? 1).clamp(0.2, 1),
       area: area,
       speed: ((json['speed'] as num?)?.toDouble() ?? 1).clamp(0.5, 2),
-      density: ((json['density'] as num?)?.toDouble() ?? 1).clamp(0.4, 1.5),
+      density: ((json['density'] as num?)?.toDouble() ?? 0.85).clamp(0.4, 1.5),
       timeOffsetSec:
           ((json['time_offset'] as num?)?.toDouble() ?? 0).clamp(-30, 30),
     );
@@ -96,8 +96,9 @@ class DanmakuDisplayPrefs {
 class PlayerDanmakuPrefs {
   PlayerDanmakuPrefs._();
 
-  static const _key = 'player_danmaku_display_v2';
+  static const _key = 'player_danmaku_display_v3';
   static const _legacyEnabledKey = 'player_danmaku_enabled_v1';
+  static const _legacyV2Key = 'player_danmaku_display_v2';
 
   static DanmakuDisplayPrefs _cache = const DanmakuDisplayPrefs();
 
@@ -119,12 +120,26 @@ class PlayerDanmakuPrefs {
         }
       } catch (_) {}
     }
-    // 迁移旧开关
+    // 新默认关闭：不继承 v2「默认开」的缓存，避免老用户仍被强制开弹幕
     final legacy = prefs.getBool(_legacyEnabledKey);
     if (legacy != null) {
       _cache = DanmakuDisplayPrefs(enabled: legacy);
       await save(_cache);
+      return _cache;
     }
+    // 若用户曾在 v2 里显式关过，保持关
+    final v2 = prefs.getString(_legacyV2Key);
+    if (v2 != null && v2.isNotEmpty) {
+      try {
+        final json = jsonDecode(v2);
+        if (json is Map && json['enabled'] == false) {
+          _cache = const DanmakuDisplayPrefs(enabled: false);
+          await save(_cache);
+          return _cache;
+        }
+      } catch (_) {}
+    }
+    _cache = const DanmakuDisplayPrefs();
     return _cache;
   }
 

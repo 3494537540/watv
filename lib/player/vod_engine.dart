@@ -287,8 +287,13 @@ class VideoPlayerVodEngine extends VodEngine {
 
   @override
   int? get nativePlayerId {
-    // video_player 未稳定暴露；PiP 走 controller 扩展
-    return null;
+    final c = _c;
+    if (c == null || !c.value.isInitialized) return null;
+    // video_player 2.11+：textureId 改名为 playerId（标注 testing，运行时可用）
+    // ignore: invalid_use_of_visible_for_testing_member
+    final id = c.playerId;
+    if (id < 0) return null;
+    return id;
   }
 
   @override

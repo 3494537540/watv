@@ -147,11 +147,6 @@ abstract final class PlayerPip {
     }
 
     if (_isIos) {
-      final playerId = iosPlayerId;
-      if (playerId == null) {
-        DialogX.showWarning('当前内核不支持 iOS 画中画，请切换「系统(Exo)」内核');
-        return;
-      }
       try {
         if (!await VideoPlayerPip.isPipSupported()) {
           DialogX.showWarning('当前设备不支持画中画');
@@ -160,6 +155,11 @@ abstract final class PlayerPip {
         final ar = videoAspect <= 0 ? 16 / 9 : videoAspect;
         final w = 320;
         final h = (w / ar).round().clamp(120, 480);
+        final playerId = iosPlayerId;
+        if (playerId == null || playerId < 0) {
+          DialogX.showWarning('当前播放器尚未就绪，请先出画后再试画中画');
+          return;
+        }
         final ok = await VideoPlayerPipPlatform.instance.enterPipMode(
           playerId,
           width: w,

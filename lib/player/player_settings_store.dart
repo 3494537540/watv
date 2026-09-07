@@ -68,9 +68,9 @@ extension PlayerEnhanceLevelX on PlayerEnhanceLevel {
 
   String get hint => switch (this) {
         PlayerEnhanceLevel.off => '原始画面',
-        PlayerEnhanceLevel.mild => '轻微提亮与清晰感',
+        PlayerEnhanceLevel.mild => '轻微对比与饱和',
         PlayerEnhanceLevel.standard => '对比度与色彩增强',
-        PlayerEnhanceLevel.vivid => '更强锐利与饱和（略费电）',
+        PlayerEnhanceLevel.vivid => '更强锐利与饱和',
       };
 }
 
