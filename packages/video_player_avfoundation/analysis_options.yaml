@@ -1,0 +1,10 @@
+# Vendored from flutter/packages for iOS AVPlayer TTFF patch.
+# Pigeon sources are codegen-only; exclude from analysis (no pigeon dep).
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  exclude:
+    - pigeons/**
+    - example/**
+    - test/**
+    - darwin/RunnerTests/**

@@ -1,0 +1,9 @@
+# Vendored from flutter/packages for TTFF LoadControl patch.
+# Pigeon sources are codegen-only; exclude from analysis (no pigeon dep).
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  exclude:
+    - pigeons/**
+    - example/**
+    - test/**
