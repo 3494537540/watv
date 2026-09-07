@@ -102,7 +102,8 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       // 授权后立刻扫一遍公告 → 系统通知
       try {
         final api = CmsAuthController.instance.api;
-        await CmsMessageStore.instance.refresh(api);
+        final uid = CmsAuthController.instance.user?.userId ?? 0;
+        await CmsMessageStore.instance.refresh(api, userId: uid);
       } catch (_) {}
     }
     await VodUpdateWatchService.check(

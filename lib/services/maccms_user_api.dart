@@ -137,10 +137,48 @@ class CmsUser {
 
   String get displayName {
     final n = nickName.trim();
-    if (n.isNotEmpty && n != '会员') return n;
+    if (n.isNotEmpty && !isJunkDisplayName(n)) return n;
     final u = userName.trim();
-    if (u.isNotEmpty && u != '会员') return u;
-    return u.isEmpty ? '会员' : u;
+    if (u.isNotEmpty && !isJunkDisplayName(u)) return u;
+    return '会员';
+  }
+
+  /// 主题页常见误解析名（如「游客」/ deleted）
+  static bool isJunkDisplayName(String raw) {
+    final t = raw.trim();
+    if (t.isEmpty) return true;
+    // 去掉普通空格与全角空格后再比（主题偶发 "d e l e t e d"）
+    final compact = t.replaceAll(RegExp(r'[\s\u00A0\u3000]+'), '').toLowerCase();
+    return t == '会员' ||
+        t == '游客' ||
+        t == '未登录' ||
+        t == 'guest' ||
+        t == 'Guest' ||
+        t == '匿名' ||
+        t == '默认' ||
+        t == '用户' ||
+        compact == 'deleted' ||
+        compact == 'delete' ||
+        compact == 'null' ||
+        compact == 'undefined';
+  }
+
+  /// 无效头像地址（主题默认图等）
+  static bool isJunkPortrait(String raw) {
+    final p = raw.trim();
+    if (p.isEmpty) return true;
+    final low = p.toLowerCase();
+    return low.contains('duface') ||
+        low.contains('touxiang') ||
+        low.contains('nopic') ||
+        low.contains('noavatar') ||
+        low.contains('default_avatar') ||
+        low.contains('default-avatar') ||
+        low.contains('avatar.png') ||
+        low.contains('avatar.gif') ||
+        low.contains('placeholder') ||
+        low.endsWith('/user.png') ||
+        low.endsWith('/user.jpg');
   }
 
   /// 免费/默认组（新注册常见：注册会员 / 普通会员）
@@ -257,32 +295,22 @@ class CmsUser {
 
   String? get avatarUrl {
     final p = portrait.trim();
-    if (p.isNotEmpty) {
-      final low = p.toLowerCase();
-      final placeholder = low.contains('duface') ||
-          low.contains('touxiang') ||
-          low.contains('nopic') ||
-          low.contains('noavatar') ||
-          low.contains('default_avatar') ||
-          low.endsWith('/avatar.png') ||
-          low.endsWith('/avatar.gif');
-      if (!placeholder) {
-        if (p.startsWith('http://') || p.startsWith('https://')) return p;
-        // 本机绝对路径：Windows盘符 / Android/iOS 文档目录选图
-        final isLocal = (p.length > 2 && p[1] == ':') ||
-            p.contains('\\') ||
-            p.contains('/cms_avatar_') ||
-            p.startsWith('/data/') ||
-            p.startsWith('/var/') ||
-            p.startsWith('/Users/') ||
-            p.startsWith('/home/') ||
-            p.startsWith('/private/var/');
-        if (isLocal) return p;
-        if (p.startsWith('/')) return '${ApiConfig.macCmsBase}$p';
-        return '${ApiConfig.macCmsBase}/$p';
-      }
+    if (p.isNotEmpty && !isJunkPortrait(p)) {
+      if (p.startsWith('http://') || p.startsWith('https://')) return p;
+      // 本机绝对路径：Windows盘符 / Android/iOS 文档目录选图
+      final isLocal = (p.length > 2 && p[1] == ':') ||
+          p.contains('\\') ||
+          p.contains('/cms_avatar_') ||
+          p.startsWith('/data/') ||
+          p.startsWith('/var/') ||
+          p.startsWith('/Users/') ||
+          p.startsWith('/home/') ||
+          p.startsWith('/private/var/');
+      if (isLocal) return p;
+      if (p.startsWith('/')) return '${ApiConfig.macCmsBase}$p';
+      return '${ApiConfig.macCmsBase}/$p';
     }
-    // 登录账号当 QQ 号拉头像
+    // 登录账号当 QQ 号拉头像（仅纯数字 QQ 号）
     return QqAvatar.urlFromCandidates([qq, userName, nickName, '$userId']);
   }
 
@@ -318,24 +346,31 @@ class CmsUser {
     );
   }
 
-  /// 用另一份资料补全空字段（不覆盖已有有效值）
+  /// 用另一份资料补全空字段（不覆盖已有有效值；垃圾头像/昵称不当有效）
   CmsUser merge(CmsUser other) {
     return CmsUser(
       userId: userId > 0 ? userId : other.userId,
       userName: _betterName(userName, other.userName),
-      nickName: nickName.trim().isNotEmpty ? nickName : other.nickName,
+      nickName: _betterNick(nickName, other.nickName),
       email: email.trim().isNotEmpty ? email : other.email,
       qq: qq.trim().isNotEmpty ? qq : other.qq,
       phone: phone.trim().isNotEmpty ? phone : other.phone,
-      portrait: portrait.trim().isNotEmpty ? portrait : other.portrait,
-      // 积分 / 推广：任一端解析到 ≥0 的明确值时，优先用「有标签解析」的更大可信来源
+      portrait: _betterPortrait(portrait, other.portrait),
       points: _preferStat(points, other.points),
       extend: _preferStat(extend, other.extend),
-      groupName: groupName.trim().isNotEmpty ? groupName : other.groupName,
+      groupName: _betterGroup(groupName, other.groupName),
       endTime: endTime.trim().isNotEmpty ? endTime : other.endTime,
       loginTime: loginTime.trim().isNotEmpty ? loginTime : other.loginTime,
       loginIp: loginIp.trim().isNotEmpty ? loginIp : other.loginIp,
     );
+  }
+
+  static String _betterPortrait(String a, String b) {
+    final x = a.trim();
+    final y = b.trim();
+    if (!isJunkPortrait(x)) return x;
+    if (!isJunkPortrait(y)) return y;
+    return '';
   }
 
   static int _preferStat(int a, int b) {
@@ -347,8 +382,24 @@ class CmsUser {
   static String _betterName(String a, String b) {
     final x = a.trim();
     final y = b.trim();
-    if (x.isNotEmpty && x != '会员') return x;
-    if (y.isNotEmpty && y != '会员') return y;
+    if (!isJunkDisplayName(x)) return x;
+    if (!isJunkDisplayName(y)) return y;
+    return x.isNotEmpty ? x : y;
+  }
+
+  static String _betterNick(String a, String b) {
+    final x = a.trim();
+    final y = b.trim();
+    if (!isJunkDisplayName(x)) return x;
+    if (!isJunkDisplayName(y)) return y;
+    return '';
+  }
+
+  static String _betterGroup(String a, String b) {
+    final x = a.trim();
+    final y = b.trim();
+    if (x.isNotEmpty && x != '游客') return x;
+    if (y.isNotEmpty && y != '游客') return y;
     return x.isNotEmpty ? x : y;
   }
 
@@ -523,6 +574,9 @@ class MacCmsUserApi {
     if (_cookieMap.isEmpty) return null;
     return _cookieMap.entries.map((e) => '${e.key}=${e.value}').join('; ');
   }
+
+  /// 当前会话 Cookie 中的 user_id（QQ 注入会话时用）
+  String get sessionCookieUserId => (_cookieMap['user_id'] ?? '').trim();
 
   Future<void> loadCookie() async {
     final prefs = await SharedPreferences.getInstance();
@@ -755,33 +809,51 @@ class MacCmsUserApi {
       asAjax: false,
     );
     final raw = res.body.trim();
-    _ensureLoggedInPayload(raw);
+    final cookieUid = int.tryParse(_cookieMap['user_id'] ?? '') ?? 0;
+    // QQ 注入的 Cookie 无 PHPSESSID 时，会员中心常返回登录页 HTML；
+    // 只要 Cookie 里已有 user_id，就不要当成未登录直接抛掉。
+    if (cookieUid <= 0) {
+      _ensureLoggedInPayload(raw);
+    }
 
     final fromCookie = _userFromCookies();
     final fromHtml = _parseUserHtml(raw);
-    final fromInfo = await _tryFetchInfoHtml();
+    CmsUser? fromInfo;
+    try {
+      fromInfo = await _tryFetchInfoHtml();
+    } catch (_) {
+      fromInfo = null;
+    }
 
     var user = (fromCookie ?? const CmsUser(userId: 0, userName: ''))
         .merge(fromHtml)
         .merge(fromInfo ?? const CmsUser(userId: 0, userName: ''));
 
-    // 面板直查 DB：补全 group_name / user_end_time（主题 HTML 常缺到期字段）
-    final uid = user.userId > 0
-        ? user.userId
-        : (int.tryParse(_cookieMap['user_id'] ?? '') ?? 0);
+    // 面板直查 DB：补全 group / 到期 / 积分 / 昵称（主题 HTML 常错解析成游客或 0 积分）
+    final uid = user.userId > 0 ? user.userId : cookieUid;
     if (uid > 0) {
       final fromPanel = await _tryFetchPanelVip(uid);
       if (fromPanel != null) {
         user = user.merge(fromPanel);
-        // 到期时间与组名以面板为准（避免空/错误本地覆盖）
         if (fromPanel.endTime.trim().isNotEmpty) {
           user = user.copyWith(endTime: fromPanel.endTime);
         }
-        if (fromPanel.groupName.trim().isNotEmpty) {
+        if (fromPanel.groupName.trim().isNotEmpty &&
+            fromPanel.groupName.trim() != '游客') {
           user = user.copyWith(groupName: fromPanel.groupName);
         }
-        if (fromPanel.points > 0 || user.points == 0) {
-          user = user.copyWith(points: fromPanel.points);
+        user = user.copyWith(points: fromPanel.points);
+        final pp = fromPanel.portrait.trim();
+        if (pp.isNotEmpty && !CmsUser.isJunkPortrait(pp)) {
+          user = user.copyWith(portrait: pp);
+        }
+        final pn = fromPanel.nickName.trim();
+        if (pn.isNotEmpty && !CmsUser.isJunkDisplayName(pn)) {
+          user = user.copyWith(nickName: pn);
+        }
+        final pu = fromPanel.userName.trim();
+        if (pu.isNotEmpty && !CmsUser.isJunkDisplayName(pu)) {
+          user = user.copyWith(userName: pu);
         }
         if (fromPanel.loginTime.trim().isNotEmpty) {
           user = user.copyWith(loginTime: fromPanel.loginTime);
@@ -792,19 +864,29 @@ class MacCmsUserApi {
       }
     }
 
-    if (user.userName.trim().isEmpty || user.userName == '会员') {
-      if (fromCookie != null && fromCookie.userName.isNotEmpty) {
+    if (CmsUser.isJunkPortrait(user.portrait)) {
+      user = user.copyWith(portrait: '');
+    }
+    if (CmsUser.isJunkDisplayName(user.nickName)) {
+      user = user.copyWith(nickName: '');
+    }
+    if (user.userName.trim().isEmpty ||
+        CmsUser.isJunkDisplayName(user.userName)) {
+      if (fromCookie != null &&
+          fromCookie.userName.isNotEmpty &&
+          !CmsUser.isJunkDisplayName(fromCookie.userName)) {
         user = user.copyWith(userName: fromCookie.userName);
       }
     }
     if (user.userId == 0 &&
-        (user.userName.isEmpty || user.userName == '会员') &&
+        (user.userName.isEmpty || CmsUser.isJunkDisplayName(user.userName)) &&
         user.points == 0) {
       if (raw.contains('fed-user-login') || raw.contains('name="user_pwd"')) {
         throw CmsUserException('未登录', code: 401);
       }
     }
-    if (user.userName.trim().isEmpty) {
+    if (user.userName.trim().isEmpty ||
+        CmsUser.isJunkDisplayName(user.userName)) {
       user = user.copyWith(userName: '会员');
     }
     return user;
@@ -882,22 +964,38 @@ class MacCmsUserApi {
       },
     );
     final raw = res.body.trim();
+    Map<String, dynamic>? map;
     try {
       final decoded = jsonDecode(raw);
       if (decoded is Map) {
-        final code = (decoded['code'] as num?)?.toInt() ?? 0;
-        final msg = '${decoded['msg'] ?? ''}'.trim();
-        if (code == 1) return msg.isEmpty ? '升级成功' : msg;
-        throw CmsUserException(msg.isEmpty ? '升级失败' : msg, code: code);
+        map = Map<String, dynamic>.from(decoded);
       }
-    } catch (e) {
-      if (e is CmsUserException) rethrow;
+    } catch (_) {
+      map = null;
     }
-    if (raw.contains('成功') || raw.contains('"code":1')) {
-      return '升级成功';
+    if (map == null) {
+      final m = RegExp(r'\{.*\}', dotAll: true).firstMatch(raw);
+      if (m != null) {
+        try {
+          final decoded = jsonDecode(m.group(0)!);
+          if (decoded is Map) map = Map<String, dynamic>.from(decoded);
+        } catch (_) {}
+      }
     }
-    throw CmsUserException('升级失败，请确认积分是否足够');
+    if (map == null) {
+      throw CmsUserException('开通失败：服务器未返回有效结果，积分未扣除');
+    }
+    final code = int.tryParse('${map['code']}') ?? 0;
+    final msg = '${map['msg'] ?? ''}'.trim();
+    if (code == 1) return msg.isEmpty ? '升级成功' : msg;
+    throw CmsUserException(
+      msg.isEmpty ? '升级失败，请确认积分是否足够' : msg,
+      code: code,
+    );
   }
+
+  /// 面板 DB 直查会员资料（供 QQ 登录补积分/昵称）
+  Future<CmsUser?> fetchPanelUser(int userId) => _tryFetchPanelVip(userId);
 
   Future<CmsUser?> _tryFetchInfoHtml() async {
     try {
@@ -950,6 +1048,7 @@ class MacCmsUserApi {
         userId: int.tryParse('${d['user_id'] ?? userId}') ?? userId,
         userName: '${d['user_name'] ?? ''}',
         nickName: '${d['user_nick_name'] ?? ''}',
+        portrait: '${d['user_portrait'] ?? d['portrait'] ?? ''}'.trim(),
         points: int.tryParse('${d['user_points'] ?? 0}') ?? 0,
         groupName: '${d['group_name'] ?? ''}'.trim(),
         endTime: end,

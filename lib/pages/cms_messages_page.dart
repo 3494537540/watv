@@ -63,6 +63,7 @@ class _CmsMessagesPageState extends State<CmsMessagesPage> {
         CmsAuthController.instance.api,
         userId: uid,
         allowFallback: !CmsAuthController.instance.isLoggedIn,
+        pushSystem: false,
       );
       if (!mounted) return;
       setState(() {

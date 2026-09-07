@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>安装 哇TV</title>
+  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" />
+  <style>
+    :root {
+      --brand: #1ecad3;
+      --brand-deep: #109aa2;
+      --ink: #14161a;
+      --muted: #5c6370;
+      --paper: #eef6f7;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100svh;
+      font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(ellipse 80% 50% at 50% -10%, rgba(30,202,211,.28), transparent 55%),
+        linear-gradient(180deg, #e8f7f8 0%, var(--paper) 45%, #fff 100%);
+      display: grid;
+      place-items: center;
+      padding: 28px 18px 40px;
+      -webkit-font-smoothing: antialiased;
+    }
+    .card {
+      width: min(420px, 100%);
+      text-align: center;
+    }
+    .icon {
+      width: 96px; height: 96px; border-radius: 22px;
+      margin: 0 auto 18px;
+      box-shadow: 0 16px 40px rgba(16, 154, 162, .22);
+      overflow: hidden;
+      background: #fff;
+    }
+    .icon img { width: 100%; height: 100%; object-fit: cover; }
+    h1 {
+      font-size: 1.75rem; font-weight: 900; letter-spacing: .02em;
+      margin-bottom: 8px;
+    }
+    .ver {
+      color: var(--muted); font-size: .92rem; margin-bottom: 22px;
+    }
+    .steps {
+      display: grid;
+      gap: 12px;
+      text-align: left;
+    }
+    .step {
+      background: rgba(255,255,255,.88);
+      border: 1px solid rgba(20,22,26,.08);
+      border-radius: 16px;
+      padding: 14px 14px 16px;
+    }
+    .step-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .badge {
+      width: 28px; height: 28px; border-radius: 999px;
+      background: var(--brand); color: #fff;
+      display: grid; place-items: center;
+      font-size: .85rem; font-weight: 800; flex-shrink: 0;
+    }
+    .step h2 {
+      font-size: 1rem; font-weight: 800;
+    }
+    .step p {
+      color: var(--muted); font-size: .84rem; line-height: 1.55;
+      margin-bottom: 12px;
+    }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 100%; min-height: 52px; border-radius: 14px;
+      background: var(--brand); color: #fff; font-weight: 800; font-size: 1.05rem;
+      text-decoration: none; border: 0; cursor: pointer;
+      box-shadow: 0 10px 28px rgba(30, 202, 211, .32);
+    }
+    .btn:active { transform: scale(.98); background: var(--brand-deep); }
+    .btn.ghost {
+      background: rgba(255,255,255,.85); color: var(--ink);
+      box-shadow: none; border: 1px solid rgba(20,22,26,.1);
+    }
+    .btn.secondary {
+      background: var(--ink);
+      box-shadow: 0 10px 28px rgba(20, 22, 26, .18);
+    }
+    .tips {
+      margin-top: 22px; text-align: left;
+      background: rgba(255,255,255,.72);
+      border: 1px solid rgba(20,22,26,.08);
+      border-radius: 14px; padding: 14px 16px;
+      color: var(--muted); font-size: .88rem; line-height: 1.65;
+    }
+    .tips b { color: var(--ink); }
+    .warn {
+      margin-top: 12px; font-size: .8rem; color: #a35b00;
+      background: #fff6e8; border-radius: 10px; padding: 10px 12px;
+      text-align: left;
+    }
+    .only-ios { display: none; }
+    .only-other { display: block; }
+    html.is-ios .only-ios { display: block; }
+    html.is-ios .only-other { display: none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">
+      <img src="../assets/app-icon.png" width="96" height="96" alt="哇TV" />
+    </div>
+    <h1>哇TV</h1>
+    <p class="ver">iOS 安装 · 先描述文件，再证书签名安装</p>
+
+    <div class="only-ios">
+      <div class="steps">
+        <div class="step">
+          <div class="step-head">
+            <span class="badge">1</span>
+            <h2>下载并安装描述文件</h2>
+          </div>
+          <p>必须先安装描述文件，否则后续证书签名安装可能失败。点下方按钮后按系统提示安装。</p>
+          <a class="btn" id="profileBtn"
+             href="https://youquzhushou.cn/peizhi.mobileconfig">
+            下载描述文件
+          </a>
+        </div>
+        <div class="step">
+          <div class="step-head">
+            <span class="badge">2</span>
+            <h2>证书签名安装 App</h2>
+          </div>
+          <p>描述文件装好后，再点下方安装。回到桌面等待图标出现。</p>
+          <a class="btn secondary" id="installBtn"
+             href="itms-services://?action=download-manifest&url=https://www.watv.fun/install/manifest.plist">
+            安装哇TV
+          </a>
+        </div>
+      </div>
+      <a class="btn ghost" style="margin-top:12px" href="./watv.ipa" download>直接下载 IPA</a>
+    </div>
+
+    <div class="only-other">
+      <div class="steps">
+        <div class="step">
+          <div class="step-head">
+            <span class="badge">1</span>
+            <h2>下载描述文件</h2>
+          </div>
+          <p>请用 iPhone / iPad 的 Safari 打开本页完成安装。也可先下载描述文件备用。</p>
+          <a class="btn" href="https://youquzhushou.cn/peizhi.mobileconfig">
+            下载描述文件
+          </a>
+        </div>
+      </div>
+      <a class="btn ghost" style="margin-top:12px" href="./watv.ipa" download>下载 IPA</a>
+      <p class="warn">请用 <b>iPhone / iPad 的 Safari</b> 打开本页。微信/QQ 内置浏览器通常无法安装描述文件和 App。</p>
+    </div>
+
+    <div class="tips">
+      <b>安装步骤</b><br/>
+      1. 用 Safari 打开本页，点「下载描述文件」并按提示安装<br/>
+      2. 设置 → 通用 → VPN与设备管理 / 描述文件，确认已安装<br/>
+      3. 回到本页点「安装哇TV」（证书签名安装）<br/>
+      4. 回到桌面等待图标出现；若提示未信任，再到设备管理中信任企业级应用<br/>
+      5. 打开 哇TV
+    </div>
+  </div>
+  <script>
+    const ua = navigator.userAgent || "";
+    if (/iPhone|iPad|iPod/i.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)) {
+      document.documentElement.classList.add("is-ios");
+    }
+  </script>
+</body>
+</html>

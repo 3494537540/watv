@@ -9,7 +9,7 @@
  * App 公开接口（无需 key）：
  *   ?api=notify_list
  *   ?api=app_update&platform=android|ios
- *   ?api=website                     （官网：双端安装包 + 更新日志）
+ *   ?api=website                     （官网：双端安装包 + 更新日志 + 叠图）
  *   ?api=app_config
  *   ?api=update_report  (POST JSON)
  *   ?api=img_proxy&u=https%3A%2F%2F...   （封面反代，解决部分 CDN 客户端不可达）
@@ -323,11 +323,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pdo->prepare("DELETE FROM `{$tRedeem}` WHERE `id`=?")->execute([$id]);
             $msg = '已删除兑换码';
             $tab = 'redeem';
+        } elseif ($action === 'landing_save') {
+            $cur = huihuoLoadLanding($pdo, $tConfig);
+            $slidesIn = isset($_POST['slide']) && is_array($_POST['slide']) ? $_POST['slide'] : [];
+            $out = [];
+            for ($i = 0; $i < 4; $i++) {
+                $row = isset($slidesIn[$i]) && is_array($slidesIn[$i]) ? $slidesIn[$i] : [];
+                $prev = $cur['slides'][$i] ?? huihuoDefaultLanding()['slides'][$i];
+                $imageUrl = trim((string)($row['image_url'] ?? ''));
+                if ($imageUrl === '') {
+                    $imageUrl = (string)($prev['image_url'] ?? '');
+                }
+                $fileKey = 'slide_image_' . $i;
+                if (isset($_FILES[$fileKey]) && is_array($_FILES[$fileKey])) {
+                    $fErr = (int)($_FILES[$fileKey]['error'] ?? UPLOAD_ERR_NO_FILE);
+                    if ($fErr === UPLOAD_ERR_OK) {
+                        $imageUrl = huihuoSaveAsset($root, 'slide' . ($i + 1), $_FILES[$fileKey]);
+                    } elseif ($fErr !== UPLOAD_ERR_NO_FILE) {
+                        throw new RuntimeException('叠图' . ($i + 1) . '：' . huihuoUploadErrorMessage($fErr));
+                    }
+                }
+                $out[] = [
+                    'image_url' => $imageUrl,
+                    'alt' => trim((string)($row['alt'] ?? ($prev['alt'] ?? ''))),
+                    'title' => trim((string)($row['title'] ?? ($prev['title'] ?? ''))),
+                    'desc' => trim((string)($row['desc'] ?? ($prev['desc'] ?? ''))),
+                    'adv_label' => trim((string)($row['adv_label'] ?? ($prev['adv_label'] ?? ''))),
+                    'adv_title' => trim((string)($row['adv_title'] ?? ($prev['adv_title'] ?? ''))),
+                    'adv_body' => trim((string)($row['adv_body'] ?? ($prev['adv_body'] ?? ''))),
+                ];
+            }
+            $landing = ['slides' => $out];
+            $pretty = json_encode($landing, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+            huihuoKvSet($pdo, $tConfig, 'website_landing', $pretty);
+            $dir = $root . '/static/app';
+            if (!is_dir($dir)) {
+                @mkdir($dir, 0755, true);
+            }
+            @file_put_contents($dir . '/website_landing.json', $pretty);
+            $msg = '官网叠图已保存（api=website → slides）';
+            $tab = 'landing';
         }
     } catch (Throwable $e) {
         $err = $e->getMessage();
         if ($action === 'update_save') {
             $tab = 'update';
+        } elseif ($action === 'landing_save') {
+            $tab = 'landing';
         }
     }
 }
@@ -363,6 +405,7 @@ if (is_array($cfgArr) && isset($cfgArr['qq_login']) && is_array($cfgArr['qq_logi
 $logs = $pdo->query(
     "SELECT * FROM `{$tLog}` ORDER BY `id` DESC LIMIT 200"
 )->fetchAll();
+$landing = huihuoLoadLanding($pdo, $tConfig);
 
 $vodCount = 0;
 $artCount = 0;
@@ -437,6 +480,7 @@ code{background:#f3f4f6;padding:2px 6px;border-radius:6px;font-size:12px}
     <a class="<?= $tab === 'update' ? 'on' : '' ?>" href="<?= $self ?>?key=<?= urlencode(HUIHUO_PANEL_KEY) ?>&tab=update">双端更新</a>
     <a class="<?= $tab === 'redeem' ? 'on' : '' ?>" href="<?= $self ?>?key=<?= urlencode(HUIHUO_PANEL_KEY) ?>&tab=redeem">兑换码</a>
     <a class="<?= $tab === 'logs' ? 'on' : '' ?>" href="<?= $self ?>?key=<?= urlencode(HUIHUO_PANEL_KEY) ?>&tab=logs">更新记录</a>
+    <a class="<?= $tab === 'landing' ? 'on' : '' ?>" href="<?= $self ?>?key=<?= urlencode(HUIHUO_PANEL_KEY) ?>&tab=landing">官网叠图</a>
     <a class="<?= $tab === 'config' ? 'on' : '' ?>" href="<?= $self ?>?key=<?= urlencode(HUIHUO_PANEL_KEY) ?>&tab=config">远程配置</a>
     <a class="<?= $tab === 'api' ? 'on' : '' ?>" href="<?= $self ?>?key=<?= urlencode(HUIHUO_PANEL_KEY) ?>&tab=api">接口说明</a>
   </div>
@@ -660,6 +704,42 @@ code{background:#f3f4f6;padding:2px 6px;border-radius:6px;font-size:12px}
     </table>
   </div>
 
+<?php elseif ($tab === 'landing'): ?>
+  <div class="card">
+    <p class="muted">官网首页右侧手机叠图（最多 4 张）+ 下方「优点」文案。可上传图片或填 URL；图片 URL 留空且不上传时，官网继续用本地 <code>assets/slide-0N.jpg</code>。</p>
+    <p class="muted">公开接口：<code><?= htmlspecialchars($baseApi) ?>website</code> → <code>data.slides</code></p>
+  </div>
+  <form method="post" enctype="multipart/form-data">
+    <input type="hidden" name="key" value="<?= htmlspecialchars(HUIHUO_PANEL_KEY) ?>"/>
+    <input type="hidden" name="action" value="landing_save"/>
+    <?php foreach (($landing['slides'] ?? []) as $i => $s): ?>
+      <div class="card">
+        <h3 style="margin:0 0 12px;font-size:15px;">叠图 <?= (int)$i + 1 ?></h3>
+        <?php if (!empty($s['image_url'])): ?>
+          <p class="muted">当前图：<code><?= htmlspecialchars((string)$s['image_url']) ?></code></p>
+          <p><img src="<?= htmlspecialchars((string)$s['image_url']) ?>" alt="" style="max-height:160px;border-radius:8px;border:1px solid #e5e7eb;"/></p>
+        <?php endif; ?>
+        <label>上传新图（png/jpg/webp）</label>
+        <input type="file" name="slide_image_<?= (int)$i ?>" accept="image/png,image/jpeg,image/webp,image/gif"/>
+        <label>或图片 URL</label>
+        <input type="text" name="slide[<?= (int)$i ?>][image_url]" value="<?= htmlspecialchars((string)($s['image_url'] ?? '')) ?>" placeholder="https://…/slide.jpg（留空且不上传则保留原图）"/>
+        <label>图片 alt</label>
+        <input type="text" name="slide[<?= (int)$i ?>][alt]" value="<?= htmlspecialchars((string)($s['alt'] ?? '')) ?>"/>
+        <label>叠图标题（手机旁文案）</label>
+        <input type="text" name="slide[<?= (int)$i ?>][title]" value="<?= htmlspecialchars((string)($s['title'] ?? '')) ?>"/>
+        <label>叠图说明</label>
+        <textarea name="slide[<?= (int)$i ?>][desc]" style="min-height:72px"><?= htmlspecialchars((string)($s['desc'] ?? '')) ?></textarea>
+        <label>优点标签（如 01 · 首页）</label>
+        <input type="text" name="slide[<?= (int)$i ?>][adv_label]" value="<?= htmlspecialchars((string)($s['adv_label'] ?? '')) ?>"/>
+        <label>优点标题</label>
+        <input type="text" name="slide[<?= (int)$i ?>][adv_title]" value="<?= htmlspecialchars((string)($s['adv_title'] ?? '')) ?>"/>
+        <label>优点正文</label>
+        <textarea name="slide[<?= (int)$i ?>][adv_body]" style="min-height:88px"><?= htmlspecialchars((string)($s['adv_body'] ?? '')) ?></textarea>
+      </div>
+    <?php endforeach; ?>
+    <div class="card"><div class="row"><button type="submit">保存官网叠图</button></div></div>
+  </form>
+
 <?php elseif ($tab === 'config'): ?>
   <div class="card">
     <h3 style="margin:0 0 12px">QQ 互联登录（审核通过后填这里）</h3>
@@ -695,7 +775,7 @@ code{background:#f3f4f6;padding:2px 6px;border-radius:6px;font-size:12px}
       <li><code><?= htmlspecialchars($baseApi) ?>comment_list&amp;rid=影片ID</code>（按影片过滤，修主题 ajax 串台）</li>
       <li><code><?= htmlspecialchars($baseApi) ?>app_update&amp;platform=android</code></li>
       <li><code><?= htmlspecialchars($baseApi) ?>app_update&amp;platform=ios</code></li>
-      <li><code><?= htmlspecialchars($baseApi) ?>website</code>（官网安装包 + 更新日志）</li>
+      <li><code><?= htmlspecialchars($baseApi) ?>website</code>（官网安装包 + 更新日志 + 叠图 slides）</li>
       <li><code><?= htmlspecialchars($baseApi) ?>app_config</code></li>
       <li><code><?= htmlspecialchars($baseApi) ?>update_report</code>（POST JSON）</li>
     </ul>
@@ -991,6 +1071,80 @@ function huihuoEnsureColumn(PDO $pdo, string $table, string $column, string $ddl
     }
 }
 
+/** 确保 varchar 列至少够长（QQ openid / 头像 URL 会超 MacCMS 默认长度） */
+function huihuoEnsureVarcharMin(PDO $pdo, string $table, string $column, int $minLen, string $extra = "NOT NULL DEFAULT ''"): void
+{
+    try {
+        $st = $pdo->query("SHOW COLUMNS FROM `{$table}` LIKE " . $pdo->quote($column));
+        $row = $st ? $st->fetch(PDO::FETCH_ASSOC) : false;
+        if (!$row) {
+            $pdo->exec("ALTER TABLE `{$table}` ADD COLUMN `{$column}` varchar({$minLen}) {$extra}");
+            return;
+        }
+        $type = strtolower((string)($row['Type'] ?? ''));
+        if (preg_match('/^varchar\((\d+)\)/', $type, $m)) {
+            $cur = (int)$m[1];
+            if ($cur < $minLen) {
+                $pdo->exec("ALTER TABLE `{$table}` MODIFY COLUMN `{$column}` varchar({$minLen}) {$extra}");
+            }
+        }
+    } catch (Throwable $e) {
+        // ignore
+    }
+}
+
+function huihuoTableColumns(PDO $pdo, string $table, bool $refresh = false): array
+{
+    static $cache = [];
+    if ($refresh) {
+        unset($cache[$table]);
+    }
+    if (isset($cache[$table])) {
+        return $cache[$table];
+    }
+    $cols = [];
+    try {
+        $st = $pdo->query("SHOW COLUMNS FROM `{$table}`");
+        foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $c) {
+            $field = (string)$c['Field'];
+            $type = strtolower((string)$c['Type']);
+            $len = null;
+            if (preg_match('/^(?:var)?char\((\d+)\)/', $type, $m)) {
+                $len = (int)$m[1];
+            }
+            $cols[$field] = ['type' => $type, 'len' => $len];
+        }
+    } catch (Throwable $e) {
+        $cols = [];
+    }
+    return $cache[$table] = $cols;
+}
+
+function huihuoFitDbString(string $v, ?int $len): string
+{
+    if ($len === null || $len <= 0) {
+        return $v;
+    }
+    if (function_exists('mb_strlen') && function_exists('mb_substr')) {
+        if (mb_strlen($v, 'UTF-8') <= $len) {
+            return $v;
+        }
+        return mb_substr($v, 0, $len, 'UTF-8');
+    }
+    return strlen($v) <= $len ? $v : substr($v, 0, $len);
+}
+
+/** MacCMS 的 user_*_ip 多为 int（ip2long），少数站改成 varchar */
+function huihuoDbIpValue(array $cols, string $field, string $ip)
+{
+    $type = (string)(($cols[$field]['type'] ?? 'int'));
+    if (strpos($type, 'int') !== false) {
+        $n = ip2long($ip);
+        return $n === false ? 0 : (int)$n;
+    }
+    return huihuoFitDbString($ip, $cols[$field]['len'] ?? 64);
+}
+
 function huihuoEnsureCheckinTable(PDO $pdo, string $table): void
 {
     $pdo->exec(
@@ -1094,7 +1248,15 @@ function huihuoQqVerifyToken(string $appId, string $accessToken, string $openid)
     $info = json_decode($infoRaw, true);
     if (is_array($info) && (int)($info['ret'] ?? -1) === 0) {
         $nick = trim((string)($info['nickname'] ?? ''));
-        $portrait = trim((string)($info['figureurl_qq_2'] ?? $info['figureurl_qq_1'] ?? $info['figureurl_2'] ?? ''));
+        // 优先大图，其次中图；过长时由写入侧截断
+        $portrait = trim((string)(
+            $info['figureurl_qq_2']
+            ?? $info['figureurl_qq']
+            ?? $info['figureurl_qq_1']
+            ?? $info['figureurl_2']
+            ?? $info['figureurl']
+            ?? ''
+        ));
     }
     return ['openid' => $gotOpen, 'nickname' => $nick, 'portrait' => $portrait];
 }
@@ -1118,7 +1280,7 @@ function huihuoMacUserCookieHeader(array $u): string
         'user_check=' . $check,
         'user_random=' . $random,
     ];
-    if ($portrait !== '') {
+    if ($portrait !== '' && strlen($portrait) <= 180) {
         $parts[] = 'user_portrait=' . rawurlencode($portrait);
     }
     return implode('; ', $parts);
@@ -1140,25 +1302,59 @@ function huihuoQqOauthLogin(PDO $pdo, string $prefix, string $tConfig, string $r
 
     $profile = huihuoQqVerifyToken($cfg['app_id'], $token, $openid);
     $nick = $profile['nickname'] !== '' ? $profile['nickname'] : $nickHint;
-    if ($nick === '') {
+    $nickCompact = strtolower(preg_replace('/\s+/u', '', $nick));
+    if ($nick === '' || $nickCompact === 'deleted' || $nickCompact === 'delete' || $nick === '游客') {
         $nick = 'QQ用户' . substr(md5($openid), 0, 6);
     }
     $portrait = (string)$profile['portrait'];
+    if (strpos($portrait, '//') === 0) {
+        $portrait = 'https:' . $portrait;
+    } elseif ($portrait !== '' && stripos($portrait, 'http://') === 0) {
+        $portrait = 'https://' . substr($portrait, 7);
+    }
 
     $tUser = $prefix . 'user';
     $tGroup = $prefix . 'group';
 
-    // 用 user_qq 存 openid（兼容无独立 openid 字段的站点）
-    $st = $pdo->prepare("SELECT * FROM `{$tUser}` WHERE `user_qq`=? LIMIT 1");
-    $st->execute([$openid]);
+    huihuoEnsureColumn($pdo, $tUser, 'user_openid_qq', "varchar(64) NOT NULL DEFAULT ''");
+    huihuoEnsureVarcharMin($pdo, $tUser, 'user_openid_qq', 64);
+    huihuoEnsureVarcharMin($pdo, $tUser, 'user_portrait', 500);
+    huihuoEnsureVarcharMin($pdo, $tUser, 'user_nick_name', 64);
+    $cols = huihuoTableColumns($pdo, $tUser, true);
+
+    $openidCol = isset($cols['user_openid_qq']) ? 'user_openid_qq' : null;
+    if ($openidCol === null) {
+        throw new RuntimeException('用户表缺少 user_openid_qq 字段，无法绑定 QQ');
+    }
+    $openidStore = huihuoFitDbString($openid, $cols[$openidCol]['len'] ?? 64);
+    $nick = huihuoFitDbString($nick, $cols['user_nick_name']['len'] ?? 64);
+    if ($portrait !== '') {
+        $portrait = huihuoFitDbString($portrait, $cols['user_portrait']['len'] ?? 500);
+    }
+
+    $st = $pdo->prepare("SELECT * FROM `{$tUser}` WHERE `{$openidCol}`=? LIMIT 1");
+    $st->execute([$openidStore]);
     $row = $st->fetch(PDO::FETCH_ASSOC);
 
+    // 兼容：旧版误把 openid 截断写进 user_qq 的，尽量迁回
+    if (!$row && isset($cols['user_qq'])) {
+        $qqLen = $cols['user_qq']['len'] ?? 16;
+        $short = huihuoFitDbString($openid, $qqLen);
+        if ($short !== '' && $short === $openidStore) {
+            // openid 本身就短于 user_qq，可查
+            $st2 = $pdo->prepare("SELECT * FROM `{$tUser}` WHERE `user_qq`=? LIMIT 1");
+            $st2->execute([$short]);
+            $row = $st2->fetch(PDO::FETCH_ASSOC);
+        }
+    }
+
     $now = time();
-    $ip = (string)($_SERVER['REMOTE_ADDR'] ?? '');
+    $ipRaw = (string)($_SERVER['REMOTE_ADDR'] ?? '');
+    $ipVal = huihuoDbIpValue($cols, 'user_reg_ip', $ipRaw);
+    $loginIpVal = huihuoDbIpValue($cols, 'user_login_ip', $ipRaw);
 
     if (!$row) {
         $uname = 'qq_' . substr(md5($openid), 0, 12);
-        // 撞名则追加后缀
         $try = $uname;
         for ($i = 0; $i < 8; $i++) {
             $chk = $pdo->prepare("SELECT `user_id` FROM `{$tUser}` WHERE `user_name`=? LIMIT 1");
@@ -1169,6 +1365,7 @@ function huihuoQqOauthLogin(PDO $pdo, string $prefix, string $tConfig, string $r
             }
             $try = $uname . substr(md5($openid . $i), 0, 4);
         }
+        $uname = huihuoFitDbString($uname, $cols['user_name']['len'] ?? 30);
         $pwd = md5(uniqid('qq', true));
         $gid = 2;
         try {
@@ -1183,21 +1380,15 @@ function huihuoQqOauthLogin(PDO $pdo, string $prefix, string $tConfig, string $r
             // ignore
         }
 
-        $cols = ['user_name', 'user_pwd', 'user_nick_name', 'user_qq', 'group_id', 'user_status', 'user_reg_time', 'user_reg_ip', 'user_login_time', 'user_login_ip', 'user_login_num', 'user_points'];
-        $vals = [$uname, $pwd, $nick, $openid, $gid, 1, $now, $ip, $now, $ip, 1, 0];
-        // 可选头像字段
-        try {
-            $hasPortrait = $pdo->query("SHOW COLUMNS FROM `{$tUser}` LIKE 'user_portrait'");
-            if ($hasPortrait && $hasPortrait->fetch() && $portrait !== '') {
-                $cols[] = 'user_portrait';
-                $vals[] = $portrait;
-            }
-        } catch (Throwable $e) {
-            // ignore
+        $colsIns = ['user_name', 'user_pwd', 'user_nick_name', $openidCol, 'group_id', 'user_status', 'user_reg_time', 'user_reg_ip', 'user_login_time', 'user_login_ip', 'user_login_num', 'user_points'];
+        $vals = [$uname, $pwd, $nick, $openidStore, $gid, 1, $now, $ipVal, $now, $loginIpVal, 1, 0];
+        if (isset($cols['user_portrait']) && $portrait !== '') {
+            $colsIns[] = 'user_portrait';
+            $vals[] = $portrait;
         }
-        $ph = implode(',', array_fill(0, count($cols), '?'));
+        $ph = implode(',', array_fill(0, count($colsIns), '?'));
         $pdo->prepare(
-            'INSERT INTO `' . $tUser . '` (`' . implode('`,`', $cols) . '`) VALUES (' . $ph . ')'
+            'INSERT INTO `' . $tUser . '` (`' . implode('`,`', $colsIns) . '`) VALUES (' . $ph . ')'
         )->execute($vals);
         $uid = (int)$pdo->lastInsertId();
         $st = $pdo->prepare("SELECT * FROM `{$tUser}` WHERE `user_id`=? LIMIT 1");
@@ -1208,20 +1399,15 @@ function huihuoQqOauthLogin(PDO $pdo, string $prefix, string $tConfig, string $r
         }
     } else {
         $uid = (int)$row['user_id'];
-        $sets = ['user_login_time=?', 'user_login_ip=?', 'user_login_num=`user_login_num`+1'];
-        $args = [$now, $ip];
+        $sets = ['user_login_time=?', 'user_login_ip=?', 'user_login_num=`user_login_num`+1', "`{$openidCol}`=?"];
+        $args = [$now, $loginIpVal, $openidStore];
         if ($nick !== '') {
             $sets[] = 'user_nick_name=?';
             $args[] = $nick;
         }
-        try {
-            $hasPortrait = $pdo->query("SHOW COLUMNS FROM `{$tUser}` LIKE 'user_portrait'");
-            if ($hasPortrait && $hasPortrait->fetch() && $portrait !== '') {
-                $sets[] = 'user_portrait=?';
-                $args[] = $portrait;
-            }
-        } catch (Throwable $e) {
-            // ignore
+        if (isset($cols['user_portrait']) && $portrait !== '') {
+            $sets[] = 'user_portrait=?';
+            $args[] = $portrait;
         }
         $args[] = $uid;
         $pdo->prepare(
@@ -1244,7 +1430,8 @@ function huihuoQqOauthLogin(PDO $pdo, string $prefix, string $tConfig, string $r
         // ignore
     }
     $row['group_name'] = $gname;
-    if ($portrait !== '' && empty($row['user_portrait'])) {
+    // QQ 头像每次登录刷新（避免只首次写入后被主题空头像冲掉）
+    if ($portrait !== '') {
         $row['user_portrait'] = $portrait;
     }
 
@@ -1257,7 +1444,83 @@ function huihuoQqOauthLogin(PDO $pdo, string $prefix, string $tConfig, string $r
         'portrait' => (string)($row['user_portrait'] ?? $portrait),
         'group_id' => (int)($row['group_id'] ?? 2),
         'group_name' => $gname,
+        'user_points' => (int)($row['user_points'] ?? 0),
+        'points' => (int)($row['user_points'] ?? 0),
     ];
+}
+
+function huihuoDefaultLanding(): array
+{
+    return [
+        'slides' => [
+            [
+                'image_url' => '',
+                'alt' => '首页 · 综艺频道',
+                'title' => '海量分类，一眼找片',
+                'desc' => '推荐 / 电影 / 电视剧 / 综艺 / 动漫 / 短剧分层清晰，热榜与筛选随手切。',
+                'adv_label' => '01 · 首页',
+                'adv_title' => '分类齐全，刷片不迷路',
+                'adv_body' => '顶栏频道覆盖影视全品类，热榜入口醒目；本周热门 + 地区筛选，想看的综艺、电影一划就到。',
+            ],
+            [
+                'image_url' => '',
+                'alt' => '影片详情页',
+                'title' => '详情清楚，选集好点',
+                'desc' => '标签、评分、想看状态齐全；横滑选集，收藏与播放按钮就在手边。',
+                'adv_label' => '02 · 详情',
+                'adv_title' => '信息完整，开播更安心',
+                'adv_body' => '海报、年份地区、类型标签、评分与想看状态一次看清；选集横滑点播，收藏一键收藏。',
+            ],
+            [
+                'image_url' => '',
+                'alt' => '播放页',
+                'title' => '播放顺滑，追更方便',
+                'desc' => '弹幕、投屏、小窗、同类型推荐都在播放页，不用来回跳。',
+                'adv_label' => '03 · 播放',
+                'adv_title' => '播放干净，功能刚好够用',
+                'adv_body' => '进度条、弹幕开关、投屏 / 小窗 / 设置齐备；同页选集与同类型推荐，追更不用跳来跳去。',
+            ],
+            [
+                'image_url' => '',
+                'alt' => '横屏全屏播放',
+                'title' => '横屏全屏，沉浸观影',
+                'desc' => '倍速、裁剪、选集与发弹幕一屏搞定，适合大屏横过来看。',
+                'adv_label' => '04 · 全屏',
+                'adv_title' => '横屏沉浸，大屏也舒服',
+                'adv_body' => '全屏播放支持倍速、裁剪填充、选集与发弹幕；锁屏防误触，适合沙发横过来看。',
+            ],
+        ],
+    ];
+}
+
+function huihuoLoadLanding(PDO $pdo, string $tConfig): array
+{
+    $def = huihuoDefaultLanding();
+    $raw = huihuoKvGet($pdo, $tConfig, 'website_landing');
+    if ($raw === null || $raw === '') {
+        return $def;
+    }
+    $decoded = json_decode($raw, true);
+    if (!is_array($decoded) || !isset($decoded['slides']) || !is_array($decoded['slides'])) {
+        return $def;
+    }
+    $slides = [];
+    for ($i = 0; $i < 4; $i++) {
+        $row = isset($decoded['slides'][$i]) && is_array($decoded['slides'][$i])
+            ? $decoded['slides'][$i]
+            : [];
+        $prev = $def['slides'][$i];
+        $slides[] = [
+            'image_url' => trim((string)($row['image_url'] ?? $prev['image_url'])),
+            'alt' => trim((string)($row['alt'] ?? $prev['alt'])),
+            'title' => trim((string)($row['title'] ?? $prev['title'])),
+            'desc' => trim((string)($row['desc'] ?? $prev['desc'])),
+            'adv_label' => trim((string)($row['adv_label'] ?? $prev['adv_label'])),
+            'adv_title' => trim((string)($row['adv_title'] ?? $prev['adv_title'])),
+            'adv_body' => trim((string)($row['adv_body'] ?? $prev['adv_body'])),
+        ];
+    }
+    return ['slides' => $slides];
 }
 
 function huihuoKvGet(PDO $pdo, string $table, string $k): ?string
@@ -1554,12 +1817,14 @@ function huihuoHandleApi(
                     ];
                 }
             }
+            $landing = huihuoLoadLanding($pdo, $tConfig);
             echo json_encode([
                 'code' => 1,
                 'data' => [
                     'android' => $android,
                     'ios' => $ios,
                     'changelogs' => $logs,
+                    'slides' => $landing['slides'],
                 ],
             ], JSON_UNESCAPED_UNICODE);
             return;
@@ -1720,7 +1985,7 @@ function huihuoHandleApi(
                     $row['user_portrait'] = '';
                     $row['avatar'] = '';
                 } else {
-                    if (str_starts_with($portrait, '//')) {
+                    if (strpos($portrait, '//') === 0) {
                         $portrait = 'https:' . $portrait;
                     } elseif ($portrait !== '' && !preg_match('#^https?://#i', $portrait)) {
                         $portrait = rtrim(huihuoPublicBase(), '/') . '/' . ltrim($portrait, '/');
@@ -1874,7 +2139,7 @@ function huihuoHandleApi(
                     $row['user_portrait'] = '';
                     $row['avatar'] = '';
                 } else {
-                    if (str_starts_with($portrait, '//')) {
+                    if (strpos($portrait, '//') === 0) {
                         $portrait = 'https:' . $portrait;
                     } elseif ($portrait !== '' && !preg_match('#^https?://#i', $portrait)) {
                         $portrait = rtrim(huihuoPublicBase(), '/') . '/' . ltrim($portrait, '/');
@@ -1883,9 +2148,9 @@ function huihuoHandleApi(
                     $row['avatar'] = $portrait;
                 }
                 $pic = trim((string)($row['vod_pic'] ?? ''));
-                if ($pic !== '' && !preg_match('#^https?://#i', $pic) && !str_starts_with($pic, '//')) {
+                if ($pic !== '' && !preg_match('#^https?://#i', $pic) && strpos($pic, '//') !== 0) {
                     $row['vod_pic'] = rtrim(huihuoPublicBase(), '/') . '/' . ltrim($pic, '/');
-                } elseif (str_starts_with($pic, '//')) {
+                } elseif (strpos($pic, '//') === 0) {
                     $row['vod_pic'] = 'https:' . $pic;
                 }
             }
@@ -2183,7 +2448,7 @@ function huihuoHandleApi(
             $tGroup = $prefix . 'group';
             $st = $pdo->prepare(
                 "SELECT `u`.`user_id`,`u`.`user_name`,`u`.`user_nick_name`,`u`.`user_points`,
-                        `u`.`user_end_time`,`u`.`group_id`,
+                        `u`.`user_portrait`,`u`.`user_end_time`,`u`.`group_id`,
                         `u`.`user_login_time`,`u`.`user_login_ip`,
                         `u`.`user_last_login_time`,`u`.`user_last_login_ip`,
                         COALESCE(NULLIF(`g`.`group_name`,''),'') AS `group_name`
@@ -2235,6 +2500,7 @@ function huihuoHandleApi(
                     'user_id' => (int)$row['user_id'],
                     'user_name' => (string)($row['user_name'] ?? ''),
                     'user_nick_name' => (string)($row['user_nick_name'] ?? ''),
+                    'user_portrait' => (string)($row['user_portrait'] ?? ''),
                     'user_points' => (int)($row['user_points'] ?? 0),
                     'group_id' => (int)($row['group_id'] ?? 0),
                     'group_name' => (string)($row['group_name'] ?? ''),

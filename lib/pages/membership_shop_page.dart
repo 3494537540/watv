@@ -67,9 +67,8 @@ class _MembershipShopPageState extends State<MembershipShopPage> {
         });
         return;
       }
-      try {
-        await CmsAuthController.instance.refreshProfile();
-      } catch (_) {}
+      // 打开弹窗只拉套餐页，不要 refreshProfile：
+      // 否则会 notify「我的」整页重载（收藏/播放/封面详情），2G 机立刻打满。
       final plans =
           await CmsAuthController.instance.api.fetchVipPlans();
       if (!mounted) return;
@@ -143,6 +142,10 @@ class _MembershipShopPageState extends State<MembershipShopPage> {
       DialogX.showWarning('积分不足（需要 ${pkg.points}，当前 $points）');
       return;
     }
+    if (pkg.points <= 0) {
+      DialogX.showWarning('套餐积分异常，请稍后重试');
+      return;
+    }
 
     setState(() => _buying = true);
     DialogX.showWait('开通中…');
@@ -157,9 +160,18 @@ class _MembershipShopPageState extends State<MembershipShopPage> {
       DialogX.showSuccess(msg.isEmpty ? '开通成功' : msg);
       if (mounted) Navigator.of(context).maybePop();
     } on CmsUserException catch (e) {
+      // 失败时强制从面板拉回真实积分，避免界面显示成 0
+      try {
+        await CmsAuthController.instance.refreshProfile();
+      } catch (_) {}
       DialogX.showWarning(e.message);
+      if (mounted) setState(() {});
     } catch (_) {
+      try {
+        await CmsAuthController.instance.refreshProfile();
+      } catch (_) {}
       DialogX.showWarning('开通失败');
+      if (mounted) setState(() {});
     } finally {
       if (mounted) setState(() => _buying = false);
     }

@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../state/cms_auth_controller.dart';
 import 'cms_message_store.dart';
 import 'huihuo_panel_api.dart';
 import 'local_notification_service.dart';
@@ -37,17 +38,15 @@ abstract final class VodNewCollectService {
         final titles = await HuihuoPanelApi.syncVodCollectAnnounce();
         if (titles.isNotEmpty) {
           announced = true;
-          final stamp = DateTime.now().millisecondsSinceEpoch;
-          await LocalNotificationService.showInboxMessage(
-            messageId: 'vod_new_sys_$stamp',
-            title: '今日新增 ${titles.length} 部剧',
-            body: '打开 App 查看详情',
-          );
+          // 不在这里直接弹系统通知；交给下方 refresh(pushSystem) 只推最新一条
         }
         // 面板写了公告后，刷新站内信列表（系统通知由 store 推送）
         try {
+          final uid = CmsAuthController.instance.user?.userId ?? 0;
           await CmsMessageStore.instance.refresh(
             messageApi ?? MacCmsUserApi(),
+            userId: uid,
+            pushSystem: announced,
           );
         } catch (_) {}
       } catch (e) {

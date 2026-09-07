@@ -129,10 +129,12 @@ class CmsMessageStore extends ChangeNotifier {
   }
 
   /// 并行拉哇TV 面板通知 + CMS 站内信；面板优先，避免 CMS 卡住导致无公告。
+  /// [pushSystem] 为 false 时只刷新列表，不弹系统通知（避免多处刷新刷屏）。
   Future<List<CmsMessageItem>> refresh(
     MacCmsUserApi api, {
     int userId = 0,
     bool allowFallback = true,
+    bool pushSystem = true,
   }) async {
     await bootstrap(userId: userId);
     lastFetchError = null;
@@ -236,7 +238,9 @@ class CmsMessageStore extends ChangeNotifier {
     notifyListeners();
 
     // 系统公告 / 站内信 → 同步推到系统通知栏（与软件内「公告」列表联动）
-    await _pushSystemNotificationsForNew(prevIds);
+    if (pushSystem) {
+      await _pushSystemNotificationsForNew(prevIds);
+    }
 
     return _items;
   }
@@ -295,27 +299,54 @@ class CmsMessageStore extends ChangeNotifier {
     final notified =
         (prefs.getStringList(_notifiedKey) ?? const <String>[]).toSet();
     final now = DateTime.now().millisecondsSinceEpoch;
-    final isColdStart = prevIds.isEmpty;
+    const maxAge = Duration(hours: 36);
+
+    int createdMs(CmsMessageItem m) {
+      if (m.createdAt <= 0) return now;
+      return m.createdAt > 2000000000 ? m.createdAt : m.createdAt * 1000;
+    }
+
+    // 首次（本账号）：把当前列表全部记为已通知，避免历史公告一次刷屏
+    final seededKey = 'cms_messages_notify_seeded_v2_$_userId';
+    final seeded = prefs.getBool(seededKey) ?? false;
+    if (!seeded) {
+      for (final m in _items) {
+        notified.add(m.id);
+      }
+      // 也把刚拉到、但还没进 _items 的情况兜住
+      for (final id in prevIds) {
+        notified.add(id);
+      }
+      await prefs.setStringList(_notifiedKey, notified.toList());
+      await prefs.setBool(seededKey, true);
+      return;
+    }
+
+    // 过期未推的直接记已通知，不再弹
+    var dirty = false;
+    for (final m in _items) {
+      if (notified.contains(m.id)) continue;
+      if (now - createdMs(m) > maxAge.inMilliseconds) {
+        notified.add(m.id);
+        dirty = true;
+      }
+    }
 
     final candidates = _items.where((m) {
       if (m.read) return false;
       if (notified.contains(m.id)) return false;
-      // 冷启动：只推最近 3 天的新公告，避免历史刷屏
-      if (isColdStart) {
-        final created = m.createdAt <= 0
-            ? now
-            : (m.createdAt > 2000000000 ? m.createdAt : m.createdAt * 1000);
-        if (now - created > const Duration(days: 3).inMilliseconds) {
-          notified.add(m.id);
-          return false;
-        }
-      }
+      if (now - createdMs(m) > maxAge.inMilliseconds) return false;
       return true;
-    }).take(5);
+    }).toList()
+      ..sort((a, b) {
+        final c = b.createdAt.compareTo(a.createdAt);
+        if (c != 0) return c;
+        return b.id.compareTo(a.id);
+      });
 
-    var changed = false;
-    for (final m in candidates) {
-      // 片库/剧集类：系统通知不推具体片名（站内信仍保留全文）
+    // 只推最新一条；其余同批新公告记已通知，避免连弹
+    if (candidates.isNotEmpty) {
+      final m = candidates.first;
       final isVodDigest = m.tag.contains('片库') ||
           m.tag.contains('剧集') ||
           m.title.contains('片库更新') ||
@@ -335,26 +366,16 @@ class CmsMessageStore extends ChangeNotifier {
           title: m.title.isEmpty ? '新公告' : m.title,
           body: body,
         );
-        notified.add(m.id);
-        changed = true;
       } catch (e) {
         debugPrint('inbox notify failed: $e');
       }
-    }
-    // 把已跳过的历史 id 也记上，避免下次再扫
-    if (isColdStart) {
-      for (final m in _items) {
-        if (!notified.contains(m.id) && m.createdAt > 0) {
-          final created =
-              m.createdAt > 2000000000 ? m.createdAt : m.createdAt * 1000;
-          if (now - created > const Duration(days: 3).inMilliseconds) {
-            notified.add(m.id);
-            changed = true;
-          }
-        }
+      for (final x in candidates) {
+        notified.add(x.id);
       }
+      dirty = true;
     }
-    if (changed || notified.isNotEmpty) {
+
+    if (dirty) {
       await prefs.setStringList(_notifiedKey, notified.toList());
     }
   }

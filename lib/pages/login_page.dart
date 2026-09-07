@@ -258,11 +258,27 @@ class _LoginPageState extends State<LoginPage>
         DialogX.showWarning(r.message);
         return;
       }
+      if (r.cookieHeader.trim().isEmpty) {
+        DialogX.showError('QQ 登录未返回会话');
+        return;
+      }
+      // 注入 CMS 会话，并直接使用 QQ 昵称 / 头像
+      await CmsAuthController.instance.loginWithQq(
+        cookieHeader: r.cookieHeader,
+        userId: r.userId,
+        userName: r.userName,
+        nickName: r.nickName,
+        portrait: r.portrait,
+        points: r.points,
+      );
+      if (!mounted) return;
       DialogX.showSuccess(r.message.isEmpty ? 'QQ 登录成功' : r.message);
       await Future<void>.delayed(const Duration(milliseconds: 280));
       if (!mounted) return;
       if (widget.asLaunchGate) return;
       if (widget.popOnSuccess) Navigator.of(context).pop(true);
+    } on CmsUserException catch (e) {
+      DialogX.showError(e.message);
     } catch (_) {
       DialogX.showError('QQ 登录失败，请稍后重试');
     } finally {
@@ -461,38 +477,10 @@ class _LoginPageState extends State<LoginPage>
                 width: double.infinity,
                 height: 54,
                 child: FilledButton(
-                  onPressed: () => _openForm(LoginPageMode.login),
+                  onPressed: _busy ? null : _onQqLogin,
                   style: FilledButton.styleFrom(
                     backgroundColor: AppColors.brand,
                     foregroundColor: Colors.white,
-                    elevation: 0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(22),
-                    ),
-                    textStyle: const TextStyle(
-                      fontFamily: 'AppSans',
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  child: const Text('账号密码登录'),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          _fadeSlide(
-            animation: a4,
-            child: PressScale(
-              child: SizedBox(
-                width: double.infinity,
-                height: 54,
-                child: OutlinedButton(
-                  onPressed: _busy ? null : _onQqLogin,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.text,
-                    backgroundColor: const Color(0xFFF8F8F8),
-                    side: BorderSide.none,
                     elevation: 0,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(22),
@@ -508,9 +496,37 @@ class _LoginPageState extends State<LoginPage>
                     children: [
                       QqBrandIcon(size: 22),
                       SizedBox(width: 8),
-                      Text('QQ 登录'),
+                      Text('QQ 一键登录'),
                     ],
                   ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          _fadeSlide(
+            animation: a4,
+            child: PressScale(
+              child: SizedBox(
+                width: double.infinity,
+                height: 54,
+                child: OutlinedButton(
+                  onPressed: () => _openForm(LoginPageMode.login),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.text,
+                    backgroundColor: const Color(0xFFF8F8F8),
+                    side: BorderSide.none,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(22),
+                    ),
+                    textStyle: const TextStyle(
+                      fontFamily: 'AppSans',
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  child: const Text('账号密码登录'),
                 ),
               ),
             ),
@@ -829,7 +845,7 @@ class _LoginPageState extends State<LoginPage>
                       children: [
                         QqBrandIcon(size: 22),
                         SizedBox(width: 8),
-                        Text('QQ 登录'),
+                        Text('QQ 一键登录'),
                       ],
                     ),
                   ),

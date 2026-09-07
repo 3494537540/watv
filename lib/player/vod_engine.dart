@@ -5,7 +5,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
-import 'player_settings_store.dart';
 import 'vod_playback.dart';
 
 class VodBufferedRange {
@@ -87,7 +86,6 @@ abstract class VodEngine extends ChangeNotifier {
   Future<void> setPlaybackSpeed(double rate);
   Future<void> setLooping(bool looping);
 
-  /// media_kit 等用自身 BoxFit，勿外套 FittedBox（否则易黑屏）
   bool get prefersIntrinsicFit => false;
 
   Widget buildSurface({
@@ -96,10 +94,9 @@ abstract class VodEngine extends ChangeNotifier {
     Alignment alignment = Alignment.center,
   });
 
-  /// iOS video_player 画中画用；其它内核为 null
+  /// iOS video_player 画中画用
   int? get nativePlayerId => null;
 
-  /// 仅系统内核有
   VideoPlayerController? get rawVideoPlayer => null;
 
   Future<void> release();
@@ -122,10 +119,7 @@ abstract class VodEngine extends ChangeNotifier {
   }
 }
 
-VodEngine createVodEngine(PlayerKernel kernel) {
-  // 仅保留系统 Exo / AVPlayer
-  return VideoPlayerVodEngine();
-}
+VodEngine createVodEngine() => VideoPlayerVodEngine();
 
 class VideoPlayerVodEngine extends VodEngine {
   VideoPlayerController? _c;

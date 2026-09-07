@@ -361,6 +361,7 @@ class HuihuoPanelApi {
       userName: '${d['user_name'] ?? ''}'.trim(),
       nickName: '${d['nick_name'] ?? d['nickname'] ?? ''}'.trim(),
       portrait: '${d['portrait'] ?? ''}'.trim(),
+      points: int.tryParse('${d['user_points'] ?? d['points'] ?? 0}') ?? 0,
       msg: msg.isEmpty ? '登录成功' : msg,
     );
   }
@@ -608,6 +609,7 @@ class QqOauthSession {
     this.userName = '',
     this.nickName = '',
     this.portrait = '',
+    this.points = 0,
     this.msg = '',
   });
 
@@ -616,5 +618,6 @@ class QqOauthSession {
   final String userName;
   final String nickName;
   final String portrait;
+  final int points;
   final String msg;
 }

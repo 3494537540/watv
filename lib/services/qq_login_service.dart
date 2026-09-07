@@ -108,6 +108,7 @@ class QqLoginService {
         userName: session.userName,
         nickName: session.nickName,
         portrait: session.portrait,
+        points: session.points,
       );
     } on TimeoutException {
       return const QqLoginResult(ok: false, message: 'QQ 授权超时，请重试');
@@ -141,6 +142,7 @@ class QqLoginResult {
     this.userName = '',
     this.nickName = '',
     this.portrait = '',
+    this.points = 0,
   });
 
   final bool ok;
@@ -152,4 +154,5 @@ class QqLoginResult {
   final String userName;
   final String nickName;
   final String portrait;
+  final int points;
 }

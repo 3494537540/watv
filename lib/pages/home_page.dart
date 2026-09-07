@@ -151,7 +151,12 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       final uid = CmsAuthController.instance.user?.userId ?? 0;
       await CmsMessageStore.instance.bootstrap(userId: uid);
       final api = CmsAuthController.instance.api;
-      await CmsMessageStore.instance.refresh(api, userId: uid);
+      // 角标只刷新列表；系统推送交给 MainShell 启动扫描，避免重复弹
+      await CmsMessageStore.instance.refresh(
+        api,
+        userId: uid,
+        pushSystem: false,
+      );
     } catch (_) {}
     if (!mounted) return;
     setState(() => _inboxBadge = CmsMessageStore.instance.unreadCount);
@@ -467,9 +472,24 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _loadBanners() {
-    _hotByTab.remove(_tabIndex);
-    _genreCache.removeWhere((k, _) => k.startsWith('$_tabIndex:'));
-    return _loadHotContent(force: true);
+    // 有缓存时保留展示，后台刷新；避免清空后强制全量打接口把服务器打满
+    final hadCache = _hotByTab.containsKey(_tabIndex);
+    if (!hadCache) {
+      _hotByTab.remove(_tabIndex);
+      _genreCache.removeWhere((k, _) => k.startsWith('$_tabIndex:'));
+    }
+    return _loadHotContent(force: true).timeout(
+      const Duration(seconds: 18),
+      onTimeout: () {
+        if (!mounted) return;
+        if (_hotMovies.isEmpty && _heroMovies.isEmpty) {
+          setState(() {
+            _bannerError = '加载超时，服务器繁忙请稍后重试';
+            _genreLoading = false;
+          });
+        }
+      },
+    );
   }
 
   void _onQuickEntryTap(int i) {

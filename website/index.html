@@ -694,7 +694,7 @@
     <section class="download" id="download">
       <div class="wrap fx fx-scale">
         <h2>安卓 &amp; iOS 安装</h2>
-        <p>双端均可安装。安卓直接下 APK；iOS 用 Safari 打开安装页一键安装。</p>
+        <p>双端均可安装。安卓直接下 APK；iOS 用 Safari 打开安装页：先装描述文件，再证书签名安装。</p>
         <div class="cta">
           <a class="btn btn-brand" id="apkLink" href="#">
             <svg class="android-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.6 9.48l1.84-3.18c.16-.31.04-.69-.26-.85a.637.637 0 0 0-.83.22l-1.88 3.24a11.43 11.43 0 0 0-8.94 0L5.65 5.67a.643.643 0 0 0-.87-.2c-.28.18-.37.54-.2.83L6.4 9.48A10.78 10.78 0 0 0 1 18h22a10.78 10.78 0 0 0-5.4-8.52zM7 15.25a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5zm10 0a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5z"/></svg>
@@ -707,7 +707,7 @@
             <span class="ver" id="iosVer" hidden></span>
           </a>
         </div>
-        <p class="store-note">iOS 请用 Safari 打开安装页；安卓安装包由官方渠道同步。</p>
+        <p class="store-note">iOS 请用 Safari 打开安装页（先描述文件，再安装 App）；安卓安装包由官方渠道同步。</p>
       </div>
     </section>
   </main>
@@ -835,43 +835,132 @@
       setTimeout(clearReveal, 1200);
     });
 
-    const slides = [
+    let slides = [
       {
+        image_url: "assets/slide-01.jpg",
+        alt: "首页 · 综艺频道",
         title: "海量分类，一眼找片",
-        desc: "推荐 / 电影 / 电视剧 / 综艺 / 动漫 / 短剧分层清晰，热榜与筛选随手切。"
+        desc: "推荐 / 电影 / 电视剧 / 综艺 / 动漫 / 短剧分层清晰，热榜与筛选随手切。",
+        adv_label: "01 · 首页",
+        adv_title: "分类齐全，刷片不迷路",
+        adv_body: "顶栏频道覆盖影视全品类，热榜入口醒目；本周热门 + 地区筛选，想看的综艺、电影一划就到。"
       },
       {
+        image_url: "assets/slide-02.jpg",
+        alt: "影片详情页",
         title: "详情清楚，选集好点",
-        desc: "标签、评分、想看状态齐全；横滑选集，收藏与播放按钮就在手边。"
+        desc: "标签、评分、想看状态齐全；横滑选集，收藏与播放按钮就在手边。",
+        adv_label: "02 · 详情",
+        adv_title: "信息完整，开播更安心",
+        adv_body: "海报、年份地区、类型标签、评分与想看状态一次看清；选集横滑点播，收藏一键收藏。"
       },
       {
+        image_url: "assets/slide-03.jpg",
+        alt: "播放页",
         title: "播放顺滑，追更方便",
-        desc: "弹幕、投屏、小窗、同类型推荐都在播放页，不用来回跳。"
+        desc: "弹幕、投屏、小窗、同类型推荐都在播放页，不用来回跳。",
+        adv_label: "03 · 播放",
+        adv_title: "播放干净，功能刚好够用",
+        adv_body: "进度条、弹幕开关、投屏 / 小窗 / 设置齐备；同页选集与同类型推荐，追更不用跳来跳去。"
       },
       {
+        image_url: "assets/slide-04.jpg",
+        alt: "横屏全屏播放",
         title: "横屏全屏，沉浸观影",
-        desc: "倍速、裁剪、选集与发弹幕一屏搞定，适合大屏横过来看。"
+        desc: "倍速、裁剪、选集与发弹幕一屏搞定，适合大屏横过来看。",
+        adv_label: "04 · 全屏",
+        adv_title: "横屏沉浸，大屏也舒服",
+        adv_body: "全屏播放支持倍速、裁剪填充、选集与发弹幕；锁屏防误触，适合沙发横过来看。"
       }
     ];
 
-    const cards = [...document.querySelectorAll(".stack-card")];
+    const stackEl = document.getElementById("stack");
+    const advListEl = document.getElementById("advList");
+    let cards = [...document.querySelectorAll(".stack-card")];
     const dots = document.getElementById("dots");
     const titleEl = document.getElementById("slideTitle");
     const descEl = document.getElementById("slideDesc");
     const stepEl = document.getElementById("slideStep");
-    const advs = [...document.querySelectorAll(".adv")];
+    let advs = [...document.querySelectorAll(".adv")];
     let active = 0;
     let timer = null;
     let resizing = false;
     let resizeTimer = null;
 
-    slides.forEach((_, i) => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.setAttribute("aria-label", "第 " + (i + 1) + " 张");
-      b.addEventListener("click", () => go(i, true));
-      dots.appendChild(b);
-    });
+    function rebuildDots() {
+      dots.innerHTML = "";
+      slides.forEach((_, i) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.setAttribute("aria-label", "第 " + (i + 1) + " 张");
+        b.addEventListener("click", () => go(i, true));
+        dots.appendChild(b);
+      });
+    }
+
+    function bindCardClicks() {
+      cards.forEach((card) => {
+        card.addEventListener("click", () => go(Number(card.dataset.index) + 1, true));
+      });
+    }
+
+    function bindAdvClicks() {
+      advs.forEach((a) => {
+        a.addEventListener("click", () => go(Number(a.dataset.i), true));
+      });
+    }
+
+    function esc(s) {
+      return String(s == null ? "" : s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function applySlides(list) {
+      if (!Array.isArray(list) || !list.length) return;
+      const next = [];
+      for (let i = 0; i < Math.min(4, list.length); i++) {
+        const row = list[i] || {};
+        const fallback = slides[i] || slides[0];
+        const img = String(row.image_url || "").trim();
+        next.push({
+          image_url: img || fallback.image_url || ("assets/slide-0" + (i + 1) + ".jpg"),
+          alt: String(row.alt || fallback.alt || "").trim() || fallback.alt,
+          title: String(row.title || fallback.title || "").trim() || fallback.title,
+          desc: String(row.desc || fallback.desc || "").trim() || fallback.desc,
+          adv_label: String(row.adv_label || fallback.adv_label || "").trim() || fallback.adv_label,
+          adv_title: String(row.adv_title || fallback.adv_title || "").trim() || fallback.adv_title,
+          adv_body: String(row.adv_body || fallback.adv_body || "").trim() || fallback.adv_body
+        });
+      }
+      if (!next.length) return;
+      slides = next;
+      stackEl.innerHTML = slides.map((s, i) =>
+        '<div class="stack-card" data-index="' + i + '">' +
+          '<img src="' + esc(s.image_url) + '" alt="' + esc(s.alt) + '" width="460" height="1024" />' +
+        "</div>"
+      ).join("");
+      advListEl.innerHTML = slides.map((s, i) =>
+        '<article class="adv' + (i === active ? " on" : "") + ' fx" data-i="' + i + '" style="--d:' + (60 + i * 80) + 'ms;">' +
+          '<div class="idx">' + esc(s.adv_label) + "</div>" +
+          "<h3>" + esc(s.adv_title) + "</h3>" +
+          "<p>" + esc(s.adv_body) + "</p>" +
+        "</article>"
+      ).join("");
+      cards = [...stackEl.querySelectorAll(".stack-card")];
+      advs = [...advListEl.querySelectorAll(".adv")];
+      if (active >= slides.length) active = 0;
+      rebuildDots();
+      bindCardClicks();
+      bindAdvClicks();
+      layout();
+    }
+
+    rebuildDots();
+    bindCardClicks();
+    bindAdvClicks();
 
     function layout() {
       const n = cards.length;
@@ -908,13 +997,6 @@
       if (resizing || document.hidden) return;
       timer = setInterval(next, 3800);
     }
-
-    cards.forEach((card) => {
-      card.addEventListener("click", () => go(Number(card.dataset.index) + 1, true));
-    });
-    advs.forEach((a) => {
-      a.addEventListener("click", () => go(Number(a.dataset.i), true));
-    });
 
     const wrap = document.getElementById("stackWrap");
     wrap.addEventListener("mouseenter", stop);
@@ -1096,6 +1178,9 @@
           setDownload(iosLink, iosVer, data.ios, true);
           iosLink.href = IOS_INSTALL;
           renderLogs(Array.isArray(data.changelogs) ? data.changelogs : []);
+          if (Array.isArray(data.slides) && data.slides.length) {
+            applySlides(data.slides);
+          }
           return;
         }
       } catch (_) { /* fall through */ }

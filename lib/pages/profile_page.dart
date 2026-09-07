@@ -115,6 +115,8 @@ class _ProfilePageState extends State<ProfilePage> {
   void _onAuth() {
     if (!mounted) return;
     setState(() {});
+    // 下拉刷新里已经会 loadLists；这里再拉会叠一套请求把 2G 机打满
+    if (_refreshing) return;
     _loadLists(showSkeleton: false);
     unawaited(_loadCheckinStatus());
     unawaited(_loadCommentCount());
@@ -124,27 +126,37 @@ class _ProfilePageState extends State<ProfilePage> {
     if (_refreshing) return;
     setState(() => _refreshing = true);
     try {
-      unawaited(
-        CmsMessageStore.instance
-            .refresh(CmsAuthController.instance.api)
-            .then((_) {
-          if (mounted) setState(() {});
-        }),
-      );
-      if (CmsAuthController.instance.isLoggedIn) {
-        try {
-          await CmsAuthController.instance.refreshProfile();
-        } catch (_) {}
-        await _loadCheckinStatus();
-      } else if (mounted) {
-        setState(() {
-          _checkedToday = false;
-          _checkinStreak = 0;
-          _commentCount = 0;
-        });
+      await Future(() async {
+        unawaited(
+          CmsMessageStore.instance
+              .refresh(
+            CmsAuthController.instance.api,
+            userId: CmsAuthController.instance.user?.userId ?? 0,
+            pushSystem: false,
+          )
+              .then((_) {
+            if (mounted) setState(() {});
+          }),
+        );
+        if (CmsAuthController.instance.isLoggedIn) {
+          try {
+            await CmsAuthController.instance.refreshProfile();
+          } catch (_) {}
+          await _loadCheckinStatus();
+        } else if (mounted) {
+          setState(() {
+            _checkedToday = false;
+            _checkinStreak = 0;
+            _commentCount = 0;
+          });
+        }
+        await _loadLists(showSkeleton: false);
+        unawaited(_loadCommentCount());
+      }).timeout(const Duration(seconds: 18));
+    } on TimeoutException {
+      if (mounted) {
+        DialogX.showWarning('刷新超时，服务器繁忙请稍后重试');
       }
-      await _loadLists(showSkeleton: false);
-      unawaited(_loadCommentCount());
     } finally {
       if (mounted) setState(() => _refreshing = false);
     }
@@ -169,6 +181,11 @@ class _ProfilePageState extends State<ProfilePage> {
         _checkinStreak = s.streak;
         if (s.rewardPoints > 0) _checkinReward = s.rewardPoints;
       });
+      // QQ 登录后主题页积分为 0：用打卡状态接口同步真实积分
+      if (s.userPoints > 0) {
+        await CmsAuthController.instance.applyLocalPoints(s.userPoints);
+        if (mounted) setState(() {});
+      }
     } catch (_) {}
   }
 
@@ -207,6 +224,14 @@ class _ProfilePageState extends State<ProfilePage> {
       try {
         await CmsAuthController.instance.refreshProfile();
       } catch (_) {}
+      // 打卡接口带回的积分更准，避免主题页解析成 0
+      if (s.userPoints > 0) {
+        final u = CmsAuthController.instance.user;
+        if (u != null) {
+          // 直接写回本地展示（refreshProfile 已优先面板分，这里兜底）
+          await CmsAuthController.instance.applyLocalPoints(s.userPoints);
+        }
+      }
       if (mounted) setState(() {});
     } catch (e) {
       DialogX.dismiss();
@@ -394,7 +419,8 @@ class _ProfilePageState extends State<ProfilePage> {
     List<CmsUlogItem> items, {
     bool forFavs = false,
   }) async {
-    final need = items.where(_needsCoverEnrich).take(20).toList();
+    // 最多补 8 张封面，且串行请求，避免下拉「我的」一次打爆 PHP/MySQL
+    final need = items.where(_needsCoverEnrich).take(8).toList();
     if (need.isEmpty) return;
     final cms = MacCmsApi();
     final map = <String, ({String pic, String name})>{};
@@ -434,7 +460,10 @@ class _ProfilePageState extends State<ProfilePage> {
       }
     }
 
-    await Future.wait([for (final it in need) fetchOne(it)]);
+    for (final it in need) {
+      await fetchOne(it);
+      if (!mounted) return;
+    }
     if (!mounted || map.isEmpty) return;
     setState(() {
       List<CmsUlogItem> patch(List<CmsUlogItem> list) => [

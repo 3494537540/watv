@@ -45,6 +45,36 @@ class MacCmsApi {
   /// 主流剧分类：国产/台/韩/欧美/日/港/连续剧（排除泰剧等）
   static const _preferredTvTypeIds = {13, 14, 15, 16, 24, 45, 51};
 
+  /// 2G 小机：分类详情串行拉取，避免一刷新就把 PHP/MySQL 顶满
+  static const int _detailFetchConcurrency = 1;
+
+  /// 热门兜底只用少量子类（够拼出首页列表，不必扫完全部分类）
+  static const List<int> _hotFallbackMovieTypeIds = [6, 7, 8, 9, 10, 12];
+  static const List<int> _hotFallbackTvTypeIds = [13, 14, 15, 16];
+
+  /// 有限并发执行 [items]，最多 [concurrency] 路同时跑
+  static Future<List<T>> _poolMap<S, T>(
+    Iterable<S> items,
+    Future<T> Function(S item) mapper, {
+    int concurrency = _detailFetchConcurrency,
+  }) async {
+    final list = items.toList(growable: false);
+    if (list.isEmpty) return const [];
+    final n = concurrency.clamp(1, list.length);
+    final out = List<T?>.filled(list.length, null);
+    var next = 0;
+    Future<void> worker() async {
+      while (true) {
+        final i = next++;
+        if (i >= list.length) return;
+        out[i] = await mapper(list[i]);
+      }
+    }
+
+    await Future.wait([for (var i = 0; i < n; i++) worker()]);
+    return [for (final v in out) v as T];
+  }
+
   Uri _vodUri(Map<String, String> query) {
     return Uri.parse(ApiConfig.macCmsVodProvide).replace(queryParameters: {
       if (ApiConfig.useCmsWebProxy) ...{
@@ -346,16 +376,13 @@ class MacCmsApi {
     final exclude = ApiConfig.macCmsBannerExcludeTypeIds;
 
     Future<List<Map<String, dynamic>>> loadTypes(List<int> typeIds) async {
-      final pages = await Future.wait([
-        for (final tid in typeIds)
-          () async {
-            try {
-              return await _get({'ac': 'detail', 'pg': '1', 't': '$tid'});
-            } catch (_) {
-              return <String, dynamic>{};
-            }
-          }(),
-      ]);
+      final pages = await _poolMap(typeIds, (tid) async {
+        try {
+          return await _get({'ac': 'detail', 'pg': '1', 't': '$tid'});
+        } catch (_) {
+          return <String, dynamic>{};
+        }
+      });
       final out = <Map<String, dynamic>>[];
       for (final json in pages) {
         final raw = json['list'];
@@ -396,11 +423,11 @@ class MacCmsApi {
       return byId.values.toList()..sort((a, b) => b.score.compareTo(a.score));
     }
 
-    // 单分类：直接 t=一级分类，或电影/剧子类列表
+    // 单分类：直接 t=一级分类，或电影/剧子类列表（只取少量子类）
     if (typeId != null) {
       final typeIds = switch (typeId) {
-        1 => ApiConfig.macCmsMovieTypeIds,
-        2 => ApiConfig.macCmsTvTypeIds,
+        1 => _hotFallbackMovieTypeIds,
+        2 => _hotFallbackTvTypeIds,
         _ => [typeId],
       };
       final raw = await loadTypes(typeIds);
@@ -414,14 +441,15 @@ class MacCmsApi {
       ];
     }
 
-    final results = await Future.wait([
-      loadTypes(ApiConfig.macCmsMovieTypeIds),
-      loadTypes(ApiConfig.macCmsTvTypeIds),
-    ]);
-
-    final hotMovies = rank(results[0]);
-    var hotTvs = rank(results[1], tvPreferredOnly: true);
-    if (hotTvs.isEmpty) hotTvs = rank(results[1]);
+    // 推荐：电影、剧串行，避免两路并发再叠子类请求
+    final hotMovies = rank(await loadTypes(_hotFallbackMovieTypeIds));
+    var hotTvs = rank(
+      await loadTypes(_hotFallbackTvTypeIds),
+      tvPreferredOnly: true,
+    );
+    if (hotTvs.isEmpty) {
+      hotTvs = rank(await loadTypes(_hotFallbackTvTypeIds));
+    }
 
     final out = <Movie>[];
     var i = 0;
@@ -463,15 +491,15 @@ class MacCmsApi {
       );
     }
 
-    final pages = await Future.wait([
-      for (final tid in typeIds)
-        _fetchDetailPage(
-          typeId: tid,
-          page: page,
-          limit: limit,
-          applyBannerExclude: applyBannerExclude,
-        ),
-    ]);
+    final pages = await _poolMap(
+      typeIds,
+      (tid) => _fetchDetailPage(
+        typeId: tid,
+        page: page,
+        limit: limit,
+        applyBannerExclude: applyBannerExclude,
+      ),
+    );
     final seen = <String>{};
     final out = <Movie>[];
     // 轮询各子类，避免某一类占满

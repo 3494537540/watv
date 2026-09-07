@@ -607,8 +607,6 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
 
   Future<void> _savePlayerSettings(PlayerSettingsPrefs prefs) async {
     final prev = _playerSettings;
-    // 仅系统内核
-    prefs = prefs.copyWith(kernel: PlayerKernel.exo);
     await PlayerSettingsStore.save(prefs);
     if (!mounted) return;
     setState(() => _playerSettings = prefs);
@@ -618,36 +616,8 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     } else {
       await PlaybackWakelock.release();
     }
-    final kernelChanged = prev.kernel != prefs.kernel;
     final modeChanged = prev.playMode != prefs.playMode;
     final cacheChanged = prev.streamCacheEnabled != prefs.streamCacheEnabled;
-    if (kernelChanged) {
-      _suppressSourceFailover = true;
-      StreamAheadCache.instance.stop();
-      final resume = positionMs;
-      final wasPlaying = !_failed && (_engine?.value.isPlaying ?? true);
-      if (mounted) {
-        setState(() {
-          _ready = false;
-          _failed = false;
-          _lastErrorMsg = '';
-          // ???????????????????????????????
-          _currentVariant = null;
-          _qualityVariants = const [];
-          _activePlayUrl = null;
-        });
-      }
-      // ???????????? media_kit ??????? Exo
-      await _disposeController(keepWakelock: false);
-      await Future<void>.delayed(const Duration(milliseconds: 450));
-      if (!mounted) return;
-      try {
-        await _init(resumeMs: resume, autoPlay: wasPlaying);
-      } finally {
-        _suppressSourceFailover = false;
-      }
-      return;
-    }
     if (modeChanged &&
         _qualityPrefer == VodQualityTier.auto &&
         _qualityVariants.length > 1) {
@@ -1330,7 +1300,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
       }
 
       _initSurfaceBuilt = false;
-      final engine = createVodEngine(PlayerKernel.exo);
+      final engine = createVodEngine();
       _engine = engine;
       engine.addListener(_onInitControllerTick);
       _initSpeedTimer?.cancel();
@@ -1593,7 +1563,6 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                           const ColoredBox(color: Colors.black),
                     ),
                   ),
-                // ?????????media_kit ? Surface ???????
                 if (!_failed && c != null && c.value.isInitialized)
                   Positioned.fill(
                     child: RepaintBoundary(
@@ -2193,7 +2162,6 @@ class _StableVideoSurface extends StatelessWidget {
       );
     }
 
-    // media_kit 等：内核自己处理 BoxFit
     if (controller.prefersIntrinsicFit) {
       final align = effectiveAspect == PlayerAspectMode.cover
           ? const Alignment(0, 0.18)
