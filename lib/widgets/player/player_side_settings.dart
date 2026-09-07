@@ -17,6 +17,17 @@ Color get _playerAccent => AppColors.brand;
 const _moreGray = Color(0xFF8E8E93);
 const _moreInk = Color(0xFF333333);
 
+class VodTrackOption {
+  const VodTrackOption({
+    required this.id,
+    required this.label,
+    this.selected = false,
+  });
+  final String id;
+  final String label;
+  final bool selected;
+}
+
 /// 全屏右侧 / 底部「更多」设置回调
 class PlayerSideSettingsHost {
   const PlayerSideSettingsHost({
@@ -57,6 +68,12 @@ class PlayerSideSettingsHost {
     this.sourceProbeUrls = const [],
     this.onSourceSelect,
     this.isLocalMedia = false,
+    this.audioTrackOptions = const [],
+    this.subtitleTrackOptions = const [],
+    this.audioDeviceOptions = const [],
+    this.onAudioTrackId,
+    this.onSubtitleTrackId,
+    this.onAudioDeviceId,
   });
 
   final double playbackRate;
@@ -97,6 +114,12 @@ class PlayerSideSettingsHost {
   final ValueChanged<int>? onSourceSelect;
   /// 本地缓存播放：隐藏边看边缓等在线能力
   final bool isLocalMedia;
+  final List<VodTrackOption> audioTrackOptions;
+  final List<VodTrackOption> subtitleTrackOptions;
+  final List<VodTrackOption> audioDeviceOptions;
+  final ValueChanged<String>? onAudioTrackId;
+  final ValueChanged<String>? onSubtitleTrackId;
+  final ValueChanged<String>? onAudioDeviceId;
 }
 
 /// 白底「更多」设置卡片（图三）
@@ -222,6 +245,12 @@ class _PlayerSideSettingsPanelState extends State<PlayerSideSettingsPanel> {
       sourceProbeUrls: base.sourceProbeUrls,
       onSourceSelect: base.onSourceSelect,
       isLocalMedia: base.isLocalMedia,
+      audioTrackOptions: base.audioTrackOptions,
+      subtitleTrackOptions: base.subtitleTrackOptions,
+      audioDeviceOptions: base.audioDeviceOptions,
+      onAudioTrackId: base.onAudioTrackId,
+      onSubtitleTrackId: base.onSubtitleTrackId,
+      onAudioDeviceId: base.onAudioDeviceId,
     );
   }
 
@@ -237,11 +266,24 @@ class _PlayerSideSettingsPanelState extends State<PlayerSideSettingsPanel> {
     if (widget.flatMode) {
       return Material(
         color: const Color(0xFFF5F6F8),
-        child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 180),
-          child: KeyedSubtree(
-            key: ValueKey<String>(_page),
-            child: _pageBody(),
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(12, 8, 12, 10 + pad.bottom),
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 180),
+            layoutBuilder: (currentChild, previousChildren) {
+              return Stack(
+                fit: StackFit.expand,
+                alignment: Alignment.topCenter,
+                children: [
+                  ...previousChildren,
+                  if (currentChild != null) currentChild,
+                ],
+              );
+            },
+            child: KeyedSubtree(
+              key: ValueKey<String>(_page),
+              child: SizedBox.expand(child: _pageBody()),
+            ),
           ),
         ),
       );
@@ -252,9 +294,19 @@ class _PlayerSideSettingsPanelState extends State<PlayerSideSettingsPanel> {
         padding: EdgeInsets.fromLTRB(12, 8, 12, 10 + pad.bottom),
         child: AnimatedSwitcher(
           duration: const Duration(milliseconds: 180),
+          layoutBuilder: (currentChild, previousChildren) {
+            return Stack(
+              fit: StackFit.expand,
+              alignment: Alignment.topCenter,
+              children: [
+                ...previousChildren,
+                if (currentChild != null) currentChild,
+              ],
+            );
+          },
           child: KeyedSubtree(
             key: ValueKey<String>(_page),
-            child: _pageBody(),
+            child: SizedBox.expand(child: _pageBody()),
           ),
         ),
       ),
@@ -296,6 +348,20 @@ class _PlayerSideSettingsPanelState extends State<PlayerSideSettingsPanel> {
           settings: host.settings,
           onBack: () => _go('home'),
           onChanged: host.onSettings,
+        ),
+      'kernel' => _KernelPage(
+          settings: host.settings,
+          onBack: () => _go('home'),
+          onChanged: host.onSettings,
+        ),
+      'tracks' => _TracksPage(
+          onBack: () => _go('home'),
+          audioOptions: host.audioTrackOptions,
+          subtitleOptions: host.subtitleTrackOptions,
+          audioDeviceOptions: host.audioDeviceOptions,
+          onAudio: host.onAudioTrackId,
+          onSubtitle: host.onSubtitleTrackId,
+          onAudioDevice: host.onAudioDeviceId,
         ),
       'danmaku' => _DanmakuPage(
           prefs: host.danmakuPrefs,
@@ -467,7 +533,7 @@ class _FlatSettingsPage extends StatelessWidget {
                 ],
               ),
               Padding(
-                padding: const EdgeInsets.only(top: 6),
+                padding: const EdgeInsets.only(top: 6, bottom: 8),
                 child: Text(
                   h.settings.enhanceLevel.hint,
                   style: const TextStyle(
@@ -478,6 +544,54 @@ class _FlatSettingsPage extends StatelessWidget {
                   ),
                 ),
               ),
+              const _SectionLabel('播放内核（media_kit 可选）'),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final k in PlayerKernel.values)
+                    _Chip(
+                      label: k.label,
+                      selected: h.settings.kernel == k,
+                      onTap: () => h.onSettings(
+                        h.settings.copyWith(kernel: k),
+                      ),
+                    ),
+                ],
+              ),
+              Padding(
+                padding: const EdgeInsets.only(top: 6, bottom: 4),
+                child: Text(
+                  h.settings.kernel.hint,
+                  style: const TextStyle(
+                    fontFamily: 'AppSans',
+                    fontSize: 11,
+                    color: _moreGray,
+                    height: 1.3,
+                  ),
+                ),
+              ),
+              if (h.settings.kernel.isMediaKit &&
+                  (h.audioTrackOptions.isNotEmpty ||
+                      h.subtitleTrackOptions.isNotEmpty ||
+                      h.audioDeviceOptions.isNotEmpty)) ...[
+                const SizedBox(height: 4),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton(
+                    onPressed: () => onOpen('tracks'),
+                    style: TextButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      minimumSize: const Size(0, 36),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text(
+                      '音轨 / 字幕 / 音频输出',
+                      style: TextStyle(fontFamily: 'AppSans', fontSize: 13),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -826,6 +940,11 @@ class _MoreHomePage extends StatelessWidget {
         icon: CupertinoIcons.gauge,
         label: '播放模式',
         onTap: () => onOpen('playmode'),
+      ),
+      _MoreTile(
+        icon: CupertinoIcons.square_stack_3d_up,
+        label: '播放内核',
+        onTap: () => onOpen('kernel'),
       ),
       _MoreTile(
         icon: CupertinoIcons.sparkles,
@@ -1261,16 +1380,24 @@ class _SourcesPageState extends State<_SourcesPage> {
       _probing = true;
       _latency.clear();
     });
-    final futures = <Future<void>>[];
-    for (var i = 0; i < widget.names.length; i++) {
-      final url = i < widget.probeUrls.length ? widget.probeUrls[i] : '';
-      futures.add(() async {
-        final ms = url.trim().isEmpty ? null : await SourceLatency.probe(url);
+    final n = widget.names.length;
+    const concurrency = 2;
+    var next = 0;
+    Future<void> worker() async {
+      while (true) {
+        final i = next++;
+        if (i >= n) return;
+        final url = i < widget.probeUrls.length ? widget.probeUrls[i] : '';
+        final ms =
+            url.trim().isEmpty ? null : await SourceLatency.probe(url);
         if (!mounted) return;
         setState(() => _latency[i] = ms);
-      }());
+      }
     }
-    await Future.wait(futures);
+
+    await Future.wait([
+      for (var w = 0; w < concurrency.clamp(1, n); w++) worker(),
+    ]);
     if (mounted) setState(() => _probing = false);
   }
 
@@ -1638,6 +1765,16 @@ class _ExtraSettingsPage extends StatelessWidget {
           ),
           ListTile(
             contentPadding: EdgeInsets.zero,
+            title: const Text('播放内核', style: TextStyle(fontFamily: 'AppSans')),
+            subtitle: Text(
+              '${h.settings.kernel.label} · ${h.settings.kernel.hint}',
+              style: const TextStyle(fontFamily: 'AppSans', color: _moreGray),
+            ),
+            trailing: const Icon(CupertinoIcons.chevron_right, size: 16),
+            onTap: () => onOpen('kernel'),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
             title: const Text('画质增强', style: TextStyle(fontFamily: 'AppSans')),
             subtitle: Text(
               h.settings.enhanceLevel.label,
@@ -1818,6 +1955,130 @@ class _EnhancePage extends StatelessWidget {
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _KernelPage extends StatelessWidget {
+  const _KernelPage({
+    super.key,
+    required this.settings,
+    required this.onBack,
+    required this.onChanged,
+  });
+
+  final PlayerSettingsPrefs settings;
+  final VoidCallback onBack;
+  final ValueChanged<PlayerSettingsPrefs> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return _SubPageScaffold(
+      title: '播放内核',
+      onBack: onBack,
+      child: ListView(
+        children: [
+          const _SectionLabel('选择内核'),
+          for (final k in PlayerKernel.values)
+            _LightTile(
+              title: k.label,
+              subtitle: k.hint,
+              selected: settings.kernel == k,
+              onTap: () => onChanged(settings.copyWith(kernel: k)),
+            ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(4, 8, 4, 12),
+            child: Text(
+              '默认「系统(Exo)」即当前播放器。MPV / IJK / 阿里兼容 走 media_kit，切换后会重开当前片源。无画面时请先切回「系统(Exo)」。',
+              style: TextStyle(
+                fontFamily: 'AppSans',
+                fontSize: 12,
+                height: 1.35,
+                color: Color(0xFF888888),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 仅音轨/字幕/输出，避免点进「播放内核」整页造成侧栏错乱观感
+class _TracksPage extends StatelessWidget {
+  const _TracksPage({
+    required this.onBack,
+    this.audioOptions = const [],
+    this.subtitleOptions = const [],
+    this.audioDeviceOptions = const [],
+    this.onAudio,
+    this.onSubtitle,
+    this.onAudioDevice,
+  });
+
+  final VoidCallback onBack;
+  final List<VodTrackOption> audioOptions;
+  final List<VodTrackOption> subtitleOptions;
+  final List<VodTrackOption> audioDeviceOptions;
+  final ValueChanged<String>? onAudio;
+  final ValueChanged<String>? onSubtitle;
+  final ValueChanged<String>? onAudioDevice;
+
+  @override
+  Widget build(BuildContext context) {
+    final empty = audioOptions.isEmpty &&
+        subtitleOptions.isEmpty &&
+        audioDeviceOptions.isEmpty;
+    return _SubPageScaffold(
+      title: '音轨 / 字幕 / 输出',
+      onBack: onBack,
+      child: ListView(
+        children: [
+          if (empty)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(4, 12, 4, 8),
+              child: Text(
+                '当前片源暂无可选音轨/字幕，或请先切换到 MPV / IJK / 阿里兼容内核。',
+                style: TextStyle(
+                  fontFamily: 'AppSans',
+                  fontSize: 13,
+                  height: 1.4,
+                  color: Color(0xFF888888),
+                ),
+              ),
+            ),
+          if (audioOptions.isNotEmpty) ...[
+            const _SectionLabel('音轨'),
+            for (final t in audioOptions)
+              _LightTile(
+                title: t.label,
+                subtitle: t.selected ? '当前' : '',
+                selected: t.selected,
+                onTap: () => onAudio?.call(t.id),
+              ),
+          ],
+          if (subtitleOptions.isNotEmpty) ...[
+            const _SectionLabel('字幕'),
+            for (final t in subtitleOptions)
+              _LightTile(
+                title: t.label,
+                subtitle: t.selected ? '当前' : '',
+                selected: t.selected,
+                onTap: () => onSubtitle?.call(t.id),
+              ),
+          ],
+          if (audioDeviceOptions.isNotEmpty) ...[
+            const _SectionLabel('音频输出'),
+            for (final t in audioDeviceOptions)
+              _LightTile(
+                title: t.label,
+                subtitle: t.selected ? '当前' : '',
+                selected: t.selected,
+                onTap: () => onAudioDevice?.call(t.id),
+              ),
+          ],
         ],
       ),
     );

@@ -239,8 +239,8 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     final (icon, active) = switch (t.id) {
       'home' => (CupertinoIcons.square_list, CupertinoIcons.square_list_fill),
       'filter' => (
-          CupertinoIcons.square_grid_2x2,
-          CupertinoIcons.square_grid_2x2_fill
+          CupertinoIcons.chart_bar_alt_fill,
+          CupertinoIcons.chart_bar_alt_fill
         ),
       'news' || 'tasks' || 'art' => (
           CupertinoIcons.doc_text,
@@ -262,8 +262,8 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
           ? CupertinoIcons.square_list_fill
           : CupertinoIcons.square_list,
       'filter' => active
-          ? CupertinoIcons.square_grid_2x2_fill
-          : CupertinoIcons.square_grid_2x2,
+          ? CupertinoIcons.chart_bar_alt_fill
+          : CupertinoIcons.chart_bar,
       'news' || 'tasks' || 'art' =>
         active ? CupertinoIcons.doc_text_fill : CupertinoIcons.doc_text,
       'profile' =>

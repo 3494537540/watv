@@ -212,6 +212,10 @@ class ApiConfig {
   static String huihuoPanelUserVipUrl(int userId) =>
       '$huihuoPanelBase?api=user_vip&user_id=$userId';
 
+  /// 积分开通会员（面板 DB 直写，不依赖 CMS PHPSESSID）
+  static String get huihuoPanelUpgradeVipUrl =>
+      '$huihuoPanelBase?api=upgrade_vip';
+
   /// 文章详情（DB，补全 provide 缺正文）
   static String huihuoPanelArtDetailUrl(String artId) =>
       '$huihuoPanelBase?api=art_detail&id=${Uri.encodeQueryComponent(artId)}';

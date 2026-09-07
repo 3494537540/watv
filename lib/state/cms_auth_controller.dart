@@ -395,6 +395,17 @@ class CmsAuthController extends ChangeNotifier {
                 panel.groupName.trim() != '游客') {
               u = u.copyWith(groupName: panel.groupName);
             }
+            // 到期时间以面板 DB 为准（主题页常缺字段 →「到期时间同步中」）
+            final pe = panel.endTime.trim();
+            if (pe.isNotEmpty) {
+              u = u.copyWith(endTime: pe);
+            }
+            if (panel.loginTime.trim().isNotEmpty) {
+              u = u.copyWith(loginTime: panel.loginTime);
+            }
+            if (panel.loginIp.trim().isNotEmpty) {
+              u = u.copyWith(loginIp: panel.loginIp);
+            }
             _user = _applyOverrides(u);
           }
         } catch (_) {}

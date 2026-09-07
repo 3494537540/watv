@@ -60,7 +60,6 @@ class MoviePosterCard extends StatelessWidget {
                           type: MaterialType.transparency,
                           child: CmsCoverImage(
                             url: url,
-                            vodId: movie.id,
                             fit: BoxFit.cover,
                             alignment: Alignment.topCenter,
                           ),

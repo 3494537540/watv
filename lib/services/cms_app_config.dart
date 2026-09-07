@@ -159,7 +159,7 @@ class CmsAppConfig {
   static const defaults = CmsAppConfig(
     tabs: [
       AppTabSpec(id: 'home', label: '首页'),
-      AppTabSpec(id: 'filter', label: '筛选'),
+      AppTabSpec(id: 'filter', label: '发现'),
       AppTabSpec(id: 'news', label: '资讯'),
       AppTabSpec(id: 'profile', label: '我的'),
     ],

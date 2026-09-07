@@ -47,8 +47,8 @@ class MacCmsApi {
   /// 主流剧分类：国产/台/韩/欧美/日/港/连续剧（排除泰剧等）
   static const _preferredTvTypeIds = {13, 14, 15, 16, 24, 45, 51};
 
-  /// 2G 小机：分类详情串行拉取，避免一刷新就把 PHP/MySQL 顶满
-  static const int _detailFetchConcurrency = 1;
+  /// 首页列表：3 路详情并发，加快出图
+  static const int _detailFetchConcurrency = 3;
 
   /// 热门兜底只用少量子类（够拼出首页列表，不必扫完全部分类）
   static const List<int> _hotFallbackMovieTypeIds = [6, 7, 8, 9, 10, 12];
@@ -97,7 +97,7 @@ class MacCmsApi {
               'User-Agent': _ua,
             },
           )
-          .timeout(const Duration(seconds: 20));
+          .timeout(const Duration(seconds: 8));
     } catch (_) {
       throw MacCmsException('网络连接失败，请检查影视接口');
     }
@@ -305,7 +305,7 @@ class MacCmsApi {
               'User-Agent': _ua,
             },
           )
-          .timeout(const Duration(seconds: 20));
+          .timeout(const Duration(seconds: 8));
     } catch (_) {
       return const [];
     }

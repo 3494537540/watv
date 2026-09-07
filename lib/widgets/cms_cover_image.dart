@@ -248,12 +248,12 @@ class _CmsCoverImageState extends State<CmsCoverImage>
     _loadToken = token;
     try {
       final client = HttpClient()
-        ..connectionTimeout = const Duration(seconds: 12);
+        ..connectionTimeout = const Duration(seconds: 5);
       AppSecurity.instance.hardenClient(client);
       try {
         final req = await client.getUrl(Uri.parse(resolved));
         CmsCoverImage.headersFor(resolved).forEach(req.headers.set);
-        final res = await req.close().timeout(const Duration(seconds: 18));
+        final res = await req.close().timeout(const Duration(seconds: 8));
         if (res.statusCode < 200 || res.statusCode >= 300) return false;
         final data = await consolidateHttpClientResponseBytes(res);
         if (data.isEmpty || data.length < 32) return false;
@@ -296,8 +296,9 @@ class _CmsCoverImageState extends State<CmsCoverImage>
             _bytes!,
             fit: widget.fit,
             alignment: widget.alignment,
-            filterQuality: FilterQuality.medium,
+            filterQuality: FilterQuality.low,
             gaplessPlayback: true,
+            cacheWidth: 240,
             errorBuilder: (_, _, _) => const SizedBox.shrink(),
           )
         else if (resolved != null)
@@ -307,9 +308,9 @@ class _CmsCoverImageState extends State<CmsCoverImage>
             fit: widget.fit,
             alignment: widget.alignment,
             headers: CmsCoverImage.headersFor(resolved),
-            filterQuality: FilterQuality.medium,
+            filterQuality: FilterQuality.low,
             gaplessPlayback: true,
-            cacheWidth: 360,
+            cacheWidth: 240,
             frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
               if (wasSynchronouslyLoaded || frame != null) {
                 if (!_imageReady) {

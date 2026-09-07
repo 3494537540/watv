@@ -39,6 +39,9 @@ dependencies:
   flutter_inappwebview: ^6.1.5
   shared_preferences: ^2.3.3
   video_player: ^2.9.5
+  media_kit: ^1.2.0
+  media_kit_video: ^1.3.0
+  media_kit_libs_video: ^1.0.5
   path_provider: ^2.1.5
   gal: ^2.3.0
   permission_handler: ^11.3.1
@@ -130,3 +133,10 @@ flutter:
 # AppID 也可运行时 registerApp；此处用于原生回调 scheme = tencent{app_id}
 tencent_kit:
   app_id: "1905559602"
+
+# Android / iOS 秒开：本地补丁系统播放器缓冲策略
+dependency_overrides:
+  video_player_android:
+    path: packages/video_player_android
+  video_player_avfoundation:
+    path: packages/video_player_avfoundation

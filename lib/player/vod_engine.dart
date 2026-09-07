@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
+import 'player_settings_store.dart';
+import 'media_kit_vod_engine.dart';
 import 'vod_playback.dart';
 
 class VodBufferedRange {
@@ -119,7 +121,12 @@ abstract class VodEngine extends ChangeNotifier {
   }
 }
 
-VodEngine createVodEngine() => VideoPlayerVodEngine();
+VodEngine createVodEngine([PlayerKernel kernel = PlayerKernel.exo]) {
+  if (kernel.isMediaKit && !kIsWeb) {
+    return MediaKitVodEngine(kernel);
+  }
+  return VideoPlayerVodEngine();
+}
 
 class VideoPlayerVodEngine extends VodEngine {
   VideoPlayerController? _c;
@@ -235,25 +242,28 @@ class VideoPlayerVodEngine extends VodEngine {
       if (!c.value.hasError) return;
       _refreshValue(notifyOnError: true);
     });
-    final timeoutSec = (loopback || localFile) ? 20 : 25;
+    final timeoutSec = (loopback || localFile) ? 18 : 18;
     await c.initialize().timeout(Duration(seconds: timeoutSec));
-    // 本地 HLS：等时长就绪；直播清单会一直为 0
+    // 远程：initialize 完成后立即可 play，不再额外空等
+    _refreshValue();
+    _ensurePoll();
+    notifyListeners();
+    // 本地 HLS：再等时长（缓存校验）
     if (loopback || localFile) {
       for (var i = 0; i < 20; i++) {
         _refreshValue();
         final ms = _c?.value.duration.inMilliseconds ?? 0;
         if (ms > 0) break;
         if (_c?.value.hasError ?? false) break;
-        await Future<void>.delayed(const Duration(milliseconds: 100));
+        await Future<void>.delayed(const Duration(milliseconds: 80));
       }
       final durMs = _c?.value.duration.inMilliseconds ?? 0;
       if (durMs <= 0 && !(_c?.value.hasError ?? false)) {
         throw StateError('缓存媒体时长无效，请重新下载该集');
       }
+      _refreshValue();
+      notifyListeners();
     }
-    _refreshValue();
-    _ensurePoll();
-    notifyListeners();
   }
 
   @override

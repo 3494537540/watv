@@ -180,6 +180,8 @@ class _MovieDetailPageState extends State<MovieDetailPage>
       if (notify) {
         DialogX.showWarning('当前线路异常，已自动切换');
       }
+      // url 会随 setState 更新并触发播放器 didUpdateWidget→_init；
+      // 这里不再二次 _play，避免双开抢资源 / 误清失败标记。
       return true;
     }
     return false;
@@ -193,44 +195,40 @@ class _MovieDetailPageState extends State<MovieDetailPage>
 
   List<String> _probeUrlsForCurrentEpisode() {
     final ep = _selectedEpisode;
+    // 按「集名」对齐各线路，避免集数错位导致测 A 播 B
+    String? targetName;
+    if (_sourceIndex >= 0 && _sourceIndex < movie.playSources.length) {
+      final curEps = movie.playSources[_sourceIndex].episodes;
+      if (curEps.isNotEmpty) {
+        targetName = curEps[ep.clamp(0, curEps.length - 1)].name.trim();
+      }
+    }
     return [
       for (final s in movie.playSources)
         () {
           final eps = s.episodes;
           if (eps.isEmpty) return '';
+          if (targetName != null && targetName.isNotEmpty) {
+            for (final e in eps) {
+              if (e.name.trim() == targetName) return e.url;
+            }
+            // 宽松：去空白后再比
+            final compact = targetName.replaceAll(RegExp(r'\s+'), '');
+            for (final e in eps) {
+              if (e.name.replaceAll(RegExp(r'\s+'), '') == compact) {
+                return e.url;
+              }
+            }
+          }
           return eps[ep.clamp(0, eps.length - 1)].url;
         }(),
     ];
   }
 
-  /// 进页后测速，自动落到可播且最快的线路（已出画则绝不打断）
+  /// 进页自动选线：交给线路条测速完成后的 [_onSourceProbeDone]，
+  /// 避免与 UI 双开测速抢带宽、短预算把好线测成「死」。
   Future<void> _autoPickBestSource() async {
-    if (_sourceLockedByUser) return;
-    if (widget.initialSourceIndex != null) return;
-    // 已有本集缓存：不要测速切走网线
-    if (VodCacheStore.instance.findDoneEpisode(
-          vodId: movie.id,
-          episodeIndex: _selectedEpisode,
-          preferSourceIndex: _sourceIndex,
-        ) !=
-        null) {
-      return;
-    }
-    final sources = movie.playSources;
-    if (sources.length <= 1) return;
-    final gen = ++_autoPickGen;
-    final urls = _probeUrlsForCurrentEpisode();
-    final best = await SourceLatency.pickBestIndex(
-      urls,
-      budget: const Duration(milliseconds: 3200),
-      fallback: _sourceIndex,
-      concurrency: 3,
-    );
-    if (!mounted || gen != _autoPickGen || _sourceLockedByUser) return;
-    if (best == _sourceIndex) return;
-    // 已经出画 / 正在播：禁止测速抢线（用户体感「明明出来了又切走」）
-    if (_playbackHealthyEnoughToKeep()) return;
-    _switchSourceQuiet(best);
+    return;
   }
 
   /// 当前播放是否已成功出画，应保留线路
@@ -245,7 +243,8 @@ class _MovieDetailPageState extends State<MovieDetailPage>
     return false;
   }
 
-  /// UI 测速完成后：仅当「当前线测死且尚未出画」才切
+  /// UI 测速完成后：仅当「当前线测死且尚未出画」才切；
+  /// 且目标线要比当前明显更好，避免抖动乱切。
   void _onSourceProbeDone(Map<int, int?> scores) {
     if (_sourceLockedByUser) return;
     if (movie.playSources.length <= 1) return;
@@ -262,6 +261,8 @@ class _MovieDetailPageState extends State<MovieDetailPage>
       }
     });
     if (best < 0 || best == _sourceIndex) return;
+    // 当前未测出分时才切；目标至少要有基本可用速率
+    if (bestBps < 20 * 1024) return;
     _switchSourceQuiet(best);
   }
 
@@ -1834,9 +1835,9 @@ class _MovieDetailPageState extends State<MovieDetailPage>
               final fallback = n <= 0 ? 0 : (_sourceIndex + 1) % n;
               final best = await SourceLatency.pickBestIndex(
                 urls,
-                budget: const Duration(milliseconds: 2500),
+                budget: const Duration(milliseconds: 7000),
                 fallback: fallback,
-                concurrency: 3,
+                concurrency: 2,
               );
               if (!mounted) return;
               if (best != _sourceIndex) {

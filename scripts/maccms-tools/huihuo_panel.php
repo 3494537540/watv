@@ -17,6 +17,7 @@
  *   ?api=redeem  (POST JSON: code,user_id,user_name) 兑换码
  *   ?api=vod_collect_sync  扫描 mac_vod 新增片源并写入公告
  *   ?api=user_vip&user_id=  查询会员组/到期时间（对接 App 个人页）
+ *   ?api=upgrade_vip  (POST JSON: user_id,group_id,long,points?) 积分开通会员（DB 直写，不依赖 PHPSESSID）
  *   ?api=checkin  (POST JSON: user_id) 每日打卡加积分
  *   ?api=checkin_status&user_id=  打卡状态
  *   ?api=art_detail&id=  文章详情（DB 正文）
@@ -2672,6 +2673,124 @@ function huihuoHandleApi(
                     'user_login_ip' => $loginIp,
                 ],
             ], JSON_UNESCAPED_UNICODE);
+            return;
+        }
+        if ($api === 'upgrade_vip') {
+            // 积分开通：直写 mac_user，绕过主题 /user/upgrade 对 PHPSESSID 的依赖（QQ 登录可用）
+            $raw = file_get_contents('php://input');
+            $body = [];
+            if (is_string($raw) && $raw !== '') {
+                $decoded = json_decode($raw, true);
+                if (is_array($decoded)) {
+                    $body = $decoded;
+                }
+            }
+            $userId = (int)($body['user_id'] ?? $_POST['user_id'] ?? 0);
+            $groupId = (int)($body['group_id'] ?? $_POST['group_id'] ?? 0);
+            $long = strtolower(trim((string)($body['long'] ?? $_POST['long'] ?? 'month')));
+            $clientPoints = (int)($body['points'] ?? $_POST['points'] ?? 0);
+            if ($userId <= 0) {
+                echo json_encode(['code' => 0, 'msg' => '请先登录'], JSON_UNESCAPED_UNICODE);
+                return;
+            }
+            if ($groupId < 3) {
+                echo json_encode(['code' => 0, 'msg' => '会员组无效'], JSON_UNESCAPED_UNICODE);
+                return;
+            }
+            if (!in_array($long, ['day', 'week', 'month', 'year'], true)) {
+                $long = 'month';
+            }
+            $daysMap = ['day' => 1, 'week' => 7, 'month' => 30, 'year' => 365];
+            $days = (int)$daysMap[$long];
+            $tUser = $prefix . 'user';
+            $tGroup = $prefix . 'group';
+            $pdo->beginTransaction();
+            try {
+                $gs = $pdo->prepare("SELECT * FROM `{$tGroup}` WHERE `group_id`=? LIMIT 1");
+                $gs->execute([$groupId]);
+                $grow = $gs->fetch(PDO::FETCH_ASSOC);
+                if (!$grow) {
+                    throw new RuntimeException('会员组不存在');
+                }
+                $gname = trim((string)($grow['group_name'] ?? 'VIP'));
+                $costCols = [
+                    'day' => ['group_points_day', 'points_day', 'group_day'],
+                    'week' => ['group_points_week', 'points_week', 'group_week'],
+                    'month' => ['group_points_month', 'points_month', 'group_month'],
+                    'year' => ['group_points_year', 'points_year', 'group_year'],
+                ];
+                $cost = 0;
+                foreach ($costCols[$long] as $col) {
+                    if (array_key_exists($col, $grow) && is_numeric($grow[$col])) {
+                        $cost = (int)$grow[$col];
+                        if ($cost > 0) {
+                            break;
+                        }
+                    }
+                }
+                if ($cost <= 0 && $clientPoints > 0) {
+                    $cost = $clientPoints;
+                }
+                if ($cost <= 0) {
+                    throw new RuntimeException('套餐积分未配置，请联系管理员');
+                }
+                $us = $pdo->prepare(
+                    "SELECT `user_id`,`user_points`,`user_end_time`,`group_id` FROM `{$tUser}` WHERE `user_id`=? LIMIT 1 FOR UPDATE"
+                );
+                $us->execute([$userId]);
+                $urow = $us->fetch(PDO::FETCH_ASSOC);
+                if (!$urow) {
+                    throw new RuntimeException('用户不存在');
+                }
+                $pts = (int)($urow['user_points'] ?? 0);
+                if ($pts < $cost) {
+                    throw new RuntimeException('积分不足（当前 ' . $pts . '，需要 ' . $cost . '）');
+                }
+                $now = time();
+                $cur = $urow['user_end_time'] ?? 0;
+                $base = 0;
+                if (is_numeric($cur)) {
+                    $base = (int)$cur;
+                    if ($base > 9999999999) {
+                        $base = (int)floor($base / 1000);
+                    }
+                } elseif (is_string($cur) && preg_match('/^(\d{4})-(\d{1,2})-(\d{1,2})/', $cur, $m)) {
+                    $base = (int)strtotime(sprintf('%04d-%02d-%02d', (int)$m[1], (int)$m[2], (int)$m[3]));
+                }
+                if ($base < $now) {
+                    $base = $now;
+                }
+                $end = $base + $days * 86400;
+                $newGid = (int)($urow['group_id'] ?? 0);
+                if ($newGid < $groupId) {
+                    $newGid = $groupId;
+                }
+                $pdo->prepare(
+                    "UPDATE `{$tUser}` SET `user_points`=`user_points`-?,`user_end_time`=?,`group_id`=? WHERE `user_id`=?"
+                )->execute([$cost, (string)$end, $newGid, $userId]);
+                $pdo->commit();
+                $longLabel = ['day' => '包天', 'week' => '包周', 'month' => '包月', 'year' => '包年'][$long] ?? $long;
+                echo json_encode([
+                    'code' => 1,
+                    'msg' => '开通成功：' . $gname . ' · ' . $longLabel,
+                    'data' => [
+                        'user_id' => $userId,
+                        'group_id' => $newGid,
+                        'group_name' => $gname,
+                        'cost_points' => $cost,
+                        'user_points' => $pts - $cost,
+                        'user_end_time' => (string)$end,
+                        'user_end_text' => date('Y-m-d', $end),
+                        'long' => $long,
+                        'days' => $days,
+                    ],
+                ], JSON_UNESCAPED_UNICODE);
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                echo json_encode(['code' => 0, 'msg' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+            }
             return;
         }
         if ($api === 'art_detail') {

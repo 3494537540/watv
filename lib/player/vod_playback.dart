@@ -149,10 +149,13 @@ class VodPlayback {
   }
 
   /// 解析 master / 直链，给出全部档位并按偏好选中
+  ///
+  /// [forInstantStart] 为 true 时，自动档优先中低码率媒体列表，利于秒开。
   static Future<VodResolvedStream> resolveStream(
     String raw, {
     VodQualityTier? prefer,
     PlayerPlayMode? playMode,
+    bool forInstantStart = false,
   }) async {
     final url = raw.trim();
     if (url.isEmpty) {
@@ -185,7 +188,9 @@ class VodPlayback {
       if (variants.isEmpty) {
         return VodResolvedStream(playUrl: url, masterUrl: url);
       }
-      final picked = pickVariant(variants, tier, playMode: mode);
+      final picked = forInstantStart
+          ? pickStartVariant(variants, tier, playMode: mode)
+          : pickVariant(variants, tier, playMode: mode);
       return VodResolvedStream(
         playUrl: picked?.url ?? variants.last.url,
         variants: variants,
@@ -264,6 +269,7 @@ class VodPlayback {
             VodQualityTier.q1080,
             VodQualityTier.q480,
           ],
+        // 高画质目标仍冲高清，但起播请用 [pickStartVariant]
         PlayerPlayMode.high => const [
             VodQualityTier.q1080,
             VodQualityTier.q4k,
@@ -299,6 +305,51 @@ class VodPlayback {
       }
     }
     return exact ?? above ?? below ?? variants.last;
+  }
+
+  /// 秒开起播档：自动模式下优先中低码率出第一帧，与 [playMode] 目标档可分离。
+  static VodHlsVariant? pickStartVariant(
+    List<VodHlsVariant> variants,
+    VodQualityTier prefer, {
+    PlayerPlayMode playMode = PlayerPlayMode.standard,
+  }) {
+    if (variants.isEmpty) return null;
+    if (prefer != VodQualityTier.auto) {
+      return pickVariant(variants, prefer, playMode: playMode);
+    }
+    // 即使选了「高画质」，起播仍先 480/720，稳住后再升
+    const startOrder = <VodQualityTier>[
+      VodQualityTier.q480,
+      VodQualityTier.q720,
+      VodQualityTier.q360,
+      VodQualityTier.q1080,
+    ];
+    for (final tier in startOrder) {
+      for (final v in variants) {
+        if (v.tier == tier) return v;
+      }
+    }
+    return variants.first;
+  }
+
+  /// 播放稳定后是否值得升到目标档（同片更高清晰度）
+  static VodHlsVariant? pickUpgradeVariant({
+    required List<VodHlsVariant> variants,
+    required VodQualityTier prefer,
+    required PlayerPlayMode playMode,
+    required VodHlsVariant? current,
+  }) {
+    if (variants.length < 2 || prefer != VodQualityTier.auto) return null;
+    final target = pickVariant(variants, prefer, playMode: playMode);
+    if (target == null || current == null) return target;
+    if (target.url == current.url) return null;
+    // 只升不降
+    if (target.height < current.height) return null;
+    if (target.height == current.height &&
+        target.bandwidth <= current.bandwidth) {
+      return null;
+    }
+    return target;
   }
 
   static String _resolveUrl(String base, String ref) {

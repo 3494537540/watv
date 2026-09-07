@@ -22,6 +22,7 @@ import '../../player/player_pip.dart';
 import '../../player/player_settings_store.dart';
 import '../../player/player_skip_store.dart';
 import '../../player/stream_ahead_cache.dart';
+import '../../player/media_kit_vod_engine.dart';
 import '../../player/vod_engine.dart';
 import '../../player/vod_playback.dart';
 import '../../services/app_permission.dart';
@@ -165,6 +166,10 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
   VodQualityTier _qualityPrefer = VodQualityStore.cached;
   String? _activePlayUrl;
   bool _qualityBusy = false;
+  /// 出第一帧后再 seek，避免冷启动跳中部拖慢秒开
+  int? _pendingResumeMs;
+  bool _pendingSkipIntro = false;
+  bool _postStartSeekDone = false;
 
   /// ???????
   bool _scrubbing = false;
@@ -400,6 +405,11 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     _scrubTargetMs = _scrubBaseMs;
     _scrubAccumDx = 0;
     _seekHintTimer?.cancel();
+    // 拖进度：立刻出加载圈 + 速率（与进度条一致）
+    _stallLoading.value = true;
+    _bufferSpeedTracker.setLoading(true);
+    _bufferSpeedTracker.resetMetrics();
+    _bufferSpeedTracker.tick(c.value.buffered, isBuffering: true);
   }
 
   void _onScrubUpdate(DragUpdateDetails d, double width) {
@@ -418,6 +428,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
       _seekHint =
           '${_fmtClock(_scrubTargetMs)}  $sign${deltaSec}s';
     });
+    _bufferSpeedTracker.tick(c.value.buffered, isBuffering: true);
   }
 
   Future<void> _onScrubEnd() async {
@@ -427,13 +438,42 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     _seekHintTimer?.cancel();
     if (mounted) setState(() => _seekHint = null);
     final c = _engine;
-    if (c == null || !c.value.isInitialized) return;
+    if (c == null || !c.value.isInitialized) {
+      _stallLoading.value = false;
+      _bufferSpeedTracker.setLoading(false);
+      return;
+    }
+    // 拖进度：打断旁路预热，把带宽让给播放器真正 seek
+    StreamAheadCache.instance.abortInFlight();
+    StreamAheadCache.instance.setPaused(true);
     StreamAheadCache.instance.updatePosition(target);
-    unawaited(StreamAheadCache.instance.warmSeekTarget(target, count: 2));
-    await c.seekTo(Duration(milliseconds: target));
-    await c.play();
-    StreamAheadCache.instance.setPaused(false);
+    _stallLoading.value = true;
+    _bufferSpeedTracker.setLoading(true);
+    _bufferSpeedTracker.resetMetrics();
+    _bufferSpeedTracker.tick(c.value.buffered, isBuffering: true);
+    try {
+      await c.seekTo(Duration(milliseconds: target));
+      await c.play();
+    } catch (_) {}
     _onInteract();
+    // 松手后继续显示加载，直到接近目标或超时
+    for (var i = 0; i < 40; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      if (!mounted || _scrubbing) return;
+      final eng = _engine;
+      if (eng == null || !identical(eng, c)) return;
+      final v = eng.value;
+      _bufferSpeedTracker.tick(v.buffered, isBuffering: true);
+      final near =
+          (v.position.inMilliseconds - target).abs() <= 4000;
+      // 已在播就尽快收起转圈（HLS 可能长时间 isBuffering=true）
+      if (v.isPlaying && near) break;
+      if (v.isPlaying && i >= 6) break;
+      if (near && v.isPlaying && !v.isBuffering) break;
+    }
+    if (!mounted || _scrubbing) return;
+    _stallLoading.value = false;
+    _bufferSpeedTracker.setLoading(false);
   }
 
   Future<void> _applySkipIntro(VodEngine c) async {
@@ -568,7 +608,61 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
       sourceProbeUrls: widget.sourceProbeUrls,
       onSourceSelect: widget.onSourceSelect,
       isLocalMedia: _isLocalMedia,
+      audioTrackOptions: _mediaKitAudioOptions(),
+      subtitleTrackOptions: _mediaKitSubtitleOptions(),
+      audioDeviceOptions: _mediaKitAudioDeviceOptions(),
+      onAudioTrackId: (id) {
+        final e = _engine;
+        if (e is MediaKitVodEngine) {
+          unawaited(e.selectAudioTrackById(id).then((_) {
+            if (mounted) setState(() {});
+          }));
+        }
+      },
+      onSubtitleTrackId: (id) {
+        final e = _engine;
+        if (e is MediaKitVodEngine) {
+          unawaited(e.selectSubtitleTrackById(id).then((_) {
+            if (mounted) setState(() {});
+          }));
+        }
+      },
+      onAudioDeviceId: (id) {
+        final e = _engine;
+        if (e is MediaKitVodEngine) {
+          unawaited(e.selectAudioDeviceByName(id).then((_) {
+            if (mounted) setState(() {});
+          }));
+        }
+      },
     );
+  }
+
+  List<VodTrackOption> _mediaKitAudioOptions() {
+    final e = _engine;
+    if (e is! MediaKitVodEngine) return const [];
+    return [
+      for (final t in e.audioTrackChoices())
+        VodTrackOption(id: t.id, label: t.label, selected: t.selected),
+    ];
+  }
+
+  List<VodTrackOption> _mediaKitSubtitleOptions() {
+    final e = _engine;
+    if (e is! MediaKitVodEngine) return const [];
+    return [
+      for (final t in e.subtitleTrackChoices())
+        VodTrackOption(id: t.id, label: t.label, selected: t.selected),
+    ];
+  }
+
+  List<VodTrackOption> _mediaKitAudioDeviceOptions() {
+    final e = _engine;
+    if (e is! MediaKitVodEngine) return const [];
+    return [
+      for (final t in e.audioDeviceChoices())
+        VodTrackOption(id: t.id, label: t.label, selected: t.selected),
+    ];
   }
 
   void _closeSideSettings() {
@@ -652,6 +746,17 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     } else {
       await PlaybackWakelock.release();
     }
+    final kernelChanged = prev.kernel != prefs.kernel;
+    if (kernelChanged) {
+      final resume = positionMs;
+      final wasPlaying = _engine?.value.isPlaying ?? true;
+      await _init(
+        forceUrl: _activePlayUrl ?? widget.url,
+        resumeMs: resume,
+        autoPlay: wasPlaying,
+      );
+      return;
+    }
     final modeChanged = prev.playMode != prefs.playMode;
     final cacheChanged = prev.streamCacheEnabled != prefs.streamCacheEnabled;
     if (modeChanged &&
@@ -695,11 +800,11 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
   }
 
   Future<void> _deferredAfterPlay(int token) async {
-    // ?????? 2.5s ???
+    // 弹幕延后，少抢首包带宽
     await Future<void>.delayed(const Duration(milliseconds: 2500));
     if (!mounted || token != _initToken) return;
     unawaited(_loadDanmaku());
-    // ????????????????????????
+    // 前方缓冲够了再开旁路预热，并尝试升到目标清晰度
     for (var i = 0; i < 12; i++) {
       await Future<void>.delayed(const Duration(milliseconds: 500));
       if (!mounted || token != _initToken) return;
@@ -709,9 +814,81 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
       final ahead = _bufferedAheadMsOf(c.value);
       if (ahead < 0 || ahead >= 8000 || i >= 8) {
         _syncStreamAheadCache();
+        unawaited(_maybeUpgradeQualityAfterStable(token));
         return;
       }
     }
+  }
+
+  /// 出画后再续播/跳片头，避免冷启动 seek 拖死第一帧
+  Future<void> _runPostStartSeek(int token) async {
+    for (var i = 0; i < 40; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      if (!mounted || token != _initToken || _postStartSeekDone) return;
+      final c = _engine;
+      if (c == null || !c.value.isInitialized || c.value.hasError) return;
+      final v = c.value;
+      final painted = v.isPlaying ||
+          v.size.width > 0 ||
+          v.position.inMilliseconds > 200 ||
+          (!v.isBuffering && v.buffered.isNotEmpty);
+      if (!painted && i < 8) continue;
+
+      final resume = _pendingResumeMs;
+      _pendingResumeMs = null;
+      final doSkip = _pendingSkipIntro;
+      _pendingSkipIntro = false;
+      _postStartSeekDone = true;
+
+      if (resume != null && resume > 1500) {
+        try {
+          await c.seekTo(Duration(milliseconds: resume));
+          if (!c.value.isPlaying) await c.play();
+        } catch (_) {}
+      }
+      if (doSkip) {
+        try {
+          await _applySkipIntro(c);
+          if (!c.value.isPlaying) await c.play();
+        } catch (_) {}
+      }
+      return;
+    }
+    _pendingResumeMs = null;
+    _pendingSkipIntro = false;
+    _postStartSeekDone = true;
+  }
+
+  /// 自动档：秒开用中低码率，稳住后升到 playMode 目标档
+  Future<void> _maybeUpgradeQualityAfterStable(int token) async {
+    if (!mounted || token != _initToken) return;
+    if (_isLocalMedia || _qualityBusy) return;
+    if (_qualityPrefer != VodQualityTier.auto) return;
+    if (_qualityVariants.length < 2) return;
+    final upgrade = VodPlayback.pickUpgradeVariant(
+      variants: _qualityVariants,
+      prefer: _qualityPrefer,
+      playMode: _playerSettings.playMode,
+      current: _currentVariant,
+    );
+    if (upgrade == null) return;
+    final c = _engine;
+    if (c == null || !c.value.isInitialized || c.value.hasError) return;
+    if (c.value.isBuffering) return;
+    final ahead = _bufferedAheadMsOf(c.value);
+    if (ahead >= 0 && ahead < 6000) return;
+    // 无感升清：保留进度（不弹 Toast）
+    final resume = positionMs;
+    final wasPlaying = _engine?.value.isPlaying ?? true;
+    if (!mounted) return;
+    setState(() {
+      _currentVariant = upgrade;
+    });
+    await _init(
+      forceUrl: upgrade.url,
+      resumeMs: resume,
+      autoPlay: wasPlaying,
+    );
   }
 
   int _bufferedAheadMsOf(VodEngineValue v) {
@@ -781,6 +958,18 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
         message: '??????????????????????',
       );
       if (!allowed) return;
+
+      // media_kit：优先原生截帧（含硬解画面）
+      final mk = _engine;
+      if (mk is MediaKitVodEngine) {
+        final bytes = await mk.takeScreenshot();
+        if (bytes != null && bytes.isNotEmpty) {
+          await Gal.putImageBytes(bytes);
+          DialogX.showSuccess('??????');
+          return;
+        }
+      }
+
       final ro = _videoShotKey.currentContext?.findRenderObject();
       final boundary = ro is RenderRepaintBoundary ? ro : null;
       if (boundary == null) {
@@ -967,6 +1156,10 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
         });
       }
       final ok = await cb();
+      if (ok) {
+        // 等新 url 的 _init 接手；否则旧引擎 error 会连环把所有线路标死
+        await Future<void>.delayed(const Duration(milliseconds: 1800));
+      }
       return ok;
     } catch (_) {
       return false;
@@ -1008,14 +1201,24 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     });
   }
 
+  String? _handledErrorKey;
+
   void _onPlaybackStatus() {
     final c = _engine;
     if (c == null || !_ready || _failoverBusy || _failed) return;
-    if (!c.value.hasError) return;
-    final msg = c.value.errorDescription?.trim();
-    unawaited(_onPlayFailed(
-      (msg == null || msg.isEmpty) ? '????' : msg,
-    ));
+    if (!c.value.hasError) {
+      _handledErrorKey = null;
+      return;
+    }
+    // 已在播：忽略粘住的 error，避免刷屏切线导致卡死
+    if (c.value.isPlaying && c.value.position.inMilliseconds > 1500) {
+      return;
+    }
+    final msg = c.value.errorDescription?.trim() ?? '';
+    final key = msg.isEmpty ? 'error' : msg;
+    if (_handledErrorKey == key) return;
+    _handledErrorKey = key;
+    unawaited(_onPlayFailed(msg.isEmpty ? '播放出错' : msg));
   }
 
   Future<void> _manualRetry() async {
@@ -1287,6 +1490,8 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     bool? preferPlatformViewOverride,
   }) async {
     final token = ++_initToken;
+    _handledErrorKey = null;
+    _stallLoading.value = false;
     await _disposeController(keepWakelock: false);
     final url = widget.url.trim();
     if (url.isEmpty && (forceUrl == null || forceUrl.trim().isEmpty)) {
@@ -1328,8 +1533,9 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
             url,
             prefer: _qualityPrefer,
             playMode: _playerSettings.playMode,
+            forInstantStart: true,
           ).timeout(
-            const Duration(milliseconds: 1200),
+            const Duration(milliseconds: 1600),
             onTimeout: () => VodResolvedStream(playUrl: url),
           );
           if (!mounted || token != _initToken) return;
@@ -1337,7 +1543,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
           if (resolved.variants.isNotEmpty) {
             _qualityVariants = resolved.variants;
             _currentVariant = resolved.selected ??
-                VodPlayback.pickVariant(
+                VodPlayback.pickStartVariant(
                   resolved.variants,
                   _qualityPrefer,
                   playMode: _playerSettings.playMode,
@@ -1389,7 +1595,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
       }
 
       _initSurfaceBuilt = false;
-      final engine = createVodEngine();
+      final engine = createVodEngine(_playerSettings.kernel);
       _engine = engine;
       engine.addListener(_onInitControllerTick);
       _initSpeedTimer?.cancel();
@@ -1436,19 +1642,43 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
         // 时长未知却带超长进度，不可信
         seekMs = 0;
       }
-      if (seekMs > 1500) {
+      // 秒开：先 play 出画，再异步续播/跳片头
+      // media_kit 禁止在 Texture 挂上前 seek/play（seekTo 曾内部 play 导致有声无画）
+      _pendingResumeMs = null;
+      _pendingSkipIntro = false;
+      _postStartSeekDone = false;
+      final isMk = engineLive is MediaKitVodEngine;
+      final canImmediateSeek =
+          _isLocalMedia && seekMs > 1500 && !isMk;
+      if (canImmediateSeek) {
         await engineLive.seekTo(Duration(milliseconds: seekMs));
-      }
-      if (resumeMs == null) {
-        await _applySkipIntro(engineLive);
+        if (resumeMs == null) {
+          await _applySkipIntro(engineLive);
+        }
+        _postStartSeekDone = true;
+      } else {
+        if (seekMs > 1500) {
+          _pendingResumeMs = seekMs;
+        }
+        if (resumeMs == null) {
+          _pendingSkipIntro = true;
+        }
       }
       await engineLive.setPlaybackSpeed(_playbackRate);
       await engineLive.setLooping(_playerSettings.loopSingle);
-      if (autoPlay) {
+      // media_kit：open 内已抢先挂 Video；这里等 Surface 真就绪再 play
+      final deferMkPlay = autoPlay && isMk;
+      if (autoPlay && !deferMkPlay) {
         await engineLive.play();
       }
       if (_playerSettings.keepScreenOn) {
         await PlaybackWakelock.acquire();
+      }
+
+      if (!_postStartSeekDone &&
+          (_pendingResumeMs != null || _pendingSkipIntro) &&
+          !deferMkPlay) {
+        unawaited(_runPostStartSeek(token));
       }
 
       _skipPrefs = await PlayerSkipStore.load();
@@ -1466,7 +1696,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
         StreamAheadCache.instance.updatePosition(
           ctrl.value.position.inMilliseconds,
         );
-        // ????????????????????
+        // 预热默认让路：缓冲不足时不抢带宽（拖进度尤其重要）
         StreamAheadCache.instance.setPaused(
           ctrl.value.isBuffering || (aheadMs >= 0 && aheadMs < 10000),
         );
@@ -1507,12 +1737,98 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
         }
       });
       _scheduleHideChrome();
-      // ???????????? / ????????????
+      // media_kit：禁止在 _init 里长时间等纹理/首帧（切线路会卡死主线程 → ANR）。
+      // 挂载 Video 后短延迟再 play，失败也立刻放，不阻塞 UI。
+      if (deferMkPlay) {
+        final mk = _engine;
+        if (mk is MediaKitVodEngine) {
+          unawaited(_startMediaKitPlayDeferred(mk, token));
+        }
+      }
+      unawaited(_watchStuckAtZero(token));
       unawaited(_deferredAfterPlay(token));
     } catch (e) {
       if (!mounted || token != _initToken) return;
       _qualityBusy = false;
       await _onPlayFailed(e.toString());
+    }
+  }
+
+  /// media_kit 延后起播：尽快 play，纹理最多等 ~1s，缩短黑屏。
+  Future<void> _startMediaKitPlayDeferred(
+    MediaKitVodEngine mk,
+    int token,
+  ) async {
+    try {
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted || token != _initToken || !identical(_engine, mk)) return;
+      final ok = await mk.waitUntilTextureReady(
+        timeout: const Duration(milliseconds: 900),
+      );
+      if (!mounted || token != _initToken || !identical(_engine, mk)) return;
+      if (!ok) {
+        debugPrint('[media_kit] surface lag, play anyway');
+      }
+      await mk.play();
+      if (!mounted || token != _initToken || !identical(_engine, mk)) return;
+      // 首帧轻踢，超时要短
+      try {
+        await mk.videoController?.waitUntilFirstFrameRendered.timeout(
+          const Duration(milliseconds: 1200),
+        );
+      } catch (_) {
+        if (!mounted || token != _initToken || !identical(_engine, mk)) return;
+        try {
+          await mk.pause();
+          await Future<void>.delayed(const Duration(milliseconds: 40));
+          if (!mounted || token != _initToken || !identical(_engine, mk)) {
+            return;
+          }
+          await mk.play();
+        } catch (_) {}
+      }
+      if (!_postStartSeekDone &&
+          (_pendingResumeMs != null || _pendingSkipIntro)) {
+        unawaited(_runPostStartSeek(token));
+      }
+    } catch (e) {
+      debugPrint('[media_kit] deferred play: $e');
+    }
+  }
+
+  /// 卡住 00:00/00:00 过久：先踢播，再仍无进度则报错（切线路后常见）。
+  Future<void> _watchStuckAtZero(int token) async {
+    await Future<void>.delayed(const Duration(seconds: 15));
+    if (!mounted || token != _initToken) return;
+    final c = _engine;
+    if (c == null || !_ready || _failed) return;
+    final v = c.value;
+    if (v.hasError) return;
+    // 已在播 / 已有进度 / 已出时长：不算卡死（部分 HLS 时长晚到）
+    if (v.isPlaying ||
+        v.duration > Duration.zero ||
+        v.position > const Duration(milliseconds: 800)) {
+      return;
+    }
+    debugPrint('[player] stuck at 00:00, kick play');
+    try {
+      await c.pause();
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      if (!mounted || token != _initToken) return;
+      await c.play();
+    } catch (_) {}
+    await Future<void>.delayed(const Duration(seconds: 10));
+    if (!mounted || token != _initToken) return;
+    final v2 = _engine?.value;
+    if (v2 == null || _failed) return;
+    if (v2.isPlaying ||
+        v2.position > const Duration(milliseconds: 800) ||
+        v2.duration > Duration.zero) {
+      return;
+    }
+    if (v2.isBuffering || !v2.isPlaying) {
+      if (!mounted || token != _initToken) return;
+      await _onPlayFailed('加载超时，请切换线路或内核重试');
     }
   }
 
@@ -1563,11 +1879,26 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
       try {
         c.removeListener(_onInitControllerTick);
       } catch (_) {}
-      await c.releaseSafe();
-      c.dispose();
+      final wasMk = c is MediaKitVodEngine;
+      final releaseFut = () async {
+        try {
+          await c.releaseSafe().timeout(const Duration(seconds: 2));
+        } catch (_) {}
+        try {
+          c.dispose();
+        } catch (_) {}
+      }();
+      if (wasMk) {
+        // 切内核：旧 Surface 尽快放，最多等 350ms，减少黑屏
+        try {
+          await releaseFut.timeout(const Duration(milliseconds: 350));
+        } catch (_) {}
+      } else {
+        unawaited(releaseFut);
+      }
     }
     if (!keepWakelock) {
-      await PlaybackWakelock.release();
+      unawaited(PlaybackWakelock.release());
     }
   }
 
@@ -1680,7 +2011,9 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                         mirrorX: _playerSettings.mirrorX,
                         mirrorY: _playerSettings.mirrorY,
                         enhanceLevel: _playerSettings.enhanceLevel,
-                        allowColorMatrix: !_openedWithPlatformView,
+                        // media_kit Texture + ColorFiltered 在 Android 上常见有声无画
+                        allowColorMatrix: !_openedWithPlatformView &&
+                            c is! MediaKitVodEngine,
                         letterboxLikeCache: _isLocalMedia ||
                             _playerSettings.aspect == PlayerAspectMode.fit,
                       ),
@@ -2030,11 +2363,8 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                       child: ValueListenableBuilder<bool>(
                         valueListenable: _stallLoading,
                         builder: (_, stalled, _) {
-                          // 双重保险：引擎在播绝不显示卡顿圈
                           if (!stalled) return const SizedBox.shrink();
-                          if (_engine?.value.isPlaying ?? false) {
-                            return const SizedBox.shrink();
-                          }
+                          // seek/卡顿加载：即使引擎仍报 isPlaying 也要显示
                           return Center(
                             child: PlayerLoadingHud(
                               compact: true,
@@ -2536,9 +2866,19 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
 
   bool get _showLoadingHud {
     if (_inLayoutQuiet) return false;
-    if (_draggingProgress) return false;
     final v = widget.controller.value;
-    // 硬规则：引擎已在播 / 画面尺寸已出 → 绝不盖加载圈
+    // 手指拖动中：显示
+    if (_draggingProgress) return true;
+    // seek 中：只有还没续上（未播 / 离目标很远）才转圈；已在播则立刻消掉
+    if (_seekLoading) {
+      final lock = _uiSeekPos;
+      final near = lock == null ||
+          (v.position.inMilliseconds - lock.inMilliseconds).abs() <= 4000;
+      if (v.isPlaying && near) return false;
+      if (v.isPlaying && !v.isBuffering) return false;
+      return true;
+    }
+    // 正常播放绝不盖圈（HLS 切片缓冲抖动不算）
     if (v.isPlaying) return false;
     if (v.isInitialized &&
         v.size.width > 1 &&
@@ -2548,7 +2888,6 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
     }
     if (!widget.ready) return true;
     if (_holdingForBuffer) return true;
-    if (_seekLoading) return true;
     return _showBufferSpinner;
   }
 
@@ -2652,6 +2991,28 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
 
     final posMs = v.position.inMilliseconds;
 
+    // seek 已续播成功：强制清标记（避免「在播还转圈」）
+    if (_seekLoading && !_draggingProgress && v.isPlaying) {
+      final lock = _uiSeekPos;
+      final near = lock == null ||
+          (posMs - lock.inMilliseconds).abs() <= 4000;
+      if (near || !v.isBuffering) {
+        _seekLoading = false;
+        _showBufferSpinner = false;
+        _uiSeekPos = null;
+        _stallSince = null;
+        _lastPosMs = posMs;
+        return;
+      }
+    }
+
+    // 拖进度中：保持加载圈
+    if (_draggingProgress) {
+      _lastPosMs = posMs;
+      _showBufferSpinner = true;
+      return;
+    }
+
     // 正在播：清掉一切卡顿标记（不要靠 position 是否前进，上报经常落后画面）
     if (v.isPlaying) {
       _lastPosMs = posMs;
@@ -2683,15 +3044,18 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
 
 
   void _maybeReleaseSeekLock(VodEngineValue v) {
+    if (_draggingProgress) return;
+    if (!_seekLoading && _uiSeekPos == null) return;
     final lock = _uiSeekPos;
-    if (lock == null || _draggingProgress) return;
-    final diff = (v.position.inMilliseconds - lock.inMilliseconds).abs();
-    // ??????????????
+    final diff = lock == null
+        ? 0
+        : (v.position.inMilliseconds - lock.inMilliseconds).abs();
     if (diff <= 900 ||
-        (v.isPlaying && diff <= 2500) ||
-        (v.isPlaying && !v.isBuffering)) {
+        (v.isPlaying && diff <= 4000) ||
+        (v.isPlaying && !v.isBuffering) ||
+        (v.isPlaying && lock == null)) {
       _uiSeekPos = null;
-      if (_seekLoading) {
+      if (_seekLoading || _showBufferSpinner) {
         _seekLoading = false;
         _showBufferSpinner = false;
         widget.speedTracker.setLoading(false);
@@ -2700,17 +3064,22 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
   }
 
   void _onSeekStart() {
-    // ??????????????????? seek
+    // 拖进度条：立刻显示加载动画 + 速率
     StreamAheadCache.instance.setPaused(true);
     StreamAheadCache.instance.abortInFlight();
     setState(() {
       _draggingProgress = true;
-      _seekLoading = false;
-      _showBufferSpinner = false;
+      _seekLoading = true;
+      _showBufferSpinner = true;
       _uiSeekPos = widget.controller.value.position;
     });
-    widget.speedTracker.setLoading(false);
-    _notifyLoading(false);
+    widget.speedTracker.setLoading(true);
+    widget.speedTracker.resetMetrics();
+    widget.speedTracker.tick(
+      widget.controller.value.buffered,
+      isBuffering: true,
+    );
+    _notifyLoading(true);
     widget.onInteract();
   }
 
@@ -2733,11 +3102,10 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
     widget.speedTracker.resetMetrics();
     widget.speedTracker.tick(c.value.buffered, isBuffering: true);
     _notifyLoading(true);
-    // ? seek ?????????CDN???????
+    // 拖进度不走旁路预热：warmSeek 与播放器抢同一 CDN，常见「滑了不加载」
+    StreamAheadCache.instance.abortInFlight();
+    StreamAheadCache.instance.setPaused(true);
     StreamAheadCache.instance.updatePosition(d.inMilliseconds);
-    unawaited(
-      StreamAheadCache.instance.warmSeekTarget(d.inMilliseconds, count: 2),
-    );
     try {
       await c.seekTo(d);
       await c.play();
@@ -2746,9 +3114,19 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
   }
 
   void _onSeekEnd() {
-    // seek ?? onSeek(commit) ??????????
+    // 若未走到 onSeek(commit)，也要结束拖动态，避免 seekLoading 粘住
     if (_draggingProgress) {
       setState(() => _draggingProgress = false);
+    }
+    final v = widget.controller.value;
+    if (_seekLoading && v.isPlaying && !v.isBuffering) {
+      setState(() {
+        _seekLoading = false;
+        _showBufferSpinner = false;
+        _uiSeekPos = null;
+      });
+      widget.speedTracker.setLoading(false);
+      _notifyLoading(false);
     }
   }
 
@@ -2757,8 +3135,8 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
     final target = _uiSeekPos;
     try {
       await c.play();
-      // ????????????? play???? 6s
-      for (var i = 0; i < 30; i++) {
+      // 最多约 8s：续播 + 缓冲；media_kit 常无 buffered 上报
+      for (var i = 0; i < 40; i++) {
         await Future<void>.delayed(const Duration(milliseconds: 200));
         if (!mounted || _draggingProgress) return;
         final v = c.value;
@@ -2767,12 +3145,9 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
         }
         final ahead = _bufferedAheadMsOfEngine(v);
         final near = target == null ||
-            (v.position.inMilliseconds - target.inMilliseconds).abs() <= 2500;
-        final ready = near &&
-            !v.isBuffering &&
-            v.isPlaying &&
-            (ahead < 0 || ahead >= 900);
-        if (ready || (near && ahead >= 2000)) {
+            (v.position.inMilliseconds - target.inMilliseconds).abs() <= 4000;
+        // 已在播且接近目标：尽快收起（不要死等 !isBuffering）
+        if (v.isPlaying && near && i >= 3) {
           if (!mounted) return;
           setState(() {
             _seekLoading = false;
@@ -2781,12 +3156,31 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
           });
           widget.speedTracker.setLoading(false);
           _notifyLoading(false);
-          StreamAheadCache.instance.setPaused(false);
           return;
         }
-        if (i >= 4) {
+        final bufferOk = ahead < 0 || ahead >= 400 || !v.isBuffering;
+        final ready = near && !v.isBuffering && v.isPlaying && bufferOk;
+        if (ready || (near && v.isPlaying && ahead >= 1500)) {
+          if (!mounted) return;
+          setState(() {
+            _seekLoading = false;
+            _showBufferSpinner = false;
+            if (near) _uiSeekPos = null;
+          });
+          widget.speedTracker.setLoading(false);
+          _notifyLoading(false);
+          return;
+        }
+        if (i >= 3) {
           setState(() => _showBufferSpinner = true);
           _notifyLoading(true);
+        }
+        // 卡缓冲时再踢一脚 seek（部分 HLS 首次 seek 空转）
+        if (i == 15 && target != null && !near) {
+          try {
+            await c.seekTo(target);
+            await c.play();
+          } catch (_) {}
         }
       }
     } catch (_) {}
@@ -2797,7 +3191,6 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
     });
     widget.speedTracker.setLoading(false);
     _notifyLoading(false);
-    StreamAheadCache.instance.setPaused(false);
   }
 
   int _bufferedAheadMsOfEngine(VodEngineValue v) {
@@ -2829,8 +3222,11 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
       position: displayPos,
       duration: c.value.duration,
       buffering: !widget.ready ||
-          (!c.value.isPlaying && (_showBufferSpinner || _seekLoading)),
-      showLoadingHud: false,
+          _draggingProgress ||
+          _seekLoading ||
+          _showBufferSpinner ||
+          (!c.value.isPlaying && c.value.isBuffering),
+      showLoadingHud: _draggingProgress || _seekLoading || _showBufferSpinner,
       loadingSpeedLabel:
           widget.showNetSpeed ? widget.speedTracker.displayLabel : '',
       showBack: widget.showBack,

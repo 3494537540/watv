@@ -23,22 +23,23 @@ class PlaybackProfile {
 
   static PlaybackProfile of(PlayerSettingsPrefs prefs) {
     final base = switch (prefs.playMode) {
+      // 秒开向：起播后也尽快攒够前方缓冲，减少二次卡顿
       PlayerPlayMode.smooth => const PlaybackProfile(
-          backBufferMs: 150000,
-          holdEnterAheadMs: 4000,
-          holdResumeAheadMs: 9000,
+          backBufferMs: 180000,
+          holdEnterAheadMs: 3500,
+          holdResumeAheadMs: 10000,
           warmSegmentCount: 4,
         ),
       PlayerPlayMode.standard => const PlaybackProfile(
-          backBufferMs: 110000,
-          holdEnterAheadMs: 3000,
-          holdResumeAheadMs: 7000,
+          backBufferMs: 140000,
+          holdEnterAheadMs: 2800,
+          holdResumeAheadMs: 8000,
           warmSegmentCount: 3,
         ),
       PlayerPlayMode.high => const PlaybackProfile(
-          backBufferMs: 70000,
+          backBufferMs: 90000,
           holdEnterAheadMs: 2200,
-          holdResumeAheadMs: 4500,
+          holdResumeAheadMs: 5500,
           warmSegmentCount: 2,
         ),
     };

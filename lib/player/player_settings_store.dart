@@ -44,10 +44,43 @@ extension PlayerPlayModeX on PlayerPlayMode {
       };
 
   String get hint => switch (this) {
-        PlayerPlayMode.smooth => '更稳更省流，自动偏中低清晰度',
-        PlayerPlayMode.standard => '清晰度与流畅均衡（推荐）',
-        PlayerPlayMode.high => '尽量高清，弱网可能更易卡顿',
+        PlayerPlayMode.smooth => '点开即放优先，自动偏中低清晰度（推荐）',
+        PlayerPlayMode.standard => '先秒开再升清',
+        PlayerPlayMode.high => '尽量高清；仍会先低码率出画再升清',
       };
+}
+
+/// 播放内核（默认系统 Exo，不改现有体感；可切 media_kit）
+enum PlayerKernel {
+  /// Android ExoPlayer / iOS AVPlayer（video_player）
+  exo,
+  /// libmpv 硬解
+  mpv,
+  /// IJK 风格兼容（libmpv 软解，奇葩封装更稳）
+  ijk,
+  /// 阿里云风格兼容（libmpv + 更大缓冲）
+  ali,
+}
+
+extension PlayerKernelX on PlayerKernel {
+  String get label => switch (this) {
+        PlayerKernel.exo => '系统(Exo)',
+        PlayerKernel.mpv => 'MPV',
+        PlayerKernel.ijk => 'IJK兼容',
+        PlayerKernel.ali => '阿里兼容',
+      };
+
+  String get hint => switch (this) {
+        PlayerKernel.exo => '官方推荐，画中画/省电更好（当前默认）',
+        PlayerKernel.mpv => 'media_kit / libmpv 硬解，兼容性更强',
+        PlayerKernel.ijk => '软解兼容层，卡顿片源可试',
+        PlayerKernel.ali => '大缓冲策略，弱网可试',
+      };
+
+  bool get isMediaKit =>
+      this == PlayerKernel.mpv ||
+      this == PlayerKernel.ijk ||
+      this == PlayerKernel.ali;
 }
 
 /// 自研画质增强档位
@@ -90,9 +123,10 @@ class PlayerSettingsPrefs {
     this.doubleTapSeek = true,
     this.chromeAutoHideSec = 4,
     this.autoSourceFailover = true,
-    this.playMode = PlayerPlayMode.high,
+    this.playMode = PlayerPlayMode.smooth,
     this.streamCacheEnabled = true,
     this.enhanceLevel = PlayerEnhanceLevel.vivid,
+    this.kernel = PlayerKernel.exo,
   });
 
   final PlayerAspectMode aspect;
@@ -115,6 +149,8 @@ class PlayerSettingsPrefs {
   final bool streamCacheEnabled;
   /// 自研画质增强
   final PlayerEnhanceLevel enhanceLevel;
+  /// 播放内核（默认 exo，现有播放器不动）
+  final PlayerKernel kernel;
 
   PlayerSettingsPrefs copyWith({
     PlayerAspectMode? aspect,
@@ -133,6 +169,7 @@ class PlayerSettingsPrefs {
     PlayerPlayMode? playMode,
     bool? streamCacheEnabled,
     PlayerEnhanceLevel? enhanceLevel,
+    PlayerKernel? kernel,
   }) {
     return PlayerSettingsPrefs(
       aspect: aspect ?? this.aspect,
@@ -151,6 +188,7 @@ class PlayerSettingsPrefs {
       playMode: playMode ?? this.playMode,
       streamCacheEnabled: streamCacheEnabled ?? this.streamCacheEnabled,
       enhanceLevel: enhanceLevel ?? this.enhanceLevel,
+      kernel: kernel ?? this.kernel,
     );
   }
 
@@ -171,6 +209,7 @@ class PlayerSettingsPrefs {
         'play_mode': playMode.name,
         'stream_cache': streamCacheEnabled,
         'enhance': enhanceLevel.name,
+        'kernel': kernel.name,
       };
 
   factory PlayerSettingsPrefs.fromJson(Map<String, dynamic> json) {
@@ -179,15 +218,20 @@ class PlayerSettingsPrefs {
       (e) => e.name == aspectName,
       orElse: () => PlayerAspectMode.fit,
     );
-    final modeName = '${json['play_mode'] ?? 'high'}';
+    final modeName = '${json['play_mode'] ?? 'smooth'}';
     final playMode = PlayerPlayMode.values.firstWhere(
       (e) => e.name == modeName,
-      orElse: () => PlayerPlayMode.high,
+      orElse: () => PlayerPlayMode.smooth,
     );
     final enhanceName = '${json['enhance'] ?? 'vivid'}';
     final enhance = PlayerEnhanceLevel.values.firstWhere(
       (e) => e.name == enhanceName,
       orElse: () => PlayerEnhanceLevel.vivid,
+    );
+    final kernelName = '${json['kernel'] ?? 'exo'}';
+    final kernel = PlayerKernel.values.firstWhere(
+      (e) => e.name == kernelName,
+      orElse: () => PlayerKernel.exo,
     );
     return PlayerSettingsPrefs(
       aspect: aspect,
@@ -208,6 +252,7 @@ class PlayerSettingsPrefs {
       playMode: playMode,
       streamCacheEnabled: json['stream_cache'] != false,
       enhanceLevel: enhance,
+      kernel: kernel,
     );
   }
 }

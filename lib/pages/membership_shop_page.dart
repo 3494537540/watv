@@ -7,8 +7,10 @@ import 'package:flutter/services.dart';
 import '../models/auth_models.dart';
 import '../models/membership_models.dart';
 import '../pages/redeem_page.dart';
+import '../services/huihuo_panel_api.dart';
 import '../services/maccms_user_api.dart';
 import '../services/membership_api.dart';
+import '../services/vip_membership_notice.dart';
 import '../state/auth_controller.dart';
 import '../state/cms_auth_controller.dart';
 import '../theme/app_colors.dart';
@@ -152,13 +154,39 @@ class _MembershipShopPageState extends State<MembershipShopPage> {
     setState(() => _buying = true);
     DialogX.showWait('开通中…');
     try {
-      final msg = await CmsAuthController.instance.api.upgradeVip(
-        groupId: pkg.groupId,
-        long: pkg.long,
+      final uid = CmsAuthController.instance.user?.userId ?? 0;
+      String msg;
+      // 优先面板 DB 直开（QQ 登录不依赖 PHPSESSID）
+      if (uid > 0) {
+        try {
+          msg = await HuihuoPanelApi.upgradeVip(
+            userId: uid,
+            groupId: pkg.groupId,
+            long: pkg.long,
+            points: pkg.points,
+          );
+        } catch (_) {
+          msg = await CmsAuthController.instance.api.upgradeVip(
+            groupId: pkg.groupId,
+            long: pkg.long,
+          );
+        }
+      } else {
+        msg = await CmsAuthController.instance.api.upgradeVip(
+          groupId: pkg.groupId,
+          long: pkg.long,
+        );
+      }
+      // 等面板把到期时间写回，避免成功后仍显示「同步中」
+      try {
+        await CmsAuthController.instance.refreshProfile();
+      } catch (_) {}
+      await VipMembershipNotice.announceSuccess(
+        title: '会员开通成功',
+        detail: msg.isEmpty ? '积分开通已完成' : msg,
       );
       DialogX.showSuccess(msg.isEmpty ? '开通成功' : msg);
       if (mounted) Navigator.of(context).maybePop();
-      unawaited(CmsAuthController.instance.refreshProfile().catchError((_) {}));
     } on CmsUserException catch (e) {
       // 失败时强制从面板拉回真实积分，避免界面显示成 0
       try {
@@ -166,11 +194,14 @@ class _MembershipShopPageState extends State<MembershipShopPage> {
       } catch (_) {}
       DialogX.showWarning(e.message);
       if (mounted) setState(() {});
-    } catch (_) {
+    } catch (e) {
       try {
         await CmsAuthController.instance.refreshProfile();
       } catch (_) {}
-      DialogX.showWarning('开通失败');
+      final msg = '$e'
+          .replaceFirst('Bad state: ', '')
+          .replaceFirst('StateError: ', '');
+      DialogX.showWarning(msg.isEmpty ? '开通失败' : msg);
       if (mounted) setState(() {});
     } finally {
       if (mounted) setState(() => _buying = false);

@@ -1,28 +1,26 @@
 import 'dart:async';
 
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../config/api_config.dart';
 import '../models/movie_models.dart';
 import '../services/maccms_api.dart';
-import '../state/theme_controller.dart';
 import '../theme/app_colors.dart';
 import '../widgets/app_page_route.dart';
 import '../widgets/app_pull_refresh.dart';
+import '../widgets/cms_cover_image.dart';
 import '../widgets/figma_loading.dart';
-import '../widgets/movie_poster_card.dart';
 import '../widgets/press_scale.dart';
 import 'movie_detail_page.dart';
 
-class _FilterChannel {
-  const _FilterChannel({required this.name, this.typeId});
+class _DiscoverChannel {
+  const _DiscoverChannel({required this.name, this.typeId});
   final String name;
   final int? typeId;
 }
 
-/// 影视片库：频道来自 CMS class[]，子类完整加载
+/// 发现页：周热榜单（海报 + 排名角标 + 标签）
 class VodFilterPage extends StatefulWidget {
   const VodFilterPage({super.key});
 
@@ -35,94 +33,28 @@ class _VodFilterPageState extends State<VodFilterPage> {
   Color get _muted => AppPalette.textHint(context);
   Color get _pageBg => AppPalette.page(context);
   static Color get _accent => AppColors.brand;
-  static const _pageSize = 30;
-  static const _excludeRoots = {20, 30}; // 成人 / 里番
 
   final _cms = MacCmsApi();
-  final _scroll = ScrollController();
 
-  List<MacCmsTypeNode> _allTypes = const [];
-  List<_FilterChannel> _channels = const [
-    _FilterChannel(name: '全部'),
-    _FilterChannel(name: '电影', typeId: 1),
-    _FilterChannel(name: '电视剧', typeId: 2),
-    _FilterChannel(name: '综艺', typeId: 3),
-    _FilterChannel(name: '动漫', typeId: 4),
-    _FilterChannel(name: '短剧', typeId: ApiConfig.macCmsShortDramaTypeId),
+  List<_DiscoverChannel> _channels = const [
+    _DiscoverChannel(name: '全部'),
+    _DiscoverChannel(name: '电影', typeId: 1),
+    _DiscoverChannel(name: '电视剧', typeId: 2),
+    _DiscoverChannel(name: '综艺', typeId: 3),
+    _DiscoverChannel(name: '动漫', typeId: 4),
+    _DiscoverChannel(name: '短剧', typeId: ApiConfig.macCmsShortDramaTypeId),
   ];
 
-  int _channel = 1;
-  int? _classTypeId;
-  String _area = '全部';
-  String _year = '全部';
-  bool _typesReady = false;
-
+  int _channel = 0;
   List<Movie> _movies = const [];
   bool _loading = true;
-  bool _loadingMore = false;
-  bool _hasMore = true;
-  int _pageIndex = 1;
-  int _loadSeq = 0;
   String? _error;
-
-  _FilterChannel get _ch =>
-      _channels[_channel.clamp(0, _channels.length - 1)];
-
-  List<MacCmsClassOption> get _classOptions {
-    final root = _ch.typeId;
-    if (root == null) {
-      // 「全部」频道不堆全部子类，避免横滑过长；选具体频道再出分类
-      return const [MacCmsClassOption(label: '全部')];
-    }
-    final kids = <MacCmsClassOption>[
-      const MacCmsClassOption(label: '全部'),
-      for (final t in _allTypes)
-        if (t.typePid == root)
-          MacCmsClassOption(label: t.typeName.trim(), typeId: t.typeId),
-    ];
-    return kids;
-  }
-
-  List<String> get _areas {
-    final f = ApiConfig.macCmsLibraryFiltersFor(_ch.name);
-    if (f.areas.length > 1) return f.areas;
-    return const [
-      '全部',
-      '大陆',
-      '内地',
-      '香港',
-      '台湾',
-      '日本',
-      '韩国',
-      '美国',
-      '英国',
-      '法国',
-      '泰国',
-      '其他',
-    ];
-  }
-
-  /// 年代始终按当前年往前排，不再用停在 2018 的写死表
-  List<String> get _years {
-    final y = DateTime.now().year;
-    return [
-      '全部',
-      for (var i = 0; i < 25; i++) '${y - i}',
-    ];
-  }
+  int _loadSeq = 0;
 
   @override
   void initState() {
     super.initState();
-    _scroll.addListener(_onScroll);
     unawaited(_boot());
-  }
-
-  @override
-  void dispose() {
-    _scroll.removeListener(_onScroll);
-    _scroll.dispose();
-    super.dispose();
   }
 
   Future<void> _boot() async {
@@ -132,9 +64,8 @@ class _VodFilterPageState extends State<VodFilterPage> {
       if (types.isNotEmpty) {
         final roots = [
           for (final t in types)
-            if (t.typePid == 0 && !_excludeRoots.contains(t.typeId)) t,
+            if (t.typePid == 0 && t.typeId != 20 && t.typeId != 30) t,
         ];
-        // 主流频道靠前，其余按 id
         const prefer = [1, 2, 3, 4, 44, 48];
         roots.sort((a, b) {
           final pa = prefer.indexOf(a.typeId);
@@ -143,92 +74,33 @@ class _VodFilterPageState extends State<VodFilterPage> {
           final ib = pb < 0 ? 1000 + b.typeId : pb;
           return ia.compareTo(ib);
         });
-        final channels = <_FilterChannel>[
-          const _FilterChannel(name: '全部'),
+        final channels = <_DiscoverChannel>[
+          const _DiscoverChannel(name: '全部'),
           for (final t in roots)
-            _FilterChannel(name: t.typeName.trim(), typeId: t.typeId),
+            _DiscoverChannel(name: t.typeName.trim(), typeId: t.typeId),
         ];
         final hasShort = channels.any(
           (c) => c.typeId == ApiConfig.macCmsShortDramaTypeId,
         );
         if (!hasShort) {
           channels.add(
-            const _FilterChannel(
+            const _DiscoverChannel(
               name: '短剧',
               typeId: ApiConfig.macCmsShortDramaTypeId,
             ),
           );
         }
-        setState(() {
-          _allTypes = types;
-          _channels = channels;
-          _typesReady = true;
-          // 默认电影，找不到则第 1 个有 id 的频道
-          final movieIdx = channels.indexWhere(
-            (c) => c.typeId == 1 || c.name.contains('电影'),
-          );
-          _channel = movieIdx >= 0 ? movieIdx : 1.clamp(0, channels.length - 1);
-        });
-      } else {
-        setState(() => _typesReady = true);
+        setState(() => _channels = channels);
       }
-    } catch (_) {
-      if (mounted) setState(() => _typesReady = true);
-    }
+    } catch (_) {}
     await _reload();
-  }
-
-  void _onScroll() {
-    if (!_hasMore || _loading || _loadingMore) return;
-    if (!_scroll.hasClients) return;
-    final pos = _scroll.position;
-    if (pos.pixels >= pos.maxScrollExtent - 640) {
-      unawaited(_loadMore());
-    }
   }
 
   Future<void> _onChannel(int i) async {
     if (i == _channel) return;
     HapticFeedback.selectionClick();
-    setState(() {
-      _channel = i;
-      _classTypeId = null;
-      _area = '全部';
-      _year = '全部';
-    });
+    setState(() => _channel = i);
     await _reload();
-  }
-
-  Future<void> _onClass(MacCmsClassOption opt) async {
-    if (opt.typeId == _classTypeId) return;
-    HapticFeedback.selectionClick();
-    setState(() => _classTypeId = opt.typeId);
-    await _reload();
-  }
-
-  Future<void> _onArea(String area) async {
-    if (area == _area) return;
-    HapticFeedback.selectionClick();
-    setState(() => _area = area);
-    await _reload();
-  }
-
-  Future<void> _onYear(String year) async {
-    if (year == _year) return;
-    HapticFeedback.selectionClick();
-    setState(() => _year = year);
-    await _reload();
-  }
-
-  Future<List<Movie>> _fetchPage(int page) {
-    return _cms.fetchLibraryShow(
-      channelTypeId: _ch.typeId,
-      classTypeId: _classTypeId,
-      area: _area,
-      year: _year,
-      page: page,
-      limit: _pageSize,
-    );
   }
 
   Future<void> _reload() async {
@@ -236,391 +108,427 @@ class _VodFilterPageState extends State<VodFilterPage> {
     setState(() {
       _loading = true;
       _error = null;
-      _pageIndex = 1;
-      _hasMore = true;
-      _movies = const [];
     });
     try {
-      final list = await _fetchPage(1);
+      final ch = _channels[_channel.clamp(0, _channels.length - 1)];
+      final list = ch.typeId == null
+          ? await _cms.fetchHotMovies(limit: 50)
+          : await _cms.fetchWeekHot(typeId: ch.typeId!, limit: 50);
       if (!mounted || seq != _loadSeq) return;
       setState(() {
         _movies = list;
         _loading = false;
-        _hasMore = list.length >= (_pageSize * 0.5).floor();
-        _pageIndex = 1;
+        _error = list.isEmpty ? '暂无榜单内容' : null;
       });
     } catch (e) {
       if (!mounted || seq != _loadSeq) return;
       setState(() {
         _loading = false;
-        _error = '$e';
-        _movies = const [];
+        _error = e is MacCmsException ? e.message : '加载失败，请稍后重试';
       });
     }
   }
 
-  Future<void> _loadMore() async {
-    if (_loadingMore || !_hasMore || _loading) return;
-    setState(() => _loadingMore = true);
-    final next = _pageIndex + 1;
-    final seq = _loadSeq;
-    try {
-      final more = await _fetchPage(next);
-      if (!mounted || seq != _loadSeq) return;
-      final seen = {for (final m in _movies) m.id};
-      final appended = [
-        for (final m in more)
-          if (seen.add(m.id)) m,
-      ];
-      setState(() {
-        _movies = [..._movies, ...appended];
-        _pageIndex = next;
-        _hasMore = appended.length >= (_pageSize * 0.35).floor();
-        _loadingMore = false;
-      });
-    } catch (_) {
-      if (!mounted || seq != _loadSeq) return;
-      setState(() {
-        _loadingMore = false;
-        _hasMore = false;
-      });
-    }
-  }
-
-  void _openDetail(Movie movie) {
+  void _openMovie(Movie m) {
+    HapticFeedback.selectionClick();
     Navigator.of(context).push(
-      AppPageRoute<void>(
-        builder: (_) => MovieDetailPage(movie: movie),
-      ),
+      AppPageRoute<void>(builder: (_) => MovieDetailPage(movie: m)),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     final top = MediaQuery.paddingOf(context).top;
-    final bottom = MediaQuery.paddingOf(context).bottom;
-    final classes = _classOptions;
-
-    return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: const SystemUiOverlayStyle(
-        statusBarColor: Colors.transparent,
-        statusBarIconBrightness: Brightness.dark,
-        statusBarBrightness: Brightness.light,
-        systemNavigationBarColor: Colors.transparent,
-        systemNavigationBarIconBrightness: Brightness.dark,
-      ),
-      child: ColoredBox(
-        color: _pageBg,
-        child: AppPullRefresh(
-          color: AppColors.brand,
-          edgeOffset: top,
-          onRefresh: _reload,
-          child: CustomScrollView(
-            controller: _scroll,
-            physics: const BouncingScrollPhysics(
-              parent: AlwaysScrollableScrollPhysics(),
-            ),
-            slivers: [
-              SliverToBoxAdapter(child: SizedBox(height: top + 6)),
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(
-                        '片库',
-                        style: TextStyle(
-                          fontFamily: 'AppSans',
-                          fontSize: 26,
-                          fontWeight: FontWeight.w800,
-                          color: _ink,
-                          height: 1.05,
-                          letterSpacing: 0.5,
-                          decoration: TextDecoration.none,
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 3),
-                        child: Text(
-                          !_typesReady || _loading
-                              ? '加载中…'
-                              : '${_movies.length} 部',
-                          style: TextStyle(
-                            fontFamily: 'AppSans',
-                            fontSize: 13,
-                            fontWeight: FontWeight.w500,
-                            color: _muted,
-                            decoration: TextDecoration.none,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+    return ColoredBox(
+      color: _pageBg,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(height: top),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
+            child: Text(
+              '发现',
+              style: TextStyle(
+                fontFamily: 'AppSans',
+                fontSize: 22,
+                fontWeight: FontWeight.w800,
+                color: _ink,
               ),
-              if (!_typesReady)
-                const SliverToBoxAdapter(
-                  child: Padding(
-                    padding: EdgeInsets.symmetric(vertical: 48),
-                    child: WatvPageLoader(size: 48),
-                  ),
-                )
-              else ...[
-                SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF7F8FA),
-                        borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+          SizedBox(
+            height: 40,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              itemCount: _channels.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 8),
+              itemBuilder: (context, i) {
+                final selected = i == _channel;
+                return PressScale(
+                  onTap: () => unawaited(_onChannel(i)),
+                  scale: 0.96,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 160),
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: selected
+                          ? _accent.withValues(alpha: 0.14)
+                          : AppPalette.surface(context),
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(
+                        color: selected
+                            ? _accent.withValues(alpha: 0.45)
+                            : AppPalette.line(context),
                       ),
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            _FilterTextRow(
-                              accent: _accent,
-                              labels: [for (final c in _channels) c.name],
-                              selected: _ch.name,
-                              onSelected: (name) {
-                                final i =
-                                    _channels.indexWhere((c) => c.name == name);
-                                if (i >= 0) unawaited(_onChannel(i));
-                              },
-                            ),
-                            const _FilterDots(),
-                            _FilterTextRow(
-                              accent: _accent,
-                              labels: [for (final c in classes) c.label],
-                              selected: () {
-                                for (final c in classes) {
-                                  if (c.typeId == _classTypeId) return c.label;
-                                }
-                                return '全部';
-                              }(),
-                              onSelected: (name) {
-                                for (final c in classes) {
-                                  if (c.label == name) {
-                                    unawaited(_onClass(c));
-                                    break;
-                                  }
-                                }
-                              },
-                            ),
-                            const _FilterDots(),
-                            _FilterTextRow(
-                              accent: _accent,
-                              labels: _areas,
-                              selected: _area,
-                              onSelected: (a) => unawaited(_onArea(a)),
-                            ),
-                            const _FilterDots(),
-                            _FilterTextRow(
-                              accent: _accent,
-                              labels: _years,
-                              selected: _year,
-                              onSelected: (y) => unawaited(_onYear(y)),
-                            ),
-                          ],
-                        ),
+                    ),
+                    child: Text(
+                      _channels[i].name,
+                      style: TextStyle(
+                        fontFamily: 'AppSans',
+                        fontSize: 13,
+                        fontWeight:
+                            selected ? FontWeight.w700 : FontWeight.w500,
+                        color: selected ? _accent : _ink,
                       ),
                     ),
                   ),
-                ),
-                ..._bodySlivers(bottom),
-              ],
-            ],
+                );
+              },
+            ),
           ),
-        ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: AppPullRefresh(
+              onRefresh: _reload,
+              child: _buildBody(),
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  List<Widget> _bodySlivers(double bottom) {
+  Widget _buildBody() {
     if (_loading && _movies.isEmpty) {
-      return [
-        const SliverPadding(
-          padding: EdgeInsets.fromLTRB(0, 24, 0, 40),
-          sliver: SliverToBoxAdapter(
-            child: WatvPageLoader(size: 48),
+      return ListView.builder(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        itemCount: 8,
+        itemBuilder: (_, _) => const Padding(
+          padding: EdgeInsets.only(bottom: 16),
+          child: FigmaSkeletonPulse(
+            child: SizedBox(
+              height: 118,
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 84,
+                    height: 118,
+                    child: FigmaCoverPlaceholder(iconSize: 28, radius: 8),
+                  ),
+                  SizedBox(width: 14),
+                  Expanded(
+                    child: FigmaCoverPlaceholder(iconSize: 20, radius: 8),
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
-      ];
+      );
     }
     if (_error != null && _movies.isEmpty) {
-      return [
-        SliverFillRemaining(
-          hasScrollBody: false,
-          child: Center(
-            child: TextButton(
-              onPressed: () => unawaited(_reload()),
-            child: Text(
-                '加载失败，点击重试',
-                style: TextStyle(
-                  fontFamily: 'AppSans',
-                  fontSize: 14,
-                  color: _muted,
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          const SizedBox(height: 120),
+          Center(
+            child: Column(
+              children: [
+                Text(
+                  _error!,
+                  style: TextStyle(
+                    fontFamily: 'AppSans',
+                    fontSize: 14,
+                    color: _muted,
+                  ),
                 ),
-              ),
+                const SizedBox(height: 12),
+                TextButton(
+                  onPressed: () => unawaited(_reload()),
+                  child: const Text('重新加载'),
+                ),
+              ],
             ),
           ),
-        ),
-      ];
+        ],
+      );
     }
-    if (_movies.isEmpty) {
-      return [
-        SliverFillRemaining(
-          hasScrollBody: false,
-          child: Center(
-            child: Text(
-              '暂无内容，换个筛选试试',
-              style: TextStyle(
-                fontFamily: 'AppSans',
-                fontSize: 14,
-                color: _muted,
-                decoration: TextDecoration.none,
-              ),
+    return ListView.builder(
+      physics: const BouncingScrollPhysics(
+        parent: AlwaysScrollableScrollPhysics(),
+      ),
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 28),
+      itemCount: _movies.length,
+      itemBuilder: (context, i) {
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 16),
+          child: _DiscoverScrollIn(
+            index: i,
+            child: _DiscoverRankRow(
+              rank: i + 1,
+              movie: _movies[i],
+              onTap: () => _openMovie(_movies[i]),
             ),
           ),
-        ),
-      ];
-    }
-
-    return [
-      SliverPadding(
-        padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
-        sliver: SliverGrid(
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 3,
-            mainAxisSpacing: 14,
-            crossAxisSpacing: 10,
-            childAspectRatio: 0.52,
-          ),
-          delegate: SliverChildBuilderDelegate(
-            (context, i) {
-              final m = _movies[i];
-              return MoviePosterCard(
-                movie: m,
-                width: double.infinity,
-                onTap: () => _openDetail(m),
-              );
-            },
-            childCount: _movies.length,
-          ),
-        ),
-      ),
-      SliverToBoxAdapter(
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(16, 0, 16, 96 + bottom),
-          child: FigmaLoadMoreFooter(
-            loading: _loadingMore,
-            hasMore: _hasMore,
-          ),
-        ),
-      ),
-    ];
+        );
+      },
+    );
   }
 }
 
-class _FilterDots extends StatelessWidget {
-  const _FilterDots();
+/// 列表项滑入淡入动效（滚入可视区时播放）
+class _DiscoverScrollIn extends StatefulWidget {
+  const _DiscoverScrollIn({required this.index, required this.child});
+
+  final int index;
+  final Widget child;
+
+  @override
+  State<_DiscoverScrollIn> createState() => _DiscoverScrollInState();
+}
+
+class _DiscoverScrollInState extends State<_DiscoverScrollIn>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _fade;
+  late final Animation<Offset> _slide;
+  bool _played = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 420),
+    );
+    _fade = CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic);
+    _slide = Tween<Offset>(
+      begin: const Offset(0, 0.12),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOutCubic));
+    WidgetsBinding.instance.addPostFrameCallback((_) => _tryPlay());
+  }
+
+  void _tryPlay() {
+    if (!mounted || _played) return;
+    _played = true;
+    final delay = (widget.index % 8) * 35;
+    Future<void>.delayed(Duration(milliseconds: delay), () {
+      if (mounted) _ctrl.forward();
+    });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: CustomPaint(
-        painter: _DotsPainter(color: const Color(0xFFD8DCE3)),
-        child: const SizedBox(width: double.infinity, height: 1),
+    return FadeTransition(
+      opacity: _fade,
+      child: SlideTransition(
+        position: _slide,
+        child: widget.child,
       ),
     );
   }
 }
 
-class _DotsPainter extends CustomPainter {
-  _DotsPainter({required this.color});
+class _DiscoverRankRow extends StatelessWidget {
+  const _DiscoverRankRow({
+    required this.rank,
+    required this.movie,
+    required this.onTap,
+  });
 
-  final Color color;
+  final int rank;
+  final Movie movie;
+  final VoidCallback onTap;
 
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()..color = color;
-    const step = 5.0;
-    for (double x = 0; x < size.width; x += step) {
-      canvas.drawCircle(Offset(x, size.height / 2), 0.8, paint);
+  Color get _badgeColor {
+    if (rank == 1) return const Color(0xFFE53935);
+    if (rank == 2) return const Color(0xFFFF8A00);
+    if (rank == 3) return const Color(0xFF42A5F5);
+    return const Color(0xFF5A5A5A);
+  }
+
+  List<String> get _tags {
+    final out = <String>[];
+    for (final g in movie.genres) {
+      final t = g.trim();
+      if (t.isEmpty || t == movie.area || out.contains(t)) continue;
+      out.add(t);
+      if (out.length >= 3) break;
     }
+    return out;
+  }
+
+  String get _statusLine {
+    final r = movie.remarks.trim();
+    if (r.isNotEmpty) return r;
+    final a = movie.area.trim();
+    if (a.isNotEmpty) return a;
+    if (movie.totalEpisodes > 0) return '全${movie.totalEpisodes}集';
+    return movie.subtitle.trim();
   }
 
   @override
-  bool shouldRepaint(covariant _DotsPainter oldDelegate) =>
-      oldDelegate.color != color;
-}
-
-class _FilterTextRow extends StatelessWidget {
-  const _FilterTextRow({
-    required this.labels,
-    required this.selected,
-    required this.onSelected,
-    required this.accent,
-  });
-
-  final List<String> labels;
-  final String selected;
-  final ValueChanged<String> onSelected;
-  final Color accent;
-
-  @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      height: 34,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        physics: const BouncingScrollPhysics(),
-        itemCount: labels.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 14),
-        itemBuilder: (context, i) {
-          final name = labels[i];
-          final on = name == selected;
-          return PressScale(
-            scale: 0.94,
-            onTap: () => onSelected(name),
-            child: AnimatedDefaultTextStyle(
-              duration: ThemeController.instance.scaled(
-                const Duration(milliseconds: 160),
-              ),
-              curve: Curves.easeOutCubic,
-              style: TextStyle(
-                fontFamily: 'AppSans',
-                fontSize: 14,
-                fontWeight: on ? FontWeight.w700 : FontWeight.w500,
-                color: on ? accent : AppPalette.text(context),
-                decoration: TextDecoration.none,
-              ),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(name, textAlign: TextAlign.left),
-                  const SizedBox(height: 3),
-                  AnimatedContainer(
-                    duration: ThemeController.instance.scaled(
-                      const Duration(milliseconds: 180),
+    final ink = AppPalette.text(context);
+    final muted = AppPalette.textHint(context);
+    final chipBg = Theme.of(context).brightness == Brightness.dark
+        ? const Color(0xFF2A2A2A)
+        : const Color(0xFFF0F0F0);
+    final tags = _tags;
+
+    return PressScale(
+      onTap: onTap,
+      scale: 0.98,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 84,
+            height: 118,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Positioned.fill(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: CmsCoverImage(
+                      url: movie.coverUrl,
+                      fit: BoxFit.cover,
+                      alignment: Alignment.topCenter,
                     ),
-                    curve: Curves.easeOutCubic,
-                    height: 2.5,
-                    width: on ? 16 : 0,
+                  ),
+                ),
+                Positioned(
+                  left: 0,
+                  top: 0,
+                  child: Container(
+                    constraints: const BoxConstraints(minWidth: 22),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 3,
+                    ),
                     decoration: BoxDecoration(
-                      color: accent,
-                      borderRadius: BorderRadius.circular(2),
+                      color: _badgeColor,
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(8),
+                        bottomRight: Radius.circular(6),
+                      ),
+                    ),
+                    child: Text(
+                      '$rank',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontFamily: 'AppSans',
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
+                        height: 1.1,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: SizedBox(
+              height: 118,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    movie.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontFamily: 'AppSans',
+                      fontSize: 17,
+                      fontWeight: FontWeight.w800,
+                      color: ink,
+                      height: 1.2,
+                    ),
+                  ),
+                  Expanded(
+                    child: Align(
+                      // 类型标签：上下居中（相对片名与底部状态之间）
+                      alignment: Alignment.centerLeft,
+                      child: tags.isEmpty
+                          ? const SizedBox.shrink()
+                          : Wrap(
+                              spacing: 6,
+                              runSpacing: 4,
+                              children: [
+                                for (final t in tags)
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 7,
+                                      vertical: 2,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: chipBg,
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Text(
+                                      t,
+                                      style: TextStyle(
+                                        fontFamily: 'AppSans',
+                                        fontSize: 11,
+                                        color: muted,
+                                        height: 1.2,
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                    ),
+                  ),
+                  if (_statusLine.isNotEmpty)
+                    Text(
+                      _statusLine,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily: 'AppSans',
+                        fontSize: 13,
+                        color: ink.withValues(alpha: 0.72),
+                      ),
+                    ),
+                  const SizedBox(height: 2),
+                  Text(
+                    movie.year > 0 ? '${movie.year}' : '',
+                    style: TextStyle(
+                      fontFamily: 'AppSans',
+                      fontSize: 12,
+                      color: muted,
                     ),
                   ),
                 ],
               ),
             ),
-          );
-        },
+          ),
+        ],
       ),
     );
   }

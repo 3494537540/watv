@@ -51,7 +51,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       color: _quickIconColor,
     ),
     HomeQuickEntry(
-      label: '榜单',
+      label: '发现',
       icon: CupertinoIcons.chart_bar_alt_fill,
       color: _quickIconColor,
     ),
@@ -143,7 +143,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       });
       _precacheCovers(cached.take(8));
     }
-    await _loadHotContent(force: true);
+    // 已有缓存先出屏，热门刷新放后台，不挡首帧
+    unawaited(_loadHotContent(force: true));
   }
 
   Future<void> _refreshInboxBadge() async {

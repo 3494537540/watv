@@ -926,20 +926,34 @@ class _MangoSourceRowState extends State<MangoSourceRow> {
     // 已测过且非强制：不重复
     if (!force && _probedKey == key && _latency.isNotEmpty) return;
     final gen = ++_probeGen;
-    setState(() => _probing = true);
+    if (force) SourceLatency.clearCache();
+    setState(() {
+      _probing = true;
+      if (force) _latency.clear();
+    });
     final urls = List<String>.from(widget.probeUrls);
     final n = widget.names.length;
-    // 限流并发：同时狂拉容易把弱 CDN 测成「失败」
+    // 当前选中线优先测（用户最关心），其余排队；全局限流在 SourceLatency 内
     const concurrency = 2;
+    final order = <int>[
+      if (widget.selected >= 0 && widget.selected < n) widget.selected,
+      for (var i = 0; i < n; i++)
+        if (i != widget.selected) i,
+    ];
     var next = 0;
     Future<void> worker() async {
       while (true) {
-        final i = next++;
-        if (i >= n) return;
+        final k = next++;
+        if (k >= order.length) return;
+        final i = order[k];
         if (!mounted || gen != _probeGen) return;
         final url = i < urls.length ? urls[i] : '';
-        final bps =
-            url.trim().isEmpty ? null : await SourceLatency.probe(url);
+        final bps = url.trim().isEmpty
+            ? null
+            : await SourceLatency.probe(
+                url,
+                bypassCache: force,
+              );
         if (!mounted || gen != _probeGen) return;
         setState(() => _latency[i] = bps);
       }

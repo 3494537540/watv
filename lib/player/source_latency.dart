@@ -7,19 +7,34 @@ import 'package:http/http.dart' as http;
 
 import 'vod_playback.dart';
 
-/// 线路测速：m3u8 / mp4 / flv / mkv 等直链都能测；
-/// 仅拒绝 HTML 假页；JSON 套壳会解出真实地址再测。
+/// 线路测速：真实拉一段媒体估吞吐量（不是 ping）。
+///
+/// 设计要点：
+/// - 全局限流，避免同时狂测把 CDN 打挂（好线被测成「死」）
+/// - URL 级短缓存，UI / 自动选线 / 侧栏共用，结果一致
+/// - 速率按「首字节后传输」为主、轻微计入 TTFB，减少虚高/虚低
+/// - JSON 套壳二次探测会降权，减轻「假绿」
 abstract final class SourceLatency {
   SourceLatency._();
 
-  static const _sampleBytes = 64 * 1024;
-  static const _minMediaBytes = 2 * 1024;
-  static const _budget = Duration(milliseconds: 6500);
+  static const _sampleBytes = 96 * 1024;
+  static const _minMediaBytes = 8 * 1024;
+  static const _budget = Duration(milliseconds: 7000);
+  static const _cacheTtl = Duration(seconds: 120);
+  static const _maxConcurrent = 2;
 
-  /// 返回字节/秒；不可播返回 null（UI 显示 —）
+  static final Map<String, _CacheEntry> _cache = {};
+  static int _inflight = 0;
+  static final List<Completer<void>> _waiters = [];
+
+  /// 清空缓存（换集 / 强制重测时）
+  static void clearCache() => _cache.clear();
+
+  /// 返回字节/秒；不可播或超时返回 null（UI 显示 —）
   static Future<int?> probe(
     String url, {
     Duration timeout = _budget,
+    bool bypassCache = false,
   }) async {
     final u = url.trim();
     if (u.isEmpty) return null;
@@ -28,53 +43,84 @@ abstract final class SourceLatency {
       return null;
     }
 
-    final client = http.Client();
-    try {
-      return await _probeUri(
-        client,
-        uri,
-        budget: timeout,
-        depth: 0,
-        referer: VodPlayback.httpHeaders['Referer'] ??
-            '${uri.scheme}://${uri.host}/',
-      ).timeout(timeout);
-    } catch (_) {
-      return null;
-    } finally {
-      client.close();
+    final key = u;
+    if (!bypassCache) {
+      final hit = _cache[key];
+      if (hit != null && !hit.expired) return hit.bps;
     }
+
+    return _withPermit(() async {
+      if (!bypassCache) {
+        final hit = _cache[key];
+        if (hit != null && !hit.expired) return hit.bps;
+      }
+      final client = http.Client();
+      try {
+        final bps = await _probeUri(
+          client,
+          uri,
+          budget: timeout,
+          depth: 0,
+          shellHops: 0,
+          referer: VodPlayback.httpHeaders['Referer'] ??
+              '${uri.scheme}://${uri.host}/',
+        ).timeout(timeout);
+        _cache[key] = _CacheEntry(bps, DateTime.now().add(_cacheTtl));
+        return bps;
+      } catch (_) {
+        // 超时不缓存太久，避免好线被一次抖动永久判死
+        _cache[key] = _CacheEntry(null, DateTime.now().add(
+          const Duration(seconds: 12),
+        ));
+        return null;
+      } finally {
+        client.close();
+      }
+    });
   }
 
   /// 在 [budget] 内测速，返回速率最高的下标；全失败则回退 [fallback]。
   static Future<int> pickBestIndex(
     List<String> urls, {
-    Duration budget = const Duration(milliseconds: 2200),
+    Duration budget = const Duration(milliseconds: 8000),
     int fallback = 0,
-    int concurrency = 3,
+    int concurrency = 2,
   }) async {
     if (urls.isEmpty) return fallback;
     if (urls.length == 1) return 0;
     final scores = List<int?>.filled(urls.length, null);
-    var next = 0;
     final deadline = DateTime.now().add(budget);
 
-    Future<void> worker() async {
-      while (true) {
-        final i = next++;
-        if (i >= urls.length) return;
-        final left = deadline.difference(DateTime.now());
-        if (left.inMilliseconds < 200) return;
-        final url = urls[i];
-        final per = left < const Duration(milliseconds: 1600)
-            ? left
-            : const Duration(milliseconds: 1600);
-        scores[i] = await probe(url, timeout: per);
+    Future<void> runPass({required bool onlyNulls}) async {
+      var next = 0;
+      Future<void> worker() async {
+        while (true) {
+          final i = next++;
+          if (i >= urls.length) return;
+          if (onlyNulls && scores[i] != null) continue;
+          final left = deadline.difference(DateTime.now());
+          if (left.inMilliseconds < 400) return;
+          final url = urls[i];
+          if (url.trim().isEmpty) continue;
+          final per = left < const Duration(milliseconds: 5500)
+              ? left
+              : const Duration(milliseconds: 5500);
+          scores[i] = await probe(url, timeout: per);
+        }
       }
+
+      final n = concurrency.clamp(1, urls.length);
+      await Future.wait([for (var w = 0; w < n; w++) worker()]);
     }
 
-    await Future.wait([
-      for (var w = 0; w < concurrency.clamp(1, urls.length); w++) worker(),
-    ]).timeout(budget, onTimeout: () => const []);
+    await runPass(onlyNulls: false);
+    // 第二轮只补测第一轮没出分的（超时/拥堵），避免「没测到」当「死线」
+    if (deadline.difference(DateTime.now()).inMilliseconds > 800) {
+      final missing = scores.where((e) => e == null).length;
+      if (missing > 0) {
+        await runPass(onlyNulls: true);
+      }
+    }
 
     var best = fallback.clamp(0, urls.length - 1);
     var bestBps = -1;
@@ -88,18 +134,36 @@ abstract final class SourceLatency {
     return best;
   }
 
+  static Future<T> _withPermit<T>(Future<T> Function() action) async {
+    while (_inflight >= _maxConcurrent) {
+      final c = Completer<void>();
+      _waiters.add(c);
+      await c.future;
+    }
+    _inflight++;
+    try {
+      return await action();
+    } finally {
+      _inflight--;
+      if (_waiters.isNotEmpty) {
+        _waiters.removeAt(0).complete();
+      }
+    }
+  }
+
   static Future<int?> _probeUri(
     http.Client client,
     Uri uri, {
     required Duration budget,
     required int depth,
+    required int shellHops,
     required String referer,
   }) async {
     if (depth > 3) return null;
     final deadline = DateTime.now().add(budget);
     Duration left() {
       final ms = deadline.difference(DateTime.now()).inMilliseconds;
-      return Duration(milliseconds: math.max(400, ms));
+      return Duration(milliseconds: math.max(500, ms));
     }
 
     final first = await _getBytes(
@@ -112,7 +176,6 @@ abstract final class SourceLatency {
     );
     if (first == null || first.bytes.length < 16) return null;
 
-    // HTML 播放页 / 报错页：假高速
     if (_isHtmlGarbage(first.bytes)) return null;
 
     final text = utf8.decode(first.bytes, allowMalformed: true);
@@ -126,27 +189,31 @@ abstract final class SourceLatency {
         final nestedUri = Uri.tryParse(nested);
         if (nestedUri != null &&
             (nestedUri.isScheme('http') || nestedUri.isScheme('https')) &&
-            left().inMilliseconds > 500) {
-          return _probeUri(
+            left().inMilliseconds > 600) {
+          final nestedBps = await _probeUri(
             client,
             nestedUri,
             budget: left(),
             depth: depth + 1,
+            shellHops: shellHops + 1,
             referer: uri.toString(),
           );
+          return _demoteShell(nestedBps, shellHops + 1);
         }
       }
     }
 
-    // 声称是 m3u8，正文却不是 → 不可播
-    if (pathSaysM3u8 && !hasExtM3u) return null;
-
-    // 非 HLS：mp4 / flv / mkv / webm / ts 直链
-    if (!hasExtM3u) {
-      return _scoreDirectMedia(first, uri);
+    // 声称 m3u8 但正文不是：若也不像媒体，判死；直链媒体仍可打分
+    if (pathSaysM3u8 && !hasExtM3u) {
+      final direct = _scoreDirectMedia(first, uri);
+      return _demoteShell(direct, shellHops);
     }
 
-    // —— 以下 HLS ——
+    if (!hasExtM3u) {
+      return _demoteShell(_scoreDirectMedia(first, uri), shellHops);
+    }
+
+    // —— HLS ——
     final keyMethod = _hlsKeyMethod(text);
     if (keyMethod != null &&
         keyMethod != 'NONE' &&
@@ -160,26 +227,26 @@ abstract final class SourceLatency {
       if (!keyOk) return null;
     }
     final encrypted = keyMethod == 'AES-128';
-
     final playlistReferer = uri.toString();
 
     final variant = _bestVariantUri(text, uri);
-    if (variant != null && left().inMilliseconds > 800) {
+    if (variant != null && left().inMilliseconds > 900) {
       final nested = await _probeUri(
         client,
         variant,
         budget: left(),
         depth: depth + 1,
+        shellHops: shellHops,
         referer: playlistReferer,
       );
-      if (nested != null) return nested;
+      if (nested != null) return _demoteShell(nested, shellHops);
     }
 
-    final segs = _segmentUris(text, uri, limit: 4);
+    final segs = _segmentUris(text, uri, limit: 3);
     if (segs.isEmpty) return null;
 
     var totalBytes = 0;
-    var totalMs = 0;
+    var totalScoreMs = 0;
     var mediaOk = 0;
     for (final seg in segs) {
       if (left().inMilliseconds < 500) break;
@@ -188,7 +255,7 @@ abstract final class SourceLatency {
       final part = await _getBytes(
         client,
         seg,
-        maxBytes: need.clamp(24 * 1024, _sampleBytes),
+        maxBytes: need.clamp(32 * 1024, _sampleBytes),
         timeout: left(),
         referer: playlistReferer,
         preferRange: !encrypted,
@@ -206,38 +273,65 @@ abstract final class SourceLatency {
           seg,
           budget: left(),
           depth: depth + 1,
+          shellHops: shellHops,
           referer: playlistReferer,
         );
-        if (nested != null) return nested;
+        if (nested != null) return _demoteShell(nested, shellHops);
         continue;
       }
 
-      if (!encrypted &&
-          !_looksLikeAvMedia(part.bytes) &&
-          !_binaryMediaOk(part)) {
+      // 宽松：非 HTML、够字节即可（避免严格魔数把可播 TS 判死）
+      if (!encrypted) {
+        final ok = _looksLikeAvMedia(part.bytes) ||
+            _binaryMediaOk(part) ||
+            (part.bytes.length >= 2048 && !_looksLikeText(part.bytes));
+        if (!ok) continue;
+      } else if (part.bytes.length < 256) {
         continue;
       }
-      if (encrypted && part.bytes.length < 256) continue;
 
       totalBytes += part.bytes.length;
-      totalMs += part.ms;
+      totalScoreMs += part.scoreMs;
       mediaOk++;
-      if (totalBytes >= _minMediaBytes && mediaOk >= 1) break;
+      // 尽量采满两片，速率更稳；时间不够有一片且够字节也行
+      if (mediaOk >= 2 && totalBytes >= _minMediaBytes) break;
+      if (mediaOk >= 1 &&
+          totalBytes >= _minMediaBytes &&
+          left().inMilliseconds < 900) {
+        break;
+      }
     }
 
-    if (mediaOk == 0 || totalBytes < _minMediaBytes || totalMs <= 0) {
+    if (mediaOk == 0 || totalBytes < _minMediaBytes || totalScoreMs <= 0) {
       return null;
     }
-    return (totalBytes * 1000 / totalMs).round();
+    return _demoteShell(
+      (totalBytes * 1000 / totalScoreMs).round(),
+      shellHops,
+    );
   }
 
-  /// mp4/flv/mkv/webm/ts 等直链打分
+  static int? _demoteShell(int? bps, int shellHops) {
+    if (bps == null || bps <= 0) return bps;
+    if (shellHops <= 0) return bps;
+    // 每层套壳打七折，最高打到约 0.5
+    var factor = 1.0;
+    for (var i = 0; i < shellHops; i++) {
+      factor *= 0.7;
+    }
+    factor = math.max(0.45, factor);
+    return math.max(1, (bps * factor).round());
+  }
+
   static int? _scoreDirectMedia(_Chunk first, Uri uri) {
     if (first.bytes.length < 512) return null;
     if (_looksLikeAvMedia(first.bytes)) return first.bps;
     if (_binaryMediaOk(first)) return first.bps;
-    // 路径像媒体、内容不是 HTML/JSON：宽松通过（部分 CDN 前缀非标准）
     if (_pathLooksMedia(uri) && !_looksLikeText(first.bytes)) {
+      return first.bps;
+    }
+    // 足够大的非文本响应：多数直链可播
+    if (first.bytes.length >= 8192 && !_looksLikeText(first.bytes)) {
       return first.bps;
     }
     return null;
@@ -265,7 +359,6 @@ abstract final class SourceLatency {
     return false;
   }
 
-  /// Content-Type 为 video/audio，或二进制占比高（非文本伪装）
   static bool _binaryMediaOk(_Chunk chunk) {
     final ct = chunk.contentType.toLowerCase();
     if (ct.startsWith('video/') ||
@@ -309,7 +402,7 @@ abstract final class SourceLatency {
         .trimLeft();
     if (head.isEmpty) return false;
     final c = head.codeUnitAt(0);
-    if (c == 0x7B || c == 0x5B || c == 0x3C) return true; // { [ <
+    if (c == 0x7B || c == 0x5B || c == 0x3C) return true;
     var printable = 0;
     final n = math.min(bytes.length, 256);
     for (var i = 0; i < n; i++) {
@@ -319,7 +412,6 @@ abstract final class SourceLatency {
     return printable / n > 0.92;
   }
 
-  /// 从 JSON / 简单文本里抠出可播 URL
   static String? _extractPlayUrl(String raw) {
     final t = raw.trim();
     if (t.isEmpty) return null;
@@ -414,7 +506,6 @@ abstract final class SourceLatency {
     return false;
   }
 
-  /// MPEG-TS / MP4 / WebM / FLV / Matroska 特征
   static bool _looksLikeAvMedia(List<int> bytes) {
     if (bytes.length < 8) return false;
     final b = bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
@@ -540,26 +631,40 @@ abstract final class SourceLatency {
       if (useRange) {
         req.headers['Range'] = 'bytes=0-${maxBytes - 1}';
       }
+      final wall = Stopwatch()..start();
       final streamed = await client.send(req).timeout(timeout);
       if (streamed.statusCode < 200 || streamed.statusCode >= 400) {
         return null;
       }
       final ctype = (streamed.headers['content-type'] ?? '').toLowerCase();
-      final sw = Stopwatch()..start();
       final out = <int>[];
+      var ttfbMs = 0;
+      final transfer = Stopwatch();
       await for (final chunk in streamed.stream.timeout(timeout)) {
+        if (!transfer.isRunning) {
+          ttfbMs = math.max(1, wall.elapsedMilliseconds);
+          transfer.start();
+        }
         out.addAll(chunk);
         if (out.length >= maxBytes) break;
-        if (sw.elapsed >= timeout) break;
+        if (wall.elapsed >= timeout) break;
       }
-      sw.stop();
+      wall.stop();
+      if (transfer.isRunning) transfer.stop();
       if (out.length < 16) return null;
       if (ctype.contains('text/html') && _isHtmlGarbage(out)) return null;
-      final ms = math.max(1, sw.elapsedMilliseconds);
+
+      // 传输时间为主，TTFB 计 40%：既反映秒开，又不全被冷启动拖垮
+      final transferMs = math.max(1, transfer.elapsedMilliseconds);
+      final scoreMs = math.max(
+        1,
+        (ttfbMs * 0.4 + transferMs).round(),
+      );
       return _Chunk(
         bytes: out,
-        bps: (out.length * 1000 / ms).round(),
-        ms: ms,
+        bps: (out.length * 1000 / scoreMs).round(),
+        ms: wall.elapsedMilliseconds,
+        scoreMs: scoreMs,
         contentType: ctype,
       );
     } catch (_) {
@@ -588,9 +693,16 @@ abstract final class SourceLatency {
       cands.add((uri: resolved, bw: bw, h: h));
     }
     if (cands.isEmpty) return null;
+    // 贴近 480～720：测速接近真实起播档，避免专测最渣/最顶档
     cands.sort((a, b) {
-      final da = (a.h > 0 ? (a.h - 480).abs() : 9999);
-      final db = (b.h > 0 ? (b.h - 480).abs() : 9999);
+      int dist(int h) {
+        if (h <= 0) return 9000;
+        if (h >= 480 && h <= 720) return (h - 540).abs();
+        return (h - 540).abs() + 400;
+      }
+
+      final da = dist(a.h);
+      final db = dist(b.h);
       if (da != db) return da.compareTo(db);
       return a.bw.compareTo(b.bw);
     });
@@ -648,8 +760,15 @@ abstract final class SourceLatency {
     if (bytesPerSec >= 280 * 1024) return ColorTone.good;
     if (bytesPerSec >= 120 * 1024) return ColorTone.ok;
     if (bytesPerSec >= 40 * 1024) return ColorTone.warn;
-    return ColorTone.warn;
+    return ColorTone.bad;
   }
+}
+
+class _CacheEntry {
+  _CacheEntry(this.bps, this.until);
+  final int? bps;
+  final DateTime until;
+  bool get expired => DateTime.now().isAfter(until);
 }
 
 class _Chunk {
@@ -657,11 +776,13 @@ class _Chunk {
     required this.bytes,
     required this.bps,
     required this.ms,
+    required this.scoreMs,
     this.contentType = '',
   });
   final List<int> bytes;
   final int bps;
   final int ms;
+  final int scoreMs;
   final String contentType;
 }
 

@@ -965,15 +965,36 @@ class MacCmsUserApi {
     required String long,
   }) async {
     await loadCookie();
-    final res = await _request(
-      'POST',
-      _uri('/index.php/user/upgrade'),
-      form: {
-        'group_id': '$groupId',
-        'long': long,
-      },
-    );
-    final raw = res.body.trim();
+    if (sessionCookie == null || sessionCookie!.trim().isEmpty) {
+      throw CmsUserException('开通失败：请先登录', code: 401);
+    }
+
+    // QQ/面板注入的 Cookie 常缺 PHPSESSID，先暖会话再升级
+    await _warmUpgradeSession();
+
+    Future<_CmsHttpResult> postUpgrade(String path) {
+      return _request(
+        'POST',
+        _uri(path),
+        form: {
+          'group_id': '$groupId',
+          'long': long,
+        },
+      );
+    }
+
+    var res = await postUpgrade('/index.php/user/upgrade');
+    var raw = res.body.trim();
+    // 部分主题只认 .html；302/空包时再试一次
+    if (raw.isEmpty ||
+        res.statusCode == 301 ||
+        res.statusCode == 302 ||
+        res.statusCode == 303 ||
+        res.statusCode == 307) {
+      res = await postUpgrade('/index.php/user/upgrade.html');
+      raw = res.body.trim();
+    }
+
     Map<String, dynamic>? map;
     try {
       final decoded = jsonDecode(raw);
@@ -984,7 +1005,8 @@ class MacCmsUserApi {
       map = null;
     }
     if (map == null) {
-      final m = RegExp(r'\{.*\}', dotAll: true).firstMatch(raw);
+      final m = RegExp(r'\{[^{}]*"code"\s*:\s*\d+[^{}]*\}', dotAll: true)
+          .firstMatch(raw);
       if (m != null) {
         try {
           final decoded = jsonDecode(m.group(0)!);
@@ -993,20 +1015,77 @@ class MacCmsUserApi {
       }
     }
     if (map == null) {
+      final looksLogin = res.statusCode == 401 ||
+          res.statusCode == 302 ||
+          res.statusCode == 301 ||
+          raw.contains('未登录') ||
+          raw.contains('请登录') ||
+          raw.contains('user/login');
+      final cookieUid = int.tryParse(_cookieMap['user_id'] ?? '') ?? 0;
+      if (looksLogin) {
+        // 本地仍有 user_id：多半是 CMS 会话未同步，不是「没登录」
+        if (cookieUid > 0) {
+          throw CmsUserException(
+            '开通失败：站点会话未同步。请退出后用「账号密码」登录再试，或使用兑换码开通',
+            code: 401,
+          );
+        }
+        throw CmsUserException('开通失败：登录已失效，请重新登录后再试', code: 401);
+      }
       final snippet = raw.length > 80 ? '${raw.substring(0, 80)}…' : raw;
       throw CmsUserException(
         raw.isEmpty
-            ? '开通失败：服务器没有返回数据（请确认已部署面板/站点可访问）'
+            ? '开通失败：服务器没有返回数据（请重新登录，或确认站点 /user/upgrade 可访问）'
             : '开通失败：服务器返回异常（$snippet）',
       );
     }
     final code = int.tryParse('${map['code']}') ?? 0;
     final msg = '${map['msg'] ?? ''}'.trim();
     if (code == 1) return msg.isEmpty ? '升级成功' : msg;
+    // 主题把未登录也写成 code!=1
+    if (code == 0 &&
+        (msg.contains('登录') || msg.contains('未登录') || msg.contains('请先'))) {
+      throw CmsUserException(
+        '开通失败：站点会话未同步。请退出后用「账号密码」登录再试，或使用兑换码开通',
+        code: 401,
+      );
+    }
     throw CmsUserException(
       msg.isEmpty ? '升级失败，请确认积分是否足够' : msg,
       code: code,
     );
+  }
+
+  /// 暖会话：访问会员中心拿到/续期 PHPSESSID，再试 ajax 信息接口
+  Future<void> _warmUpgradeSession() async {
+    try {
+      await _request(
+        'GET',
+        _uri('/index.php/user/index.html'),
+        asAjax: false,
+        connectionTimeout: const Duration(seconds: 6),
+        readTimeout: const Duration(seconds: 8),
+      );
+    } catch (_) {}
+    try {
+      await _request(
+        'GET',
+        _uri('/index.php/user/info.html'),
+        asAjax: false,
+        connectionTimeout: const Duration(seconds: 5),
+        readTimeout: const Duration(seconds: 6),
+      );
+    } catch (_) {}
+    // 再访问升级页一次，部分主题在此下发 CSRF/会话
+    try {
+      await _request(
+        'GET',
+        _uri('/index.php/user/upgrade.html'),
+        asAjax: false,
+        connectionTimeout: const Duration(seconds: 5),
+        readTimeout: const Duration(seconds: 6),
+      );
+    } catch (_) {}
   }
 
   /// 面板 DB 直查会员资料（供 QQ 登录补积分/昵称）

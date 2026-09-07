@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../services/huihuo_panel_api.dart';
+import '../services/vip_membership_notice.dart';
 import '../state/cms_auth_controller.dart';
 import '../theme/app_colors.dart';
 import '../widgets/auth_sheet.dart';
@@ -54,15 +55,23 @@ class _RedeemPageState extends State<RedeemPage> {
         userId: user.userId,
         userName: user.userName,
       );
+      // 先刷新会员到期，再提示成功
+      try {
+        await CmsAuthController.instance.refreshProfile();
+      } catch (_) {}
+      await VipMembershipNotice.announceSuccess(
+        title: '兑换成功',
+        detail: '${r.msg}\n${r.rewardText}'.trim(),
+      );
       DialogX.dismiss();
       _ctrl.clear();
       if (!mounted) return;
       DialogX.showSuccess('${r.msg}\n${r.rewardText}');
-      // 资料后台刷新，不挡成功提示
-      unawaited(CmsAuthController.instance.refreshProfile().catchError((_) {}));
     } catch (e) {
       DialogX.dismiss();
-      final msg = '$e'.replaceFirst('Bad state: ', '').replaceFirst('StateError: ', '');
+      final msg = '$e'
+          .replaceFirst('Bad state: ', '')
+          .replaceFirst('StateError: ', '');
       DialogX.showError(msg.isEmpty ? '兑换失败' : msg);
     } finally {
       if (mounted) setState(() => _busy = false);

@@ -301,16 +301,29 @@ class HuihuoPanelApi {
     required int userId,
     String userName = '',
   }) async {
+    final trimmed = code.trim();
+    if (trimmed.isEmpty) {
+      throw StateError('请输入兑换码');
+    }
+    if (userId <= 0) {
+      throw StateError('请先登录');
+    }
     final res = await huihuoHttpPostJson(ApiConfig.huihuoPanelRedeemUrl, {
-      'code': code.trim(),
+      'code': trimmed,
       'user_id': userId,
       'user_name': userName,
     });
     if (res.status < 200 || res.status >= 300) {
-      throw StateError('兑换失败 HTTP ${res.status}');
+      throw StateError('兑换失败 HTTP ${res.status}（请确认面板已部署）');
     }
     final body = res.body.trim();
-    if (!body.startsWith('{')) throw StateError('兑换接口异常');
+    if (!body.startsWith('{')) {
+      throw StateError(
+        body.isEmpty
+            ? '兑换接口无响应（请确认已部署 huihuo_panel.php）'
+            : '兑换接口异常',
+      );
+    }
     final decoded = jsonDecode(body);
     if (decoded is! Map) throw StateError('兑换接口异常');
     final map = Map<String, dynamic>.from(decoded);
@@ -319,8 +332,52 @@ class HuihuoPanelApi {
     if (!ok) {
       throw StateError(msg.isEmpty ? '兑换失败' : msg);
     }
-    final reward = '${map['reward_text'] ?? msg}'.trim();
-    return (msg: msg.isEmpty ? '兑换成功' : msg, rewardText: reward);
+    final rewardText = '${map['reward_text'] ?? ''}'.trim();
+    return (
+      msg: msg.isEmpty ? '兑换成功' : msg,
+      rewardText: rewardText.isEmpty ? '奖励已到账' : rewardText,
+    );
+  }
+
+  /// 积分开通会员：面板 DB 直写（QQ 登录也可用，不依赖 PHPSESSID）
+  static Future<String> upgradeVip({
+    required int userId,
+    required int groupId,
+    required String long,
+    int points = 0,
+  }) async {
+    if (userId <= 0) {
+      throw StateError('请先登录');
+    }
+    if (groupId < 3) {
+      throw StateError('会员组无效');
+    }
+    final res = await huihuoHttpPostJson(ApiConfig.huihuoPanelUpgradeVipUrl, {
+      'user_id': userId,
+      'group_id': groupId,
+      'long': long,
+      if (points > 0) 'points': points,
+    });
+    if (res.status < 200 || res.status >= 300) {
+      throw StateError('开通失败 HTTP ${res.status}（请确认面板已部署 upgrade_vip）');
+    }
+    final body = res.body.trim();
+    if (!body.startsWith('{')) {
+      throw StateError(
+        body.isEmpty
+            ? '开通接口无响应（请更新并部署 huihuo_panel.php）'
+            : '开通接口异常',
+      );
+    }
+    final decoded = jsonDecode(body);
+    if (decoded is! Map) throw StateError('开通接口异常');
+    final map = Map<String, dynamic>.from(decoded);
+    final ok = map['code'] == 1 || map['code'] == '1';
+    final msg = '${map['msg'] ?? ''}'.trim();
+    if (!ok) {
+      throw StateError(msg.isEmpty ? '开通失败' : msg);
+    }
+    return msg.isEmpty ? '开通成功' : msg;
   }
 
   /// QQ 授权凭证 → CMS Cookie 会话

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
+import 'package:media_kit/media_kit.dart';
 
 import 'services/app_security.dart';
 import 'services/cms_endpoint_bootstrap.dart';
@@ -32,6 +33,12 @@ void _disableDebugBorders() {
 
 Future<void> main() async {
   final widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
+  // media_kit：与现有 Exo 并存，切内核时才真正创建 Player
+  try {
+    MediaKit.ensureInitialized();
+  } catch (e) {
+    debugPrint('MediaKit init skipped: $e');
+  }
   AppSecurity.instance.install();
   _disableDebugBorders();
 
