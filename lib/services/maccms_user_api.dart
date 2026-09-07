@@ -143,20 +143,21 @@ class CmsUser {
     return '会员';
   }
 
-  /// 主题页常见误解析名（如「游客」/ deleted）
+  /// 主题页常见误解析名（展示层应替换，绝不作为最终昵称回落）
   static bool isJunkDisplayName(String raw) {
     final t = raw.trim();
     if (t.isEmpty) return true;
-    // 去掉普通空格与全角空格后再比（主题偶发 "d e l e t e d"）
     final compact = t.replaceAll(RegExp(r'[\s\u00A0\u3000]+'), '').toLowerCase();
     return t == '会员' ||
         t == '游客' ||
-        t == '未登录' ||
-        t == 'guest' ||
-        t == 'Guest' ||
+        t == '访客' ||
         t == '匿名' ||
+        t == '匿名用户' ||
+        t == '未登录' ||
         t == '默认' ||
         t == '用户' ||
+        t == 'guest' ||
+        t == 'Guest' ||
         compact == 'deleted' ||
         compact == 'delete' ||
         compact == 'null' ||
@@ -642,10 +643,12 @@ class MacCmsUserApi {
     Map<String, String>? headers,
     Map<String, String>? form,
     bool asAjax = true,
+    Duration connectionTimeout = const Duration(seconds: 12),
+    Duration readTimeout = const Duration(seconds: 20),
   }) async {
     final client = HttpClient()
       ..userAgent = _ua
-      ..connectionTimeout = const Duration(seconds: 12);
+      ..connectionTimeout = connectionTimeout;
     AppSecurity.instance.hardenClient(client);
     try {
       final req = await client.openUrl(method, uri);
@@ -685,7 +688,7 @@ class MacCmsUserApi {
         req.add(bytes);
       }
 
-      final res = await req.close().timeout(const Duration(seconds: 20));
+      final res = await req.close().timeout(readTimeout);
       final builder = BytesBuilder(copy: false);
       await for (final chunk in res) {
         builder.add(chunk);
@@ -725,6 +728,8 @@ class MacCmsUserApi {
       _uri('/index.php/verify/index.html', {
         'r': '${DateTime.now().millisecondsSinceEpoch}',
       }),
+      connectionTimeout: const Duration(seconds: 6),
+      readTimeout: const Duration(seconds: 8),
     );
     if (res.statusCode != 200 || res.bodyBytes.isEmpty) {
       throw CmsUserException('验证码获取失败');

@@ -11,6 +11,7 @@ import '../config/api_config.dart';
 import '../theme/app_colors.dart';
 import 'app_onboarding.dart';
 import 'brand_sunlight_text.dart';
+import 'cms_cover_image.dart';
 import 'figma_loading.dart';
 import 'media_placeholder.dart';
 import 'movie_watch_menu.dart';
@@ -654,16 +655,12 @@ class HomePinnedBannerLayer extends StatelessWidget {
         color: const Color(0xFF1C1C1E),
         child: url.isEmpty
             ? const _BannerSkeleton()
-            : Image.network(
-                url,
+            : CmsCoverImage(
                 key: ValueKey(url),
+                url: url,
+                vodId: has ? movies[i].id : null,
                 fit: BoxFit.cover,
-                width: double.infinity,
-                height: double.infinity,
                 alignment: Alignment.center,
-                filterQuality: FilterQuality.medium,
-                gaplessPlayback: true,
-                errorBuilder: (_, _, _) => const _BannerSkeleton(),
               ),
       ),
     );
@@ -812,15 +809,19 @@ class _BannerSlide extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _CoverBackdrop(coverUrl: movie.bannerUrl ?? movie.coverUrl);
+    return _CoverBackdrop(
+      coverUrl: movie.bannerUrl ?? movie.coverUrl,
+      vodId: movie.id,
+    );
   }
 }
 
 /// 海报背景：等比 cover 铺满，不拉伸
 class HomeCoverBackdrop extends StatelessWidget {
-  const HomeCoverBackdrop({super.key, this.coverUrl});
+  const HomeCoverBackdrop({super.key, this.coverUrl, this.vodId});
 
   final String? coverUrl;
+  final String? vodId;
 
   @override
   Widget build(BuildContext context) {
@@ -828,15 +829,11 @@ class HomeCoverBackdrop extends StatelessWidget {
     if (url.isEmpty) return const _BannerSkeleton();
     return ColoredBox(
       color: const Color(0xFF1C1C1E),
-      child: Image.network(
-        url,
+      child: CmsCoverImage(
+        url: url,
+        vodId: vodId,
         fit: BoxFit.cover,
-        width: double.infinity,
-        height: double.infinity,
         alignment: Alignment.center,
-        filterQuality: FilterQuality.medium,
-        gaplessPlayback: true,
-        errorBuilder: (_, _, _) => const _BannerSkeleton(),
       ),
     );
   }
@@ -844,13 +841,14 @@ class HomeCoverBackdrop extends StatelessWidget {
 
 /// 海报背景：优先真实封面图铺满顶部，失败则占位图
 class _CoverBackdrop extends StatelessWidget {
-  const _CoverBackdrop({this.coverUrl});
+  const _CoverBackdrop({this.coverUrl, this.vodId});
 
   final String? coverUrl;
+  final String? vodId;
 
   @override
   Widget build(BuildContext context) {
-    return HomeCoverBackdrop(coverUrl: coverUrl);
+    return HomeCoverBackdrop(coverUrl: coverUrl, vodId: vodId);
   }
 }
 
@@ -1753,21 +1751,11 @@ class HomeLandscapeCard extends StatelessWidget {
                 children: [
                   const MediaPlaceholder(kind: MediaPlaceholderKind.image),
                   if (url.isNotEmpty)
-                    Image.network(
-                      url,
+                    CmsCoverImage(
+                      url: url,
+                      vodId: movie.id,
                       fit: BoxFit.cover,
                       alignment: const Alignment(0, -0.2),
-                      filterQuality: FilterQuality.medium,
-                      errorBuilder: (_, _, _) => const MediaPlaceholder(
-                        kind: MediaPlaceholderKind.image,
-                      ),
-                      loadingBuilder: (context, child, progress) {
-                        if (progress == null) return child;
-                        return const MediaLoadingPlaceholder(
-                          kind: MediaPlaceholderKind.image,
-                          radius: 8,
-                        );
-                      },
                     ),
                   if (badge != null)
                     Positioned(
@@ -2004,14 +1992,11 @@ class HomeMediaListTile extends StatelessWidget {
                   children: [
                     const MediaPlaceholder(kind: MediaPlaceholderKind.image),
                     if (url.isNotEmpty)
-                      Image.network(
-                        url,
+                      CmsCoverImage(
+                        url: url,
+                        vodId: movie.id,
                         fit: BoxFit.cover,
                         alignment: const Alignment(0, -0.2),
-                        filterQuality: FilterQuality.medium,
-                        errorBuilder: (_, _, _) => const MediaPlaceholder(
-                          kind: MediaPlaceholderKind.image,
-                        ),
                       ),
                     if (badge != null)
                       Positioned(

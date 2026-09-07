@@ -51,13 +51,17 @@ class _CommentAvatarState extends State<CommentAvatar> {
 
   String? _qqUrl() {
     final me = CmsAuthController.instance.user;
-    return QqAvatar.urlFromCandidates([
-      widget.name,
-      me?.userName,
-      me?.qq,
-      me?.nickName,
-      if (me != null && me.userId > 0) '${me.userId}',
-    ]);
+    final n = widget.name.trim();
+    final candidates = <String?>[n];
+    if (me != null &&
+        n.isNotEmpty &&
+        (n == me.displayName.trim() ||
+            n == me.userName.trim() ||
+            n == me.nickName.trim() ||
+            n == '用户${me.userId}')) {
+      candidates.addAll([me.userName, me.qq, me.nickName, '${me.userId}']);
+    }
+    return QqAvatar.urlFromCandidates(candidates);
   }
 
   String? _resolvedUrl() {

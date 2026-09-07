@@ -2,11 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../player/local_media_server.dart';
 import '../player/vod_playback.dart';
 import 'local_notification_service.dart';
 
@@ -248,13 +248,28 @@ class VodCacheStore {
     for (final e in _items) {
       if (e.vodId != vodId || e.episodeIndex != episodeIndex) continue;
       if (!e.isDone || e.localPath.isEmpty) continue;
-      if (!File(e.localPath).existsSync()) continue;
+      // 同步快速检查；异步 remount 在 prepareLocalMediaPath
+      if (!_localFileLikelyExists(e.localPath)) continue;
       if (preferSourceIndex != null && e.sourceIndex == preferSourceIndex) {
         return e;
       }
       fallback ??= e;
     }
     return fallback;
+  }
+
+  bool _localFileLikelyExists(String raw) {
+    var path = raw.trim();
+    if (path.startsWith('file:')) {
+      try {
+        path = Uri.parse(path).toFilePath();
+      } catch (_) {}
+    }
+    if (path.isEmpty) return false;
+    if (File(path).existsSync()) return true;
+    // 沙盒 UUID 变了时，这里可能误判不存在；播放时还会 remount
+    final norm = path.replaceAll('\\', '/');
+    return norm.contains('/vod_cache/');
   }
 
   /// 已完成且本地文件仍在时返回本地路径，否则 null
@@ -272,109 +287,62 @@ class VodCacheStore {
     return e?.localPath;
   }
 
-  /// 打开本地 m3u8 前：本地化 KEY/MAP；iOS 把相对路径改成绝对 file://（AVPlayer 相对路径易失败）
-  Future<String> prepareLocalMediaPath(String rawPath) async {
+  /// 当前平台沙盒下的缓存根目录（iOS/Android 物理路径不同，API 相同）
+  Future<Directory> cacheRootDir() async {
+    final dir = await getApplicationDocumentsDirectory();
+    final root = Directory('${dir.path}/vod_cache');
+    if (!await root.exists()) {
+      await root.create(recursive: true);
+    }
+    return root;
+  }
+
+  /// 把持久化的绝对路径重挂到当前沙盒（重装/升级后 Documents UUID 会变）
+  Future<String> remountLocalPath(String rawPath) async {
     var path = rawPath.trim();
     if (path.startsWith('file:')) {
       path = Uri.parse(path).toFilePath();
     }
-    final lower = path.toLowerCase();
-    if (!lower.endsWith('.m3u8')) return path;
-    final file = File(path);
-    if (!await file.exists()) return path;
-    String body;
-    try {
-      body = await file.readAsString();
-    } catch (_) {
-      return path;
+    if (path.isEmpty) {
+      throw StateError('本地缓存文件不存在，请重新下载');
     }
-    final dir = file.parent;
-    final absPlaylist = !kIsWeb && Platform.isIOS;
-    final lines = body.split('\n');
-    final out = StringBuffer();
-    var changed = false;
-    var segCount = 0;
-    var missingSeg = 0;
-    for (final raw in lines) {
-      final trimmed = raw.trim();
-      final upper = trimmed.toUpperCase();
-      if (upper.startsWith('#EXT-X-KEY:') || upper.startsWith('#EXT-X-MAP:')) {
-        final name =
-            upper.startsWith('#EXT-X-MAP:') ? 'init.mp4' : 'key.key';
-        var next = await _localizeHlsAttrUriLine(
-          trimmed,
-          'https://local.invalid/',
-          dir,
-          fileName: name,
-        );
-        if (next != trimmed) changed = true;
-        // 密钥仍指向外网 → 离线必卡死
-        if (next.toUpperCase().contains('URI="HTTP')) {
-          throw StateError('缓存密钥未下载完成，请重新下载');
-        }
-        if (absPlaylist) {
-          final abs = _absolutizeHlsAttrUri(next, dir);
-          if (abs != next) {
-            next = abs;
-            changed = true;
-          }
-        }
-        out.writeln(next);
-      } else if (trimmed.isNotEmpty && !trimmed.startsWith('#')) {
-        // 分片行：仍是 http(s) 的没法离线播；相对名则检查文件是否在
-        if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-          missingSeg++;
-          out.writeln(raw);
-        } else {
-          final localName = trimmed.startsWith('file:')
-              ? Uri.parse(trimmed).toFilePath().split(Platform.pathSeparator).last
-              : trimmed;
-          segCount++;
-          final seg = File('${dir.path}/$localName');
-          if (!await seg.exists() || await seg.length() == 0) {
-            missingSeg++;
-          }
-          if (absPlaylist) {
-            final absUri = Uri.file(seg.path).toString();
-            if (trimmed != absUri) changed = true;
-            out.writeln(absUri);
-          } else {
-            out.writeln(localName == trimmed ? raw : localName);
-          }
-        }
-      } else {
-        out.writeln(raw);
-      }
+    final asIs = File(path);
+    if (await asIs.exists()) return asIs.path;
+
+    final norm = path.replaceAll('\\', '/');
+    final marker = '/vod_cache/';
+    final i = norm.indexOf(marker);
+    if (i >= 0) {
+      final rel = norm.substring(i + marker.length);
+      final root = await cacheRootDir();
+      final remounted = File('${root.path}/$rel');
+      if (await remounted.exists()) return remounted.path;
     }
-    if (changed) {
-      try {
-        await file.writeAsString(out.toString());
-      } catch (_) {}
+
+    // 仅存了相对路径：vod_cache/id/index.m3u8 或 id/index.m3u8
+    final root = await cacheRootDir();
+    final candidates = <String>[
+      if (!norm.startsWith('/')) '${root.parent.path}/$norm',
+      '${root.path}/$norm',
+      if (norm.startsWith('vod_cache/'))
+        '${root.parent.path}/$norm',
+    ];
+    for (final c in candidates) {
+      final f = File(c);
+      if (await f.exists()) return f.path;
     }
-    if (segCount == 0 || missingSeg > 0) {
-      throw StateError(
-        missingSeg > 0
-            ? '缓存不完整（缺少分片），请重新下载'
-            : '缓存播放列表无效，请重新下载',
-      );
-    }
-    return path;
+    throw StateError('本地缓存文件不存在，请重新下载');
   }
 
-  /// 把 KEY/MAP 里相对 URI 写成绝对 file://（仅 iOS 播放用）
-  static String _absolutizeHlsAttrUri(String line, Directory dir) {
-    final m = RegExp(r'URI="([^"]+)"', caseSensitive: false).firstMatch(line);
-    final raw = m?.group(1)?.trim() ?? '';
-    if (raw.isEmpty) return line;
-    if (raw.startsWith('http://') || raw.startsWith('https://')) return line;
-    final absPath = raw.startsWith('file:')
-        ? Uri.parse(raw).toFilePath()
-        : (raw.startsWith('/') ? raw : '${dir.path}/$raw');
-    final absUri = Uri.file(absPath).toString();
-    return line.replaceFirstMapped(
-      RegExp(r'URI="[^"]+"', caseSensitive: false),
-      (_) => 'URI="$absUri"',
-    );
+  /// 打开本地媒体：重挂路径 → 校验；iOS HLS 走本机 HTTP（AVPlayer 才能稳播）
+  Future<String> prepareLocalMediaPath(String rawPath) async {
+    final path = await remountLocalPath(rawPath);
+    final lower = path.toLowerCase();
+    if (!lower.endsWith('.m3u8')) {
+      return path;
+    }
+    // iOS：相对分片 + VOD ENDLIST + 127.0.0.1；Android：相对分片 + 本地路径
+    return LocalMediaServer.instance.playableUrlFor(path);
   }
 
   Future<VodCacheItem> enqueueAndDownload({
@@ -772,11 +740,7 @@ class VodCacheStore {
     );
 
     try {
-      final dir = await getApplicationDocumentsDirectory();
-      final cacheRoot = Directory('${dir.path}/vod_cache');
-      if (!await cacheRoot.exists()) {
-        await cacheRoot.create(recursive: true);
-      }
+      final cacheRoot = await cacheRootDir();
 
       final lower = job.url.toLowerCase();
       final isHls = lower.contains('.m3u8') || lower.contains('m3u8?');
@@ -1026,8 +990,26 @@ class VodCacheStore {
       segIndex++;
     }
 
+    // 离线 VOD：强制收尾，避免 iOS 当直播流（时长 0、一直加载）
+    var body = rewritten.toString();
+    final upper = body.toUpperCase();
+    if (!upper.contains('#EXT-X-PLAYLIST-TYPE:')) {
+      body = body.contains('#EXTM3U')
+          ? body.replaceFirst('#EXTM3U', '#EXTM3U\n#EXT-X-PLAYLIST-TYPE:VOD')
+          : '#EXTM3U\n#EXT-X-PLAYLIST-TYPE:VOD\n$body';
+    } else if (upper.contains('#EXT-X-PLAYLIST-TYPE:EVENT')) {
+      body = body.replaceAll(
+        RegExp(r'#EXT-X-PLAYLIST-TYPE:\s*EVENT', caseSensitive: false),
+        '#EXT-X-PLAYLIST-TYPE:VOD',
+      );
+    }
+    if (!upper.contains('#EXT-X-ENDLIST')) {
+      if (!body.endsWith('\n')) body = '$body\n';
+      body = '$body#EXT-X-ENDLIST\n';
+    }
+
     final index = File('${workDir.path}/index.m3u8');
-    await index.writeAsString(rewritten.toString());
+    await index.writeAsString(body);
     onProgress(1, received, received);
     return index.path;
   }

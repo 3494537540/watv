@@ -113,10 +113,9 @@ class _PlayerDanmakuLayerState extends State<PlayerDanmakuLayer>
         final w = constraints.maxWidth;
         final h = constraints.maxHeight;
         if (w <= 0 || h <= 0) return const SizedBox.shrink();
+        // 透明画布；勿开 isComplex/willChange（iOS 会 saveLayer 成灰白罩）
         return CustomPaint(
           size: Size(w, h),
-          isComplex: true,
-          willChange: true,
           painter: _DanmakuPainter(
             items: widget.items,
             pos: _smoothPos - widget.prefs.timeOffsetSec,

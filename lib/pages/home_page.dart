@@ -352,7 +352,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       });
     }
     try {
-      final list = _dedupe(await _cms.fetchHotMovies(limit: 18, tab: tab));
+      final list = _dedupe(await _cms.fetchHotMovies(limit: 24, tab: tab));
       if (!mounted || seq != _hotLoadSeq) return;
       _hotByTab[tabIndex] = list;
       unawaited(HomeFeedCache.save(tab, list));
@@ -419,7 +419,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     try {
       final list = await _cms.fetchByGenreTag(
         tag,
-        limit: 18,
+        limit: 24,
         excludeIds: useHot ? const {} : _hotIds,
       );
       if (!mounted || seq != _genreLoadSeq) return;

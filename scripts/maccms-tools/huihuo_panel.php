@@ -217,7 +217,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $appName, $iconUrl, $bgUrl, $websiteUrl, time(),
             ]);
 
-            huihuoWriteAppUpdateJson($root, $platform, [
+            $bundleId = trim((string)($_POST['bundle_id'] ?? ''));
+            if ($bundleId === '') {
+                $bundleId = 'com.Vl00uI.YLMHWx';
+            }
+            $otaPlist = '';
+            if ($platform === 'ios' && preg_match('/\.ipa(\?|$)/i', $url)) {
+                $otaPlist = huihuoWriteIosOtaPlist($root, $url, $ver, $appName, $bundleId, $iconUrl);
+            }
+
+            $jsonPayload = [
                 'platform' => $platform,
                 'version' => $ver,
                 'version_code' => $code,
@@ -230,7 +239,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'bg_url' => $bgUrl,
                 'website_url' => $websiteUrl,
                 'updated_at' => time(),
-            ]);
+            ];
+            if ($otaPlist !== '') {
+                $jsonPayload['ota_plist_url'] = $otaPlist;
+                $jsonPayload['bundle_id'] = $bundleId;
+            }
+            huihuoWriteAppUpdateJson($root, $platform, $jsonPayload);
             // 归档到更新日志（官网展示）
             $pdo->prepare(
                 "INSERT INTO `{$tChangelog}`
@@ -240,6 +254,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $msg = strtoupper($platform) . ' 更新配置已保存';
             if ($hasFileField && $fileErr === UPLOAD_ERR_OK) {
                 $msg .= ' · 安装包已上传';
+            }
+            if ($otaPlist !== '') {
+                $msg .= ' · 已生成 OTA plist';
             }
             $tab = 'update';
         } elseif ($action === 'config_save') {
@@ -596,6 +613,10 @@ code{background:#f3f4f6;padding:2px 6px;border-radius:6px;font-size:12px}
         <input type="text" name="download_url" value="<?= htmlspecialchars((string)($row['download_url'] ?? $row['apk_url'] ?? '')) ?>" placeholder="https://…"/>
         <label>官网下载页（可选，App「官网下载」按钮）</label>
         <input type="text" name="website_url" value="<?= htmlspecialchars((string)($row['website_url'] ?? '')) ?>" placeholder="https://www.watv.fun"/>
+        <?php if ($plat === 'ios'): ?>
+        <label>签名后 Bundle ID（OTA 安装用，须与 IPA 一致）</label>
+        <input type="text" name="bundle_id" value="com.Vl00uI.YLMHWx" placeholder="com.xxx.yyy"/>
+        <?php endif; ?>
         <label>上传安装包（可选）</label>
         <input type="file" name="pkg" accept="<?= htmlspecialchars($meta['accept']) ?>"/>
         <label>更新说明</label>
@@ -1561,6 +1582,83 @@ function huihuoWriteNotifyJson(string $root, array $rows): void
     );
 }
 
+/** 为 iOS IPA 生成 itms-services 用的 manifest.plist，返回公开 HTTPS URL */
+function huihuoWriteIosOtaPlist(
+    string $root,
+    string $ipaUrl,
+    string $version,
+    string $title,
+    string $bundleId,
+    string $iconUrl = ''
+): string {
+    $dir = $root . '/static/app/releases';
+    if (!is_dir($dir) && !@mkdir($dir, 0755, true)) {
+        return '';
+    }
+    $icon = $iconUrl !== '' ? $iconUrl : 'https://www.watv.fun/install/icon-512.png';
+    $titleXml = htmlspecialchars($title !== '' ? $title : '哇TV', ENT_XML1 | ENT_QUOTES, 'UTF-8');
+    $verXml = htmlspecialchars($version !== '' ? $version : '1.0.0', ENT_XML1 | ENT_QUOTES, 'UTF-8');
+    $bidXml = htmlspecialchars($bundleId !== '' ? $bundleId : 'com.Vl00uI.YLMHWx', ENT_XML1 | ENT_QUOTES, 'UTF-8');
+    $ipaXml = htmlspecialchars($ipaUrl, ENT_XML1 | ENT_QUOTES, 'UTF-8');
+    $iconXml = htmlspecialchars($icon, ENT_XML1 | ENT_QUOTES, 'UTF-8');
+    $xml = <<<XML
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>items</key>
+  <array>
+    <dict>
+      <key>assets</key>
+      <array>
+        <dict>
+          <key>kind</key>
+          <string>software-package</string>
+          <key>url</key>
+          <string>{$ipaXml}</string>
+        </dict>
+        <dict>
+          <key>kind</key>
+          <string>display-image</string>
+          <key>needs-shine</key>
+          <false/>
+          <key>url</key>
+          <string>{$iconXml}</string>
+        </dict>
+        <dict>
+          <key>kind</key>
+          <string>full-size-image</string>
+          <key>needs-shine</key>
+          <false/>
+          <key>url</key>
+          <string>{$iconXml}</string>
+        </dict>
+      </array>
+      <key>metadata</key>
+      <dict>
+        <key>bundle-identifier</key>
+        <string>{$bidXml}</string>
+        <key>bundle-version</key>
+        <string>{$verXml}</string>
+        <key>kind</key>
+        <string>software</string>
+        <key>title</key>
+        <string>{$titleXml}</string>
+      </dict>
+    </dict>
+  </array>
+</dict>
+</plist>
+XML;
+    $name = 'watv_ios_ota.plist';
+    $dest = $dir . '/' . $name;
+    if (@file_put_contents($dest, $xml) === false) {
+        return '';
+    }
+    @chmod($dest, 0644);
+    return huihuoPublicBase() . '/static/app/releases/' . $name;
+}
+
 function huihuoWriteAppUpdateJson(string $root, string $platform, array $data): void
 {
     $dir = $root . '/static/app';
@@ -1773,7 +1871,7 @@ function huihuoHandleApi(
                 if ($url === '') {
                     $url = (string)($row['apk_url'] ?? '');
                 }
-                return [
+                $out = [
                     'platform' => $platform,
                     'version' => (string)$row['version'],
                     'version_code' => (int)$row['version_code'],
@@ -1785,6 +1883,22 @@ function huihuoHandleApi(
                     'website_url' => (string)($row['website_url'] ?? ''),
                     'updated_at' => (int)$row['updated_at'],
                 ];
+                if ($platform === 'ios') {
+                    $plistFile = $root . '/static/app/releases/watv_ios_ota.plist';
+                    if (is_file($plistFile)) {
+                        $out['ota_plist_url'] = huihuoPublicBase() . '/static/app/releases/watv_ios_ota.plist';
+                    } else {
+                        // 兼容 json 里已写过的字段
+                        $jsonFile = $root . '/static/app/app_update_ios.json';
+                        if (is_file($jsonFile)) {
+                            $j = json_decode((string)@file_get_contents($jsonFile), true);
+                            if (is_array($j) && !empty($j['ota_plist_url'])) {
+                                $out['ota_plist_url'] = (string)$j['ota_plist_url'];
+                            }
+                        }
+                    }
+                }
+                return $out;
             };
             $android = $pack($pdo, $tUpdate, 'android');
             $ios = $pack($pdo, $tUpdate, 'ios');
@@ -1993,6 +2107,52 @@ function huihuoHandleApi(
                     $row['user_portrait'] = $portrait;
                     $row['avatar'] = $portrait;
                 }
+                // 过滤脏昵称；但保留原始 comment_name 作兜底（勿先清掉再变「会员」）
+                $rawCommentName = html_entity_decode(
+                    trim((string)($row['comment_name'] ?? '')),
+                    ENT_QUOTES | ENT_HTML5,
+                    'UTF-8'
+                );
+                foreach (['display_name', 'user_name', 'user_nick_name', 'comment_name'] as $nk) {
+                    if (!isset($row[$nk])) {
+                        continue;
+                    }
+                    $nv = trim((string)$row[$nk]);
+                    $nv = html_entity_decode($nv, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+                    $compact = strtolower(preg_replace('/[\s\x{00A0}\x{3000}]+/u', '', $nv) ?? '');
+                    if ($nv === '' || $compact === 'deleted' || $compact === 'delete' || $compact === 'null' || $compact === 'undefined' || $nv === '游客' || $nv === '访客' || $nv === '匿名' || $nv === '会员') {
+                        $row[$nk] = '';
+                    } else {
+                        $row[$nk] = $nv;
+                    }
+                }
+                $dn = trim((string)($row['display_name'] ?? ''));
+                if ($dn === '') {
+                    $dn = trim((string)($row['user_nick_name'] ?? ''));
+                }
+                if ($dn === '') {
+                    $dn = trim((string)($row['user_login'] ?? ''));
+                }
+                if ($dn === '') {
+                    $dn = trim((string)($row['comment_name'] ?? ''));
+                }
+                if ($dn === '') {
+                    $dn = $rawCommentName;
+                }
+                $uid = (int)($row['user_id'] ?? 0);
+                $compactDn = strtolower(preg_replace('/[\s\x{00A0}\x{3000}]+/u', '', $dn) ?? '');
+                if ($dn === '' || $dn === '游客' || $dn === '访客' || $dn === '会员' || $dn === '匿名' || $compactDn === 'deleted') {
+                    if ($uid > 0) {
+                        $dn = '用户' . $uid;
+                    } elseif ($rawCommentName !== '' && $rawCommentName !== '游客' && $rawCommentName !== '访客' && $rawCommentName !== '会员') {
+                        $dn = $rawCommentName;
+                    } else {
+                        $dn = '用户';
+                    }
+                }
+                $row['display_name'] = $dn;
+                $row['user_name'] = $dn;
+                $row['comment_name'] = $rawCommentName !== '' ? $rawCommentName : $dn;
             }
             unset($row);
 

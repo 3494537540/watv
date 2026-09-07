@@ -54,7 +54,7 @@ class _CmsFavsPageState extends State<CmsFavsPage> {
 
   Future<void> _loadDecor() async {
     try {
-      final list = await MacCmsApi().fetchHotMovies(limit: 12);
+      final list = await MacCmsApi().fetchHotMovies(limit: 18);
       final urls = <String>[
         for (final m in list)
           if ((m.coverUrl ?? '').trim().isNotEmpty) m.coverUrl!.trim(),

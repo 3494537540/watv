@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -154,11 +156,9 @@ class _MembershipShopPageState extends State<MembershipShopPage> {
         groupId: pkg.groupId,
         long: pkg.long,
       );
-      try {
-        await CmsAuthController.instance.refreshProfile();
-      } catch (_) {}
       DialogX.showSuccess(msg.isEmpty ? '开通成功' : msg);
       if (mounted) Navigator.of(context).maybePop();
+      unawaited(CmsAuthController.instance.refreshProfile().catchError((_) {}));
     } on CmsUserException catch (e) {
       // 失败时强制从面板拉回真实积分，避免界面显示成 0
       try {

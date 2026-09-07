@@ -205,6 +205,20 @@
     }
     .hero .lead {
       color: var(--muted); font-size: 1.04rem; max-width: 30rem; margin-bottom: 22px;
+      min-height: 3.2em;
+    }
+    .hero .lead .typed-caret {
+      display: inline-block;
+      width: .08em;
+      height: 1.05em;
+      margin-left: 2px;
+      vertical-align: -0.12em;
+      background: var(--brand);
+      animation: caretBlink .85s step-end infinite;
+    }
+    .hero .lead.typed-done .typed-caret { opacity: 0; animation: none; }
+    @keyframes caretBlink {
+      50% { opacity: 0; }
     }
     .cta { display: flex; flex-wrap: wrap; gap: 10px; }
     .apple-ico, .android-ico { width: 18px; height: 18px; flex-shrink: 0; }
@@ -595,7 +609,7 @@
         <div class="hero-copy">
           <p class="hero-brand">哇TV</p>
           <h1>好看的影视，一哇就来</h1>
-          <p class="lead">从找片、详情到全屏播放，四步看清产品能力。右侧截图按顺序叠层轮播。</p>
+          <p class="lead" id="heroLead" aria-label="从找片、详情到全屏播放，四步看清产品能力。右侧截图按顺序叠层轮播。"></p>
           <div class="cta">
             <a class="btn btn-brand" href="#download">
               <svg class="android-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.6 9.48l1.84-3.18c.16-.31.04-.69-.26-.85a.637.637 0 0 0-.83.22l-1.88 3.24a11.43 11.43 0 0 0-8.94 0L5.65 5.67a.643.643 0 0 0-.87-.2c-.28.18-.37.54-.2.83L6.4 9.48A10.78 10.78 0 0 0 1 18h22a10.78 10.78 0 0 0-5.4-8.52zM7 15.25a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5zm10 0a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5z"/></svg>
@@ -694,7 +708,7 @@
     <section class="download" id="download">
       <div class="wrap fx fx-scale">
         <h2>安卓 &amp; iOS 安装</h2>
-        <p>双端均可安装。安卓直接下 APK；iOS 用 Safari 打开安装页：先装描述文件，再证书签名安装。</p>
+        <p>双端均可安装。安卓直接下 APK；iOS 用 Safari 打开安装页：先装描述文件，再证书签名安装。安装包可在 <a href="admin.html" style="color:var(--brand-deep);font-weight:700;">管理页</a> 自定义上传。</p>
         <div class="cta">
           <a class="btn btn-brand" id="apkLink" href="#">
             <svg class="android-ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.6 9.48l1.84-3.18c.16-.31.04-.69-.26-.85a.637.637 0 0 0-.83.22l-1.88 3.24a11.43 11.43 0 0 0-8.94 0L5.65 5.67a.643.643 0 0 0-.87-.2c-.28.18-.37.54-.2.83L6.4 9.48A10.78 10.78 0 0 0 1 18h22a10.78 10.78 0 0 0-5.4-8.52zM7 15.25a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5zm10 0a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5z"/></svg>
@@ -707,7 +721,7 @@
             <span class="ver" id="iosVer" hidden></span>
           </a>
         </div>
-        <p class="store-note">iOS 请用 Safari 打开安装页（先描述文件，再安装 App）；安卓安装包由官方渠道同步。</p>
+        <p class="store-note">iOS 请用 Safari 打开安装页（先描述文件，再安装 App）；安卓 / iOS 安装包由管理页或面板上传后自动同步。</p>
       </div>
     </section>
   </main>
@@ -733,6 +747,37 @@
     const root = document.documentElement;
     const progressEl = document.getElementById("scrollProgress");
     const heroEl = document.querySelector(".hero");
+
+    /* —— hero lead typing —— */
+    (function typeHeroLead() {
+      const el = document.getElementById("heroLead");
+      if (!el) return;
+      const full = el.getAttribute("aria-label") || "";
+      if (!full) return;
+      if (reduceMotion) {
+        el.textContent = full;
+        el.classList.add("typed-done");
+        return;
+      }
+      let i = 0;
+      const caret = document.createElement("span");
+      caret.className = "typed-caret";
+      caret.setAttribute("aria-hidden", "true");
+      el.textContent = "";
+      el.appendChild(caret);
+      const tick = () => {
+        if (i >= full.length) {
+          el.classList.add("typed-done");
+          return;
+        }
+        el.insertBefore(document.createTextNode(full.charAt(i)), caret);
+        i += 1;
+        const ch = full.charAt(i - 1);
+        const delay = ch === "。" || ch === "，" ? 120 : 28 + Math.random() * 36;
+        setTimeout(tick, delay);
+      };
+      setTimeout(tick, 420);
+    })();
 
     /* —— mouse + scroll motion —— */
     let mx = 0.5, my = 0.5, tx = 0.5, ty = 0.5;
@@ -1160,7 +1205,7 @@
       observeFx([...logList.querySelectorAll(".fx")]);
     }
 
-    const PANEL = "https://154.12.29.28/maccms-tools/huihuo_panel.php";
+    const PANEL = "https://156.225.26.29/maccms-tools/huihuo_panel.php";
     const CMS_API = PANEL + "?api=website";
 
     async function fetchJson(url) {
@@ -1217,7 +1262,7 @@
     loadSiteData();
 
     /* —— 影视统计：总量 + 今日更新（h=24） —— */
-    const VOD_PROXY = "https://154.12.29.28/maccms-tools/cms_cors_proxy.php?target=vod";
+    const VOD_PROXY = "https://156.225.26.29/maccms-tools/cms_cors_proxy.php?target=vod";
     const statTotalEl = document.getElementById("statTotal");
     const statTodayEl = document.getElementById("statToday");
 

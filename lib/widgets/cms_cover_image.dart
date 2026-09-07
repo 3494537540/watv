@@ -62,11 +62,6 @@ class CmsCoverImage extends StatefulWidget {
 
   static Map<String, String> get headers => headersFor(ApiConfig.macCmsBase);
 
-  static const _proxyHosts = {
-    'pic.yayazy.info',
-    'yayazy.info',
-  };
-
   static bool needsImgProxy(String absoluteUrl) {
     final host = Uri.tryParse(absoluteUrl)?.host.toLowerCase() ?? '';
     if (host.isEmpty) return false;
@@ -75,10 +70,8 @@ class CmsCoverImage extends StatefulWidget {
     if (cmsHost.isNotEmpty && (host == cmsHost || host.endsWith('.$cmsHost'))) {
       return false;
     }
-    for (final h in _proxyHosts) {
-      if (host == h || host.endsWith('.$h')) return true;
-    }
-    return false;
+    // 外链封面普遍防盗链：统一走面板代理，避免首页大片空白
+    return true;
   }
 
   static String? resolve(String? raw, {bool preferProxy = true}) {

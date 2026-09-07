@@ -12,6 +12,7 @@ import '../services/cms_fav_store.dart';
 import '../services/vod_cache_store.dart';
 import '../services/local_notification_service.dart';
 import '../services/local_play_store.dart';
+import '../services/comment_identity_store.dart';
 import '../services/local_my_comments_store.dart';
 import '../services/maccms_api.dart';
 import '../services/maccms_user_api.dart';
@@ -84,10 +85,11 @@ class _MovieDetailPageState extends State<MovieDetailPage>
   int _tab = 0; // 0 详情 1 评论
   int _watchTab = 0; // 播放中：0 视频 1 评论
   bool _watching = false;
-  bool _landscapeFs = false;
-  /// 非会员观看限制遮罩（样式对齐播放失败，无取消）
   bool _vipGate = false;
   bool _silencedForVipGate = false;
+  /// 本页已校验通过会员，避免 refreshProfile 抖动把遮罩又弹回来
+  bool _playUnlocked = false;
+  bool _landscapeFs = false;
   /// 是否已锁横屏（与 UI 标记分开，保证异常退出也能解锁）
   bool _orientationLocked = false;
   int _playStartMs = 0;
@@ -184,6 +186,8 @@ class _MovieDetailPageState extends State<MovieDetailPage>
   }
 
   Future<bool> _onPlayerSourceFailover() async {
+    // 已正常出画时，偶发解码错不要立刻切线
+    if (_playbackHealthyEnoughToKeep()) return false;
     return _tryNextPlaySource(keepEpisode: _selectedEpisode);
   }
 
@@ -199,7 +203,7 @@ class _MovieDetailPageState extends State<MovieDetailPage>
     ];
   }
 
-  /// 进页后测速，自动落到可播且最快的线路
+  /// 进页后测速，自动落到可播且最快的线路（已出画则绝不打断）
   Future<void> _autoPickBestSource() async {
     if (_sourceLockedByUser) return;
     if (widget.initialSourceIndex != null) return;
@@ -224,18 +228,28 @@ class _MovieDetailPageState extends State<MovieDetailPage>
     );
     if (!mounted || gen != _autoPickGen || _sourceLockedByUser) return;
     if (best == _sourceIndex) return;
-    // 已开播且进度 >5 秒：勿打断流畅播放去切线
-    if (_watching) {
-      final pos = _inlinePlayerKey.currentState?.positionMs ?? 0;
-      if (pos > 5000) return;
-    }
+    // 已经出画 / 正在播：禁止测速抢线（用户体感「明明出来了又切走」）
+    if (_playbackHealthyEnoughToKeep()) return;
     _switchSourceQuiet(best);
   }
 
-  /// UI 测速完成后：若当前线测挂了、另有可播线，自动切过去
+  /// 当前播放是否已成功出画，应保留线路
+  bool _playbackHealthyEnoughToKeep() {
+    if (!_watching) return false;
+    final st = _inlinePlayerKey.currentState;
+    if (st == null) return false;
+    final pos = st.positionMs;
+    // 已播过或界面已就绪：不要再静默换线
+    if (pos > 1500) return true;
+    if (st.isPlaybackHealthy) return true;
+    return false;
+  }
+
+  /// UI 测速完成后：仅当「当前线测死且尚未出画」才切
   void _onSourceProbeDone(Map<int, int?> scores) {
     if (_sourceLockedByUser) return;
     if (movie.playSources.length <= 1) return;
+    if (_playbackHealthyEnoughToKeep()) return;
     final cur = scores[_sourceIndex];
     if (cur != null && cur > 0) return;
     var best = -1;
@@ -370,6 +384,7 @@ class _MovieDetailPageState extends State<MovieDetailPage>
     setState(() {
       _watching = false;
       _vipGate = false;
+      _playUnlocked = false;
       _episodesExpanded = false;
       _downloadPick = false;
     });
@@ -982,7 +997,11 @@ class _MovieDetailPageState extends State<MovieDetailPage>
               ? widget.initialSourceIndex!.clamp(0, maxSrc - 1)
               : 0;
           _sourceLockedByUser = true;
-        } else if (!_sourceLockedByUser) {
+        } else if (!_sourceLockedByUser && !_watching) {
+          // 未开播才重置默认线；播放中勿打回 0 打断测速/当前线
+          _sourceIndex = 0;
+        } else if (!_sourceLockedByUser &&
+            _sourceIndex >= detail.playSources.length) {
           _sourceIndex = 0;
         }
         final maxEp = detail.episodesOf(_sourceIndex).length;
@@ -1045,18 +1064,123 @@ class _MovieDetailPageState extends State<MovieDetailPage>
         for (final c in _comments)
           if (c.id.startsWith('local_')) c,
       ];
-      final remoteContents = {for (final c in list) c.content.trim()};
+      // 也保留上一屏里「看起来像自己」的好昵称，防刷新冲掉
+      final prevGood = [
+        for (final c in _comments)
+          if (!c.id.startsWith('local_') &&
+              c.userName.trim().isNotEmpty &&
+              !CmsUser.isJunkDisplayName(c.userName))
+            c,
+      ];
+      final me = CmsAuthController.instance.user;
+      final myUid = me?.userId ?? 0;
+      final myName = me == null
+          ? ''
+          : () {
+              final d = me.displayName.trim();
+              if (d.isNotEmpty && !CmsUser.isJunkDisplayName(d)) return d;
+              final u = me.userName.trim();
+              if (u.isNotEmpty && !CmsUser.isJunkDisplayName(u)) return u;
+              return myUid > 0 ? '用户$myUid' : '';
+            }();
+      final myAvatar = (me?.avatarUrl ?? '').trim();
+
+      final patched = <MovieComment>[];
+      for (final c in list) {
+        var next = c;
+        final junk = c.userName.trim().isEmpty ||
+            CmsUser.isJunkDisplayName(c.userName);
+        final weakAvatar = (c.avatarUrl ?? '').trim().isEmpty;
+
+        // 1) 本机身份库（发评时写入，刷新后仍在）
+        if (junk || weakAvatar) {
+          final hit = await CommentIdentityStore.instance.lookup(
+            vodId: id,
+            content: c.content,
+            commentId: c.id,
+          );
+          if (hit != null &&
+              hit.name.isNotEmpty &&
+              !CmsUser.isJunkDisplayName(hit.name)) {
+            next = MovieComment(
+              id: c.id,
+              userName: hit.name,
+              content: c.content,
+              timeText: c.timeText,
+              timeMs: c.timeMs,
+              avatarUrl: weakAvatar && hit.avatar.isNotEmpty
+                  ? hit.avatar
+                  : (c.avatarUrl ?? hit.avatar),
+              up: c.up,
+              down: c.down,
+              replyCount: c.replyCount,
+              userId: c.userId > 0 ? c.userId : hit.userId,
+              vodId: c.vodId.isNotEmpty ? c.vodId : id,
+              vodName: c.vodName,
+              vodPic: c.vodPic,
+            );
+          }
+        }
+
+        final stillJunk = next.userName.trim().isEmpty ||
+            CmsUser.isJunkDisplayName(next.userName);
+        // 2) 当前登录用户：同 uid / 同内容本地刚发
+        if (stillJunk && myName.isNotEmpty) {
+          final sameUid = myUid > 0 && next.userId == myUid;
+          final localHit = prevLocals.any(
+            (l) => l.content.trim() == next.content.trim(),
+          );
+          final prevHit = prevGood.any(
+            (l) =>
+                l.content.trim() == next.content.trim() &&
+                (l.userId == 0 ||
+                    next.userId == 0 ||
+                    l.userId == next.userId),
+          );
+          if (sameUid || localHit || prevHit) {
+            next = MovieComment(
+              id: next.id,
+              userName: myName,
+              content: next.content,
+              timeText: next.timeText,
+              timeMs: next.timeMs,
+              avatarUrl: (next.avatarUrl ?? '').trim().isNotEmpty
+                  ? next.avatarUrl
+                  : (myAvatar.isNotEmpty ? myAvatar : null),
+              up: next.up,
+              down: next.down,
+              replyCount: next.replyCount,
+              userId: next.userId > 0 ? next.userId : myUid,
+              vodId: next.vodId,
+              vodName: next.vodName,
+              vodPic: next.vodPic,
+            );
+            unawaited(
+              CommentIdentityStore.instance.remember(
+                vodId: id,
+                content: next.content,
+                userName: myName,
+                avatarUrl: next.avatarUrl,
+                userId: next.userId,
+                commentId: next.id,
+              ),
+            );
+          }
+        }
+        patched.add(next);
+      }
+
+      final remoteContents = {for (final c in patched) c.content.trim()};
       final keepLocals = [
         for (final c in prevLocals)
           if (!remoteContents.contains(c.content.trim())) c,
       ];
       setState(() {
-        _comments = [...keepLocals, ...list];
+        _comments = [...keepLocals, ...patched];
         _commentsLoading = false;
         _commentsLoaded = true;
       });
-      // 把「当前用户」在本片下的评论写入本机「我的评论」
-      unawaited(_cacheMyCommentsFromList(list, id, title));
+      unawaited(_cacheMyCommentsFromList(patched, id, title));
     } catch (e) {
       if (!mounted || token != _commentsLoadToken) return;
       setState(() {
@@ -1119,6 +1243,21 @@ class _MovieDetailPageState extends State<MovieDetailPage>
   /// 播放前校验：未登录 / 非会员 → 播放器遮罩（不弹取消窗、不直接开播）
   Future<bool> _ensureMemberToPlay() async {
     final auth = CmsAuthController.instance;
+    // 已解锁且当前仍像会员：不打断播放，后台轻量刷新
+    if (_playUnlocked && _canPlayAsVip) {
+      unawaited(auth.refreshProfile().catchError((_) {}));
+      if (_vipGate) setState(() => _vipGate = false);
+      _silencedForVipGate = false;
+      return true;
+    }
+    // 本地已是会员：先放行，后台再刷；避免刷资料抖动弹出开通层
+    if (_canPlayAsVip) {
+      _playUnlocked = true;
+      if (_vipGate) setState(() => _vipGate = false);
+      _silencedForVipGate = false;
+      unawaited(auth.refreshProfile().catchError((_) {}));
+      return true;
+    }
     if (auth.isLoggedIn) {
       try {
         await auth.refreshProfile();
@@ -1126,6 +1265,7 @@ class _MovieDetailPageState extends State<MovieDetailPage>
       if (!mounted) return false;
     }
     if (_canPlayAsVip) {
+      _playUnlocked = true;
       if (_vipGate) setState(() => _vipGate = false);
       _silencedForVipGate = false;
       return true;
@@ -1137,6 +1277,7 @@ class _MovieDetailPageState extends State<MovieDetailPage>
     final ep = movie.isSeries ? _selectedEpisode : 0;
     setState(() {
       _vipGate = true;
+      _playUnlocked = false;
       _watching = true;
       _selectedEpisode = ep;
       _watchTab = 0;
@@ -1174,6 +1315,7 @@ class _MovieDetailPageState extends State<MovieDetailPage>
     if (_canPlayAsVip) {
       setState(() {
         _vipGate = false;
+        _playUnlocked = true;
         _silencedForVipGate = false;
       });
       unawaited(_playGuarded(episodeIndex: _selectedEpisode));
@@ -1198,6 +1340,7 @@ class _MovieDetailPageState extends State<MovieDetailPage>
     if (_canPlayAsVip) {
       setState(() {
         _vipGate = false;
+        _playUnlocked = true;
         _silencedForVipGate = false;
       });
       unawaited(_playGuarded(episodeIndex: _selectedEpisode));
@@ -1221,6 +1364,7 @@ class _MovieDetailPageState extends State<MovieDetailPage>
     if (_canPlayAsVip) {
       setState(() {
         _vipGate = false;
+        _playUnlocked = true;
         _silencedForVipGate = false;
       });
       unawaited(_playGuarded(episodeIndex: _selectedEpisode));
@@ -1393,6 +1537,8 @@ class _MovieDetailPageState extends State<MovieDetailPage>
     if (_loading) {
       final preview = _resolvePlayUrl(ep);
       if (preview == null || preview.isEmpty) {
+        // 详情还在拉：挂起自动播，等详情到了再 _maybeAutoPlay
+        _autoPlayPending = true;
         DialogX.showWarning('正在加载片源…');
         return;
       }
@@ -1403,9 +1549,15 @@ class _MovieDetailPageState extends State<MovieDetailPage>
     _alignSourceToCacheIfNeeded(ep);
     var url = _resolvePlayUrl(ep);
     if (url == null || url.isEmpty) {
-      if (_tryNextPlaySource(keepEpisode: ep)) return;
+      // 详情已结束仍无地址：再拉一次；不要立刻连环切线/报错重试
+      if (!_loading) {
+        _autoPlayPending = true;
+        unawaited(_loadDetail());
+        DialogX.showWarning('片源加载中，请稍候…');
+        return;
+      }
+      if (_tryNextPlaySource(keepEpisode: ep, notify: false)) return;
       DialogX.showError('暂无可用播放地址，请稍后重试');
-      _loadDetail();
       return;
     }
     final vodId = movie.id;
@@ -1564,7 +1716,8 @@ class _MovieDetailPageState extends State<MovieDetailPage>
     // 尺寸由外层 AnimatedContainer / expand 控制，避免双重固定高度溢出
     final cover = movie.coverUrl?.trim() ?? '';
     // 未登录 / 非会员：禁止创建播放器（含 forceWatch 预开播路径）
-    if (_vipGate || !_canPlayAsVip) {
+    // 已解锁本页会员后，忽略短暂的 isVip 抖动，避免中途弹出开通层
+    if (_vipGate || (!_playUnlocked && !_canPlayAsVip)) {
       SystemChrome.setSystemUIOverlayStyle(
         const SystemUiOverlayStyle(
           statusBarColor: Color(0xFF000000),
@@ -1579,7 +1732,7 @@ class _MovieDetailPageState extends State<MovieDetailPage>
       // 每次进入遮罩都确保音轨已停（避免重建后残留）
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        if (_vipGate || !_canPlayAsVip) {
+        if (_vipGate || (!_playUnlocked && !_canPlayAsVip)) {
           unawaited(_silencePlaybackForVipGate());
         }
       });
@@ -1635,6 +1788,10 @@ class _MovieDetailPageState extends State<MovieDetailPage>
     return MangoInlinePlayer(
             key: _inlinePlayerKey,
             url: url,
+            networkFallbackUrl: movie.playUrlAt(
+              _selectedEpisode,
+              sourceIndex: _sourceIndex,
+            ),
             posterUrl: cover.isEmpty ? null : cover,
             startPositionMs: _playStartMs,
             immersiveTop: true,
@@ -3648,6 +3805,15 @@ class _CommentPanelState extends State<_CommentPanel> {
       widget.cms.adoptCmsSessionCookie(
         CmsAuthController.instance.api.sessionCookie,
       );
+      final me = CmsAuthController.instance.user;
+      final myName = () {
+        if (me == null) return '我';
+        final d = me.displayName.trim();
+        if (d.isNotEmpty && !CmsUser.isJunkDisplayName(d)) return d;
+        final u = me.userName.trim();
+        if (u.isNotEmpty && !CmsUser.isJunkDisplayName(u)) return u;
+        return me.userId > 0 ? '用户${me.userId}' : '我';
+      }();
       final body = (_replyHint != null && _replyHint!.isNotEmpty)
           ? '回复 @$_replyHint：$text'
           : text;
@@ -3655,27 +3821,32 @@ class _CommentPanelState extends State<_CommentPanel> {
         vodId: widget.movieId,
         content: body,
         verify: code,
+        commentName: myName,
+        userId: me?.userId ?? 0,
+        userLogin: me?.userName ?? '',
       );
       DialogX.showSuccess('评论已提交');
       if (!mounted) return;
       final optimistic = MovieComment(
         id: 'local_${DateTime.now().millisecondsSinceEpoch}',
-        userName: () {
-          final u = CmsAuthController.instance.user;
-          if (u == null) return '我';
-          final nick = u.nickName.trim();
-          if (nick.isNotEmpty) return nick;
-          final name = u.userName.trim();
-          return name.isEmpty ? '我' : name;
-        }(),
+        userName: myName,
         content: body,
         timeText: '刚刚',
         timeMs: DateTime.now().millisecondsSinceEpoch,
-        avatarUrl: CmsAuthController.instance.user?.avatarUrl,
-        userId: CmsAuthController.instance.user?.userId ?? 0,
+        avatarUrl: me?.avatarUrl,
+        userId: me?.userId ?? 0,
         vodId: widget.movieId,
         vodName: widget.movieTitle,
         vodPic: widget.movieCover,
+      );
+      unawaited(
+        CommentIdentityStore.instance.remember(
+          vodId: widget.movieId,
+          content: body,
+          userName: myName,
+          avatarUrl: me?.avatarUrl,
+          userId: me?.userId ?? 0,
+        ),
       );
       final uid = CmsAuthController.instance.user?.userId ?? 0;
       unawaited(
@@ -4060,8 +4231,12 @@ class _CommentTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final name =
-        comment.userName.trim().isEmpty ? '访客' : comment.userName.trim();
+    final name = () {
+      final n = comment.userName.trim();
+      if (n.isNotEmpty && !CmsUser.isJunkDisplayName(n)) return n;
+      if (comment.userId > 0) return '用户${comment.userId}';
+      return '用户';
+    }();
     final time = formatCommentTime(comment.timeText, timeMs: comment.timeMs);
     final body = _cleanBody(comment.content);
     return Container(

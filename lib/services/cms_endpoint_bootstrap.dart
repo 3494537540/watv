@@ -16,19 +16,30 @@ class CmsEndpointBootstrap {
   static const shareUrl =
       'https://sharechain.qq.com/646dbbb1493e06a8b6c449b3d272c39e';
 
-  static const _cacheKey = 'cms_share_resolved_v1';
-  static const _cacheAtKey = 'cms_share_resolved_at_v1';
+  /// 换线后升版本，避免旧 IP 缓存长期挡住新线路
+  static const _cacheKey = 'cms_share_resolved_v2';
+  static const _cacheAtKey = 'cms_share_resolved_at_v2';
+
+  /// 已下线线路：本地缓存命中时直接丢弃，改等分享页 / 内置默认
+  static const _retiredHosts = {
+    '154.12.29.28',
+  };
 
   static String? _lastResolved;
   static String? get lastResolved => _lastResolved;
 
   /// 启动：先套用本地缓存，再联网刷新（短超时，失败不挡启动）
   static Future<void> bootstrap({
-    Duration networkBudget = const Duration(seconds: 4),
+    Duration networkBudget = const Duration(seconds: 6),
   }) async {
     if (kIsWeb) return;
     final prefs = await SharedPreferences.getInstance();
-    final cached = (prefs.getString(_cacheKey) ?? '').trim();
+    var cached = (prefs.getString(_cacheKey) ?? '').trim();
+    if (cached.isNotEmpty && _isRetired(cached)) {
+      await prefs.remove(_cacheKey);
+      await prefs.remove(_cacheAtKey);
+      cached = '';
+    }
     if (cached.isNotEmpty) {
       _lastResolved = cached;
       ApiConfig.applyShareResolvedMacCms(cached);
@@ -38,6 +49,7 @@ class CmsEndpointBootstrap {
       final fresh = await resolveFromShare()
           .timeout(networkBudget, onTimeout: () => null);
       if (fresh == null || fresh.isEmpty) return;
+      if (_isRetired(fresh)) return;
       if (fresh == cached) return;
       _lastResolved = fresh;
       ApiConfig.applyShareResolvedMacCms(fresh);
@@ -52,6 +64,11 @@ class CmsEndpointBootstrap {
     }
   }
 
+  static bool _isRetired(String url) {
+    final host = Uri.tryParse(url.trim())?.host.toLowerCase() ?? '';
+    return host.isNotEmpty && _retiredHosts.contains(host);
+  }
+
   /// 拉取分享页并解析出 CMS 根地址
   static Future<String?> resolveFromShare({String? url}) async {
     if (kIsWeb) return null;
@@ -60,7 +77,7 @@ class CmsEndpointBootstrap {
 
     final res = await huihuoHttpGet(
       pageUrl,
-      timeout: const Duration(seconds: 8),
+      timeout: const Duration(seconds: 10),
       headers: const {
         'Accept': 'text/html,application/xhtml+xml,application/json,*/*',
         'Referer': 'https://sharechain.qq.com/',
@@ -219,6 +236,7 @@ class CmsEndpointBootstrap {
     final uri = Uri.tryParse(u);
     if (uri == null || uri.host.isEmpty) return null;
     final host = uri.host.toLowerCase();
+    if (_retiredHosts.contains(host)) return null;
     // 排除分享站自身与腾讯静态资源
     const blocked = [
       'qq.com',

@@ -248,8 +248,6 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> _loadLists({bool showSkeleton = true}) async {
-    if (showSkeleton && mounted) setState(() => _loading = true);
-
     Future<List<CmsUlogItem>> fromLocal() async {
       final local = await LocalPlayStore.list(limit: 30);
       return [
@@ -267,6 +265,18 @@ class _ProfilePageState extends State<ProfilePage> {
             progress: e.progress,
           ),
       ];
+    }
+
+    // 先立刻展示本机播放历史，接口慢也不卡「我的」
+    final localFirst = await fromLocal();
+    if (mounted) {
+      setState(() {
+        if (_plays.isEmpty && localFirst.isNotEmpty) {
+          _plays = localFirst;
+        }
+        // 已有本地历史则不卡骨架屏
+        _loading = showSkeleton && _plays.isEmpty;
+      });
     }
 
     Future<List<CmsUlogItem>> mergeFavs(List<CmsUlogItem> remote) async {

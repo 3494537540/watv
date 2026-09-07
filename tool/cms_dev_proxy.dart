@@ -10,7 +10,7 @@ import 'dart:io';
 
 const _listenHost = '127.0.0.1';
 const _listenPort = 8791;
-const _upstream = 'https://154.12.29.28';
+const _upstream = 'https://156.225.26.29';
 
 Future<void> main(List<String> args) async {
   final upstream = (args.isNotEmpty ? args.first : _upstream)

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/movie_models.dart';
 import '../theme/app_colors.dart';
+import 'cms_cover_image.dart';
 import 'media_placeholder.dart';
 import 'press_scale.dart';
 
@@ -57,33 +58,11 @@ class MoviePosterCard extends StatelessWidget {
                         tag: heroTag,
                         child: Material(
                           type: MaterialType.transparency,
-                          child: Image.network(
-                            url,
+                          child: CmsCoverImage(
+                            url: url,
+                            vodId: movie.id,
                             fit: BoxFit.cover,
                             alignment: Alignment.topCenter,
-                            filterQuality: FilterQuality.medium,
-                            gaplessPlayback: true,
-                            errorBuilder: (_, _, _) => const MediaPlaceholder(
-                              kind: MediaPlaceholderKind.film,
-                              radius: 10,
-                            ),
-                            loadingBuilder: (context, child, progress) {
-                              if (progress == null) return child;
-                              return Stack(
-                                fit: StackFit.expand,
-                                children: [
-                                  ColoredBox(color: movie.coverColor),
-                                  Opacity(
-                                    opacity: progress.expectedTotalBytes != null
-                                        ? (progress.cumulativeBytesLoaded /
-                                                progress.expectedTotalBytes!)
-                                            .clamp(0.15, 1.0)
-                                        : 0.35,
-                                    child: child,
-                                  ),
-                                ],
-                              );
-                            },
                           ),
                         ),
                       )
@@ -100,12 +79,9 @@ class MoviePosterCard extends StatelessWidget {
                       child: DecoratedBox(
                         decoration: BoxDecoration(
                           gradient: LinearGradient(
-                            begin: Alignment.bottomCenter,
-                            end: Alignment.topCenter,
-                            colors: [
-                              Color(0x66000000),
-                              Color(0x00000000),
-                            ],
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [Color(0x00000000), Color(0x66000000)],
                           ),
                         ),
                       ),

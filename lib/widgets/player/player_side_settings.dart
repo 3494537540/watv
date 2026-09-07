@@ -56,6 +56,7 @@ class PlayerSideSettingsHost {
     this.sourceIndex = 0,
     this.sourceProbeUrls = const [],
     this.onSourceSelect,
+    this.isLocalMedia = false,
   });
 
   final double playbackRate;
@@ -94,6 +95,8 @@ class PlayerSideSettingsHost {
   final int sourceIndex;
   final List<String> sourceProbeUrls;
   final ValueChanged<int>? onSourceSelect;
+  /// 本地缓存播放：隐藏边看边缓等在线能力
+  final bool isLocalMedia;
 }
 
 /// 白底「更多」设置卡片（图三）
@@ -218,6 +221,7 @@ class _PlayerSideSettingsPanelState extends State<PlayerSideSettingsPanel> {
       sourceIndex: base.sourceIndex,
       sourceProbeUrls: base.sourceProbeUrls,
       onSourceSelect: base.onSourceSelect,
+      isLocalMedia: base.isLocalMedia,
     );
   }
 
@@ -358,7 +362,12 @@ class _FlatSettingsPage extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 4, 4, 0),
+            padding: EdgeInsets.fromLTRB(
+              12,
+              4,
+              4 + MediaQuery.paddingOf(context).right.clamp(0, 12),
+              0,
+            ),
             child: Row(
               children: [
                 const Expanded(
@@ -381,7 +390,12 @@ class _FlatSettingsPage extends StatelessWidget {
           ),
           Expanded(
             child: ListView(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 20),
+              padding: EdgeInsets.fromLTRB(
+                12,
+                0,
+                12 + MediaQuery.paddingOf(context).right.clamp(0, 8),
+                20 + MediaQuery.paddingOf(context).bottom,
+              ),
               children: [
             _SettingsCard(
           title: '流畅与画质',
@@ -415,13 +429,27 @@ class _FlatSettingsPage extends StatelessWidget {
                   ),
                 ),
               ),
-              _SwitchRow(
-                title: '边看边缓',
-                value: h.settings.streamCacheEnabled,
-                onChanged: (v) => h.onSettings(
-                  h.settings.copyWith(streamCacheEnabled: v),
+              if (!h.isLocalMedia)
+                _SwitchRow(
+                  title: '边看边缓',
+                  value: h.settings.streamCacheEnabled,
+                  onChanged: (v) => h.onSettings(
+                    h.settings.copyWith(streamCacheEnabled: v),
+                  ),
+                )
+              else
+                const Padding(
+                  padding: EdgeInsets.only(top: 4, bottom: 2),
+                  child: Text(
+                    '当前为缓存离线播放，不走网络',
+                    style: TextStyle(
+                      fontFamily: 'AppSans',
+                      fontSize: 11,
+                      color: _moreGray,
+                      height: 1.3,
+                    ),
+                  ),
                 ),
-              ),
               const SizedBox(height: 4),
               const _SectionLabel('画质增强（自研）'),
               Wrap(
@@ -1618,24 +1646,38 @@ class _ExtraSettingsPage extends StatelessWidget {
             trailing: const Icon(CupertinoIcons.chevron_right, size: 16),
             onTap: () => onOpen('enhance'),
           ),
-          _SwitchRow(
-            title: '边看边缓',
-            value: h.settings.streamCacheEnabled,
-            onChanged: (v) =>
-                h.onSettings(h.settings.copyWith(streamCacheEnabled: v)),
-          ),
+          if (!h.isLocalMedia)
+            _SwitchRow(
+              title: '边看边缓',
+              value: h.settings.streamCacheEnabled,
+              onChanged: (v) =>
+                  h.onSettings(h.settings.copyWith(streamCacheEnabled: v)),
+            )
+          else
+            const Padding(
+              padding: EdgeInsets.only(bottom: 8),
+              child: Text(
+                '缓存离线播放中，边看边缓与自动切线已禁用',
+                style: TextStyle(
+                  fontFamily: 'AppSans',
+                  fontSize: 11,
+                  color: _moreGray,
+                ),
+              ),
+            ),
           _SwitchRow(
             title: '自动连播',
             value: h.settings.autoPlayNext,
             onChanged: (v) =>
                 h.onSettings(h.settings.copyWith(autoPlayNext: v)),
           ),
-          _SwitchRow(
-            title: '卡顿自动切换线路',
-            value: h.settings.autoSourceFailover,
-            onChanged: (v) =>
-                h.onSettings(h.settings.copyWith(autoSourceFailover: v)),
-          ),
+          if (!h.isLocalMedia)
+            _SwitchRow(
+              title: '卡顿自动切换线路',
+              value: h.settings.autoSourceFailover,
+              onChanged: (v) =>
+                  h.onSettings(h.settings.copyWith(autoSourceFailover: v)),
+            ),
           _SwitchRow(
             title: '镜像翻转',
             value: h.settings.mirrorX,

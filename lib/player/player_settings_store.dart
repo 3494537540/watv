@@ -89,7 +89,7 @@ class PlayerSettingsPrefs {
     this.keepScreenOn = true,
     this.doubleTapSeek = true,
     this.chromeAutoHideSec = 4,
-    this.autoSourceFailover = false,
+    this.autoSourceFailover = true,
     this.playMode = PlayerPlayMode.high,
     this.streamCacheEnabled = true,
     this.enhanceLevel = PlayerEnhanceLevel.vivid,
@@ -107,7 +107,7 @@ class PlayerSettingsPrefs {
   final bool keepScreenOn;
   final bool doubleTapSeek;
   final int chromeAutoHideSec;
-  /// 卡顿/失败时自动切换播放线路（默认关）
+  /// 卡顿/失败时自动切换播放线路（新安装默认开；硬性 Source error 始终会切）
   final bool autoSourceFailover;
   /// 流畅 / 标准 / 高画质
   final PlayerPlayMode playMode;
@@ -204,7 +204,7 @@ class PlayerSettingsPrefs {
       doubleTapSeek: json['double_tap'] != false,
       chromeAutoHideSec:
           ((json['chrome_hide'] as num?)?.toInt() ?? 4).clamp(2, 12),
-      autoSourceFailover: json['auto_source'] == true,
+      autoSourceFailover: json['auto_source'] != false,
       playMode: playMode,
       streamCacheEnabled: json['stream_cache'] != false,
       enhanceLevel: enhance,

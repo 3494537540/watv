@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -54,11 +56,10 @@ class _RedeemPageState extends State<RedeemPage> {
       );
       DialogX.dismiss();
       _ctrl.clear();
-      try {
-        await CmsAuthController.instance.refreshProfile();
-      } catch (_) {}
       if (!mounted) return;
       DialogX.showSuccess('${r.msg}\n${r.rewardText}');
+      // 资料后台刷新，不挡成功提示
+      unawaited(CmsAuthController.instance.refreshProfile().catchError((_) {}));
     } catch (e) {
       DialogX.dismiss();
       final msg = '$e'.replaceFirst('Bad state: ', '').replaceFirst('StateError: ', '');

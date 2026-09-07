@@ -118,10 +118,21 @@ class VodPlayback {
     final u = raw.trim();
     if (u.isEmpty) return false;
     if (u.startsWith('file:')) return true;
+    if (isLoopbackCacheUrl(u)) return true;
     if (u.contains('://')) return false;
     if (u.startsWith('/')) return true;
     if (RegExp(r'^[A-Za-z]:[\\/]').hasMatch(u)) return true;
     return false;
+  }
+
+  /// iOS 缓存用的本机 HTTP（非公网）
+  static bool isLoopbackCacheUrl(String raw) {
+    final u = raw.trim().toLowerCase();
+    if (!u.startsWith('http://127.0.0.1:') &&
+        !u.startsWith('http://localhost:')) {
+      return false;
+    }
+    return u.contains('.m3u8') || u.contains('.ts') || u.contains('.mp4');
   }
 
   static String rateLabel(double rate) {

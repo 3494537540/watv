@@ -8,6 +8,7 @@ import '../services/qq_login_service.dart';
 import '../state/cms_auth_controller.dart';
 import '../theme/app_colors.dart';
 import '../utils/account_validators.dart';
+import '../widgets/brand_typing_text.dart';
 import '../widgets/dialogx/dialogx.dart';
 import '../widgets/ios_edge_back.dart';
 import '../widgets/login_brand_widgets.dart';
@@ -421,8 +422,8 @@ class _LoginPageState extends State<LoginPage>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    '哇TV',
+                  BrandTypingText(
+                    text: '哇TV',
                     style: TextStyle(
                       fontFamily: 'ZCOOLKuaiLe',
                       fontSize: 46,

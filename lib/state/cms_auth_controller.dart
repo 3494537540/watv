@@ -330,11 +330,40 @@ class CmsAuthController extends ChangeNotifier {
         // 积分：主题页常解析成 0，0 时保留本地
         points: me.points > 0 ? me.points : local.points,
         extend: me.extend > 0 ? me.extend : local.extend,
-        groupName: me.groupName.trim().isNotEmpty && me.groupName.trim() != '游客'
-            ? me.groupName
-            : local.groupName,
-        endTime:
-            me.endTime.trim().isNotEmpty ? me.endTime : local.endTime,
+        // 会员组：本地已是付费态时，勿被主题页误解析成「注册会员/空」降级
+        groupName: () {
+          final next = me.groupName.trim();
+          final prev = local.groupName.trim();
+          final nextUser = CmsUser(
+            userId: local.userId,
+            userName: local.userName,
+            groupName: next,
+            endTime: me.endTime.trim().isNotEmpty ? me.endTime : local.endTime,
+          );
+          final prevUser = local;
+          if (prevUser.isVip && !nextUser.isVip && next.isNotEmpty) {
+            return prev;
+          }
+          if (next.isNotEmpty && next != '游客') return next;
+          return prev;
+        }(),
+        endTime: () {
+          final next = me.endTime.trim();
+          final prev = local.endTime.trim();
+          if (prev.isNotEmpty && next.isEmpty) return prev;
+          // 本地未过期时，勿被空/过期误覆盖（除非 panel 明确）
+          final prevUser = local;
+          if (prevUser.isVip && next.isNotEmpty) {
+            final fake = CmsUser(
+              userId: local.userId,
+              userName: local.userName,
+              groupName: local.groupName,
+              endTime: next,
+            );
+            if (!fake.isVip && prevUser.isVip) return prev;
+          }
+          return next.isNotEmpty ? next : prev;
+        }(),
         loginTime: me.loginTime.trim().isNotEmpty
             ? me.loginTime
             : local.loginTime,

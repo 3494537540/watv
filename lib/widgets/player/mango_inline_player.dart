@@ -72,9 +72,12 @@ class MangoInlinePlayer extends StatefulWidget {
     this.enableDanmaku = true,
     this.onPip,
     this.posterUrl,
+    this.networkFallbackUrl,
   });
 
   final String url;
+  /// 本地缓存播失败时回退的在线地址
+  final String? networkFallbackUrl;
   final int startPositionMs;
   final bool showBack;
   final VoidCallback? onBack;
@@ -138,6 +141,8 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
   int _progressTick = 0;
   bool _locked = false;
   bool _isLocalMedia = false;
+  /// 当前会话是否以 PlatformView 打开（iOS 弹幕需与此一致，否则发灰）
+  bool _openedWithPlatformView = false;
   DanmakuDisplayPrefs _danmakuPrefs = PlayerDanmakuPrefs.cached;
   List<DanmakuItem> _danmakuItems = const [];
   int _danmakuLoadToken = 0;
@@ -169,6 +174,18 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
 
   int get positionMs =>
       _engine?.value.position.inMilliseconds ?? widget.startPositionMs;
+
+  /// 已初始化且（正在播 / 有进度 / 无致命错误）——供外层禁止误切线
+  bool get isPlaybackHealthy {
+    final c = _engine;
+    if (c == null || _failed || !_ready) return false;
+    final v = c.value;
+    if (!v.isInitialized || v.hasError) return false;
+    if (v.isPlaying) return true;
+    if (v.position.inMilliseconds > 800) return true;
+    if (v.duration.inMilliseconds > 0 && v.size.width > 0) return true;
+    return false;
+  }
 
   Duration get position =>
       _engine?.value.position ??
@@ -532,6 +549,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
       sourceIndex: widget.sourceIndex,
       sourceProbeUrls: widget.sourceProbeUrls,
       onSourceSelect: widget.onSourceSelect,
+      isLocalMedia: _isLocalMedia,
     );
   }
 
@@ -718,6 +736,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     await PlayerDanmakuPrefs.save(prefs);
     if (!mounted) return;
     setState(() => _danmakuPrefs = prefs);
+    await _syncIosSurfaceForDanmaku();
   }
 
   void _setSleepMinutes(int minutes) {
@@ -914,9 +933,9 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
   }
 
 
-  Future<bool> _trySourceFailover(String reason) async {
-    // ????????????????
-    if (!_playerSettings.autoSourceFailover) return false;
+  Future<bool> _trySourceFailover(String reason, {bool force = false}) async {
+    // 卡顿自动切线可关；硬性 Source error（源地址打不开）仍切，避免死守坏线
+    if (!force && !_playerSettings.autoSourceFailover) return false;
     if (_failoverBusy) return false;
     final cb = widget.onRequestSourceFailover;
     if (cb == null) return false;
@@ -938,10 +957,29 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     }
   }
 
+  /// Exo / AVPlayer 明确打不开源（404、DNS、协议错）时强制换线
+  static bool _isHardSourceError(String reason) {
+    final r = reason.toLowerCase();
+    return r.contains('source error') ||
+        r.contains('exoplayer') ||
+        r.contains('videoerror') ||
+        r.contains('404') ||
+        r.contains('file not found') ||
+        r.contains('unable to connect') ||
+        r.contains('failed to connect') ||
+        r.contains('httperror') ||
+        r.contains('response code');
+  }
+
   Future<void> _onPlayFailed(String reason) async {
     if (!mounted) return;
+    // 已出画时的偶发错误：先别连环切线
+    if (isPlaybackHealthy && positionMs > 2000) {
+      return;
+    }
     if (!_suppressSourceFailover) {
-      final switched = await _trySourceFailover(reason);
+      final force = _isHardSourceError(reason);
+      final switched = await _trySourceFailover(reason, force: force);
       if (switched) return;
     }
     if (!mounted) return;
@@ -979,7 +1017,20 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
     if (mounted) {
       setState(() => _danmakuPrefs = PlayerDanmakuPrefs.cached);
     }
+    await _syncIosSurfaceForDanmaku();
     _onInteract();
+  }
+
+  /// iOS：保持 Texture；若仍被 PlatformView 打开则重开
+  Future<void> _syncIosSurfaceForDanmaku() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return;
+    if (!_ready || _failed || _engine == null) return;
+    if (!_openedWithPlatformView) return;
+    final pos = _engine!.value.position.inMilliseconds;
+    final playing = _engine!.value.isPlaying;
+    final url = _activePlayUrl?.trim();
+    if (url == null || url.isEmpty) return;
+    await _init(forceUrl: url, resumeMs: pos, autoPlay: playing);
   }
 
   Future<void> _sendDanmaku() async {
@@ -992,6 +1043,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
       await PlayerDanmakuPrefs.setEnabled(true);
       if (!mounted) return;
       setState(() => _danmakuPrefs = PlayerDanmakuPrefs.cached);
+      await _syncIosSurfaceForDanmaku();
     }
     if (!mounted) return;
     final c = _engine;
@@ -1080,6 +1132,7 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
       _danmakuPrefs = loaded;
       if (cached.isNotEmpty) _danmakuItems = cached;
     });
+    unawaited(_syncIosSurfaceForDanmaku());
 
     List<DanmakuItem> remote = const [];
     try {
@@ -1289,13 +1342,30 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
         if (path.startsWith('file:')) {
           path = Uri.parse(path).toFilePath();
         }
-        path = await VodCacheStore.instance.prepareLocalMediaPath(path);
+        try {
+          path = await VodCacheStore.instance
+              .prepareLocalMediaPath(path)
+              .timeout(const Duration(seconds: 10));
+        } catch (e) {
+          final msg = '$e';
+          throw StateError(
+            msg.contains('缓存') || msg.contains('本地')
+                ? msg
+                    .replaceFirst('Bad state: ', '')
+                    .replaceFirst('StateError: ', '')
+                : '本地缓存无法打开，请重新下载后离线播放',
+          );
+        }
         if (!mounted || token != _initToken) return;
         playUrl = path;
         _activePlayUrl = path;
-        final file = File(path);
-        if (!await file.exists()) {
-          throw StateError('本地缓存文件不存在');
+        // 即使变成 http://127.0.0.1 仍视为离线缓存
+        _isLocalMedia = true;
+        if (!VodPlayback.isLoopbackCacheUrl(path)) {
+          final file = File(path);
+          if (!await file.exists()) {
+            throw StateError('本地缓存文件不存在，请重新下载');
+          }
         }
       }
 
@@ -1307,22 +1377,36 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
       _initSpeedTimer = Timer.periodic(const Duration(milliseconds: 650), (_) {
         _onInitControllerTick();
       });
-      // iOS 必须用 PlatformView，否则 AVPictureInPicture / video_player_pip 无效；
-      // Android 用 TextureView，避免 PlatformView 合成开销。
-      await engine.open(
-        url: playUrl,
-        httpHeaders: VodPlayback.httpHeaders,
-        backBufferMs: isFile ? 15000 : profile.backBufferMs,
-        preferPlatformView: !kIsWeb &&
-            defaultTargetPlatform == TargetPlatform.iOS,
-      );
+      // iOS 正常播放一律 Texture。PlatformView + 任何 Flutter 叠层（弹幕/控件）会发灰白罩。
+      // 仅画中画入口再切 PlatformView。
+      final preferPv = false;
+      _openedWithPlatformView = preferPv;
+      try {
+        await engine
+            .open(
+              url: playUrl,
+              httpHeaders: _isLocalMedia ? const {} : VodPlayback.httpHeaders,
+              backBufferMs: _isLocalMedia ? 15000 : profile.backBufferMs,
+              preferPlatformView: preferPv,
+            )
+            .timeout(Duration(seconds: _isLocalMedia ? 20 : 25));
+      } catch (e) {
+        if (_isLocalMedia) {
+          throw StateError('缓存离线播放失败，请重新下载该集');
+        }
+        rethrow;
+      }
       if (!mounted || token != _initToken) {
         await _disposeController();
         return;
       }
 
+      final engineLive = _engine;
+      if (engineLive == null) {
+        throw StateError('播放器未就绪');
+      }
       final start = resumeMs ?? widget.startPositionMs;
-      final total = engine.value.duration.inMilliseconds;
+      final total = engineLive.value.duration.inMilliseconds;
       // 进度贴近片尾/越界时强制从头播，避免一直转圈（清历史又能播的常见原因）
       var seekMs = start;
       if (total > 0) {
@@ -1334,15 +1418,15 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
         seekMs = 0;
       }
       if (seekMs > 1500) {
-        await engine.seekTo(Duration(milliseconds: seekMs));
+        await engineLive.seekTo(Duration(milliseconds: seekMs));
       }
       if (resumeMs == null) {
-        await _applySkipIntro(engine);
+        await _applySkipIntro(engineLive);
       }
-      await engine.setPlaybackSpeed(_playbackRate);
-      await engine.setLooping(_playerSettings.loopSingle);
+      await engineLive.setPlaybackSpeed(_playbackRate);
+      await engineLive.setLooping(_playerSettings.loopSingle);
       if (autoPlay) {
-        await engine.play();
+        await engineLive.play();
       }
       if (_playerSettings.keepScreenOn) {
         await PlaybackWakelock.acquire();
@@ -1374,8 +1458,8 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
 
       if (!mounted || token != _initToken) return;
       _stopInitSpeedTracking();
-      engine.removeListener(_onInitControllerTick);
-      engine.addListener(_onPlaybackStatus);
+      engineLive.removeListener(_onInitControllerTick);
+      engineLive.addListener(_onPlaybackStatus);
       setState(() {
         _ready = true;
         _qualityBusy = false;
@@ -1389,8 +1473,8 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
             }
           }
           _currentVariant = matched ?? preservedCurrent;
-        } else if (_qualityVariants.isEmpty && engine.value.size.height > 0) {
-          final sz = engine.value.size;
+        } else if (_qualityVariants.isEmpty && engineLive.value.size.height > 0) {
+          final sz = engineLive.value.size;
           final synthetic = VodHlsVariant(
             url: playUrl,
             bandwidth: 0,
@@ -1688,19 +1772,21 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                       child: PlayerSeekHintChip(text: _seekHint!),
                     ),
                   ),
-                // ?????????
-                if (c != null && !_failed)
-                  IgnorePointer(
-                    child: _DanmakuOverlay(
-                      controller: c,
-                      items: _danmakuItems,
-                      enabled: widget.enableDanmaku &&
-                          _danmakuPrefs.enabled &&
-                          widget.vodId?.trim().isNotEmpty == true,
-                      prefs: _danmakuPrefs,
-                      fitCover: widget.immersiveTop ||
-                          _playerSettings.aspect == PlayerAspectMode.cover ||
-                          _playerSettings.aspect == PlayerAspectMode.fill,
+                // 弹幕层：Positioned 必须是 Stack 直系子节点，否则 iOS 合成发灰白
+                if (c != null && !_failed && _ready)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: _DanmakuOverlay(
+                        controller: c,
+                        items: _danmakuItems,
+                        enabled: widget.enableDanmaku &&
+                            _danmakuPrefs.enabled &&
+                            widget.vodId?.trim().isNotEmpty == true,
+                        prefs: _danmakuPrefs,
+                        fitCover: widget.immersiveTop ||
+                            _playerSettings.aspect == PlayerAspectMode.cover ||
+                            _playerSettings.aspect == PlayerAspectMode.fill,
+                      ),
                     ),
                   ),
                 if (c != null && !_failed && _locked)
@@ -1741,7 +1827,8 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                       holdResumeAheadMs:
                           PlaybackProfile.of(_playerSettings).holdResumeAheadMs,
                       speedTracker: _bufferSpeedTracker,
-                      showNetSpeed: _playerSettings.showNetSpeed,
+                      showNetSpeed:
+                          !_isLocalMedia && _playerSettings.showNetSpeed,
                       onLoadingChanged: (v) {
                         void apply() {
                           if (!mounted) return;
@@ -1897,7 +1984,8 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                         color: const Color(0x66000000),
                         child: Center(
                           child: PlayerLoadingHud(
-                            tracker: _playerSettings.showNetSpeed
+                            tracker: (!_isLocalMedia &&
+                                    _playerSettings.showNetSpeed)
                                 ? _bufferSpeedTracker
                                 : null,
                           ),
@@ -1915,8 +2003,10 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                           return Center(
                             child: PlayerLoadingHud(
                               compact: true,
-                              showSpeed: _playerSettings.showNetSpeed,
-                              tracker: _playerSettings.showNetSpeed
+                              showSpeed: !_isLocalMedia &&
+                                  _playerSettings.showNetSpeed,
+                              tracker: (!_isLocalMedia &&
+                                      _playerSettings.showNetSpeed)
                                   ? _bufferSpeedTracker
                                   : null,
                             ),
@@ -1955,17 +2045,20 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                             child: SizedBox(
                               width: () {
                                 final w = MediaQuery.sizeOf(context).width;
-                                final prefer = w * (_showCastSide ? 0.38 : 0.42);
-                                final lo = prefer < 260 ? 0.0 : 260.0;
-                                final hi = w < 400 ? w : 380.0;
-                                return prefer.clamp(lo, hi < lo ? lo : hi);
+                                // 横屏侧栏加宽并贴右，避免内容区右侧空一大块
+                                if (_showCastSide) {
+                                  return (w * 0.40).clamp(260.0, 400.0);
+                                }
+                                return (w * 0.50).clamp(300.0, 460.0);
                               }(),
                               height: double.infinity,
                               child: Material(
                                 elevation: 8,
                                 color: const Color(0xFFF5F6F8),
+                                // 勿保留 right SafeArea，横屏会在面板右侧挤出空白
                                 child: SafeArea(
                                   left: false,
+                                  right: false,
                                   child: _showCastSide
                                       ? ColoredBox(
                                           color: Colors.white,
@@ -2100,10 +2193,9 @@ class _DanmakuOverlayState extends State<_DanmakuOverlay> {
       );
     }
 
-    return Positioned.fill(
-      child: IgnorePointer(
-        child: RepaintBoundary(child: layer),
-      ),
+    return IgnorePointer(
+      // 勿包 RepaintBoundary：iOS 上盖在视频上会整层发灰
+      child: layer,
     );
   }
 }
@@ -2394,7 +2486,7 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
   /// ??/seek ???????????????????????
   Duration? _uiSeekPos;
 
-  static const _stallNeedMs = 2200;
+  static const _stallNeedMs = 3500;
 
   bool get _inLayoutQuiet {
     final until = _layoutQuietUntil;
@@ -2416,19 +2508,12 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
     if (!widget.ready) return true;
     if (_inLayoutQuiet) return false;
     if (_draggingProgress) return false;
-    if (_holdingForBuffer) return true;
     final v = widget.controller.value;
-    // ???????????????Exo ??? isBuffering?
-    if (v.isPlaying) {
-      final pos = v.position.inMilliseconds;
-      if (!v.isBuffering) return false;
-      if (_lastPosMs >= 0 && pos > _lastPosMs) return false;
-      // ????????
-      return _showBufferSpinner;
-    }
+    // 硬规则：引擎已在播 → 绝不盖加载圈（进度上报慢/isBuffering 误报很常见）
+    if (v.isPlaying) return false;
+    if (_holdingForBuffer) return true;
     if (_seekLoading) return true;
-    if (_showBufferSpinner) return true;
-    return false;
+    return _showBufferSpinner;
   }
 
   void _notifyLoading(bool visible) {
@@ -2530,37 +2615,24 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
     }
 
     final posMs = v.position.inMilliseconds;
-    // ?????????????????? 120ms ?? 1ms?
+
+    // 正在播：清掉一切卡顿标记（不要靠 position 是否前进，上报经常落后画面）
+    if (v.isPlaying) {
+      _lastPosMs = posMs;
+      _clearStallFlags();
+      return;
+    }
+
     final moved = _lastPosMs >= 0 && posMs > _lastPosMs;
-
-    if (v.isPlaying && moved && !v.isBuffering) {
+    if (moved) {
       _lastPosMs = posMs;
       _clearStallFlags();
       return;
     }
-    if (v.isPlaying && moved) {
-      _lastPosMs = posMs;
-      // ???????? isBuffering ?????
-      _clearStallFlags();
-      return;
-    }
 
-    // ????????????????
-    if (v.isPlaying || (!_userPaused && (v.isBuffering || _showBufferSpinner))) {
-      _stallSince ??= DateTime.now();
-      final waited = DateTime.now().difference(_stallSince!).inMilliseconds;
-      // ?? buffering ?????
-      final need = v.isBuffering ? (_stallNeedMs ~/ 2) : _stallNeedMs;
-      if (waited < need) {
-        if (_lastPosMs < 0) _lastPosMs = posMs;
-        return;
-      }
-      if (!_showBufferSpinner) _showBufferSpinner = true;
-      return;
-    }
-
-    _lastPosMs = posMs;
-    final maybeStuck = v.isBuffering || _seekLoading;
+    _lastPosMs = posMs < 0 ? _lastPosMs : posMs;
+    final maybeStuck =
+        v.isBuffering || _seekLoading || (!_userPaused && !v.isPlaying);
     if (!maybeStuck) {
       _clearStallFlags();
       return;
@@ -2720,7 +2792,8 @@ class _ThrottledChromeState extends State<_ThrottledChrome> {
       playing: uiPlaying,
       position: displayPos,
       duration: c.value.duration,
-      buffering: !widget.ready || _showBufferSpinner,
+      buffering: !widget.ready ||
+          (!c.value.isPlaying && (_showBufferSpinner || _seekLoading)),
       showLoadingHud: false,
       loadingSpeedLabel:
           widget.showNetSpeed ? widget.speedTracker.displayLabel : '',

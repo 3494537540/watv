@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <title>安装 哇TV</title>
-  <link rel="apple-touch-icon" href="../assets/apple-touch-icon.png" />
+  <link rel="apple-touch-icon" href="./icon-57.png" />
+  <link rel="icon" type="image/png" href="./icon-57.png" />
   <style>
     :root {
       --brand: #1ecad3;
@@ -38,7 +39,7 @@
       overflow: hidden;
       background: #fff;
     }
-    .icon img { width: 100%; height: 100%; object-fit: cover; }
+    .icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
     h1 {
       font-size: 1.75rem; font-weight: 900; letter-spacing: .02em;
       margin-bottom: 8px;
@@ -114,10 +115,12 @@
 <body>
   <div class="card">
     <div class="icon">
-      <img src="../assets/app-icon.png" width="96" height="96" alt="哇TV" />
+      <!-- 同目录图标，避免 ../assets 部署缺失导致空白 -->
+      <img id="appIcon" src="./icon-512.png" width="96" height="96" alt="哇TV"
+           onerror="this.onerror=null;this.src='/assets/app-icon.png'" />
     </div>
     <h1>哇TV</h1>
-    <p class="ver">iOS 安装 · 先描述文件，再证书签名安装</p>
+    <p class="ver" id="verLine">iOS 安装 · 先描述文件，再证书签名安装</p>
 
     <div class="only-ios">
       <div class="steps">
@@ -144,7 +147,7 @@
           </a>
         </div>
       </div>
-      <a class="btn ghost" style="margin-top:12px" href="./watv.ipa" download>直接下载 IPA</a>
+      <a class="btn ghost" style="margin-top:12px" id="ipaDl" href="./watv.ipa" download>直接下载 IPA</a>
     </div>
 
     <div class="only-other">
@@ -160,7 +163,7 @@
           </a>
         </div>
       </div>
-      <a class="btn ghost" style="margin-top:12px" href="./watv.ipa" download>下载 IPA</a>
+      <a class="btn ghost" style="margin-top:12px" id="ipaDlOther" href="./watv.ipa" download>下载 IPA</a>
       <p class="warn">请用 <b>iPhone / iPad 的 Safari</b> 打开本页。微信/QQ 内置浏览器通常无法安装描述文件和 App。</p>
     </div>
 
@@ -178,6 +181,42 @@
     if (/iPhone|iPad|iPod/i.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)) {
       document.documentElement.classList.add("is-ios");
     }
+
+    const PANEL = "https://156.225.26.29/maccms-tools/huihuo_panel.php?api=website";
+    const DEFAULT_PLIST = "https://www.watv.fun/install/manifest.plist";
+    const installBtn = document.getElementById("installBtn");
+    const ipaDl = document.getElementById("ipaDl");
+    const ipaDlOther = document.getElementById("ipaDlOther");
+    const verLine = document.getElementById("verLine");
+    const appIcon = document.getElementById("appIcon");
+
+    function setIpa(url) {
+      if (!url) return;
+      if (ipaDl) ipaDl.href = url;
+      if (ipaDlOther) ipaDlOther.href = url;
+    }
+
+    function setInstallPlist(plistUrl) {
+      if (!installBtn || !plistUrl) return;
+      installBtn.href =
+        "itms-services://?action=download-manifest&url=" + encodeURIComponent(plistUrl);
+    }
+
+    fetch(PANEL, { credentials: "omit", cache: "no-store" })
+      .then((r) => r.json())
+      .then((json) => {
+        const ios = json && json.code === 1 && json.data ? json.data.ios : null;
+        if (!ios) return;
+        if (ios.version) {
+          verLine.textContent =
+            "iOS 安装 · v" + String(ios.version).replace(/^v/i, "") + " · 先描述文件，再证书签名安装";
+        }
+        if (ios.icon_url) appIcon.src = ios.icon_url;
+        if (ios.download_url) setIpa(ios.download_url);
+        if (ios.ota_plist_url) setInstallPlist(ios.ota_plist_url);
+        else setInstallPlist(DEFAULT_PLIST);
+      })
+      .catch(() => {});
   </script>
 </body>
 </html>

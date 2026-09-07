@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>哇TV · 安装包管理</title>
+  <link rel="icon" type="image/png" href="../assets/favicon.png" />
+  <style>
+    :root {
+      --brand: #1ecad3;
+      --brand-deep: #109aa2;
+      --ink: #14161a;
+      --muted: #5c6370;
+      --paper: #eef6f7;
+      --line: rgba(20, 22, 26, 0.09);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100svh;
+      font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(ellipse 80% 50% at 50% -10%, rgba(30,202,211,.22), transparent 55%),
+        linear-gradient(180deg, #e8f7f8 0%, var(--paper) 45%, #fff 100%);
+      padding: 28px 16px 48px;
+      -webkit-font-smoothing: antialiased;
+    }
+    .wrap { width: min(920px, 100%); margin-inline: auto; }
+    h1 { font-size: 1.55rem; font-weight: 900; margin-bottom: 6px; }
+    .sub { color: var(--muted); font-size: .92rem; margin-bottom: 22px; line-height: 1.55; }
+    .sub a { color: var(--brand-deep); }
+    .gate, .panel { display: none; }
+    .gate.on, .panel.on { display: block; }
+    .card {
+      background: rgba(255,255,255,.92);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px 18px 20px;
+      margin-bottom: 16px;
+    }
+    .card h2 { font-size: 1.05rem; margin-bottom: 12px; }
+    label {
+      display: block; font-size: .82rem; font-weight: 700;
+      color: var(--muted); margin: 12px 0 6px;
+    }
+    input[type="text"], input[type="number"], input[type="password"], textarea, input[type="file"] {
+      width: 100%; border: 1px solid var(--line); border-radius: 12px;
+      padding: 11px 12px; font: inherit; background: #fff;
+    }
+    textarea { min-height: 110px; resize: vertical; line-height: 1.5; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 720px) { .row { grid-template-columns: 1fr; } }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-height: 48px; padding: 0 18px; border-radius: 14px; border: 0;
+      background: var(--brand); color: #fff; font-weight: 800; cursor: pointer;
+      margin-top: 14px; width: 100%;
+    }
+    .btn:hover { background: var(--brand-deep); }
+    .btn.ghost {
+      background: #fff; color: var(--ink); border: 1px solid var(--line); width: auto;
+    }
+    .tip {
+      font-size: .84rem; color: var(--muted); line-height: 1.6;
+      background: #fff8e8; border-radius: 12px; padding: 12px 14px; margin-bottom: 16px;
+    }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>安装包管理</h1>
+    <p class="sub">
+      自定义上传 Android APK / iOS IPA。提交后写入面板，官网下载与更新日志会自动同步。
+      <a href="../">返回官网</a>
+    </p>
+
+    <div class="gate on" id="gate">
+      <div class="card">
+        <h2>进入管理</h2>
+        <label>面板密钥（与 huihuo_panel.php 的 key 相同）</label>
+        <input type="password" id="panelKey" placeholder="粘贴面板 key" autocomplete="off" />
+        <label>面板地址</label>
+        <input type="text" id="panelUrl" value="https://156.225.26.29/maccms-tools/huihuo_panel.php" />
+        <button class="btn" type="button" id="unlockBtn">进入</button>
+      </div>
+    </div>
+
+    <div class="panel" id="panel">
+      <div class="tip">
+        上传大包前请确认服务器 PHP <code>upload_max_filesize</code> / Nginx <code>client_max_body_size</code> 足够（建议 ≥100M）。
+        iOS 上传 IPA 后会自动生成 OTA plist，安装页可直接用于「证书签名安装」。
+      </div>
+      <div class="actions">
+        <button class="btn ghost" type="button" id="logoutBtn">退出</button>
+        <a class="btn ghost" id="panelLink" href="#" target="_blank" rel="noopener">打开完整面板</a>
+      </div>
+      <div class="grid" style="margin-top:14px">
+        <div class="card">
+          <h2>Android · APK</h2>
+          <form method="post" enctype="multipart/form-data" id="formAndroid">
+            <input type="hidden" name="key" />
+            <input type="hidden" name="action" value="update_save" />
+            <input type="hidden" name="platform" value="android" />
+            <label>应用名称</label>
+            <input type="text" name="app_name" value="哇TV" />
+            <div class="row">
+              <div>
+                <label>版本名</label>
+                <input type="text" name="version" value="1.0.0" required />
+              </div>
+              <div>
+                <label>versionCode</label>
+                <input type="number" name="version_code" value="2" min="1" required />
+              </div>
+            </div>
+            <label>下载地址（可选，上传后自动填）</label>
+            <input type="text" name="download_url" placeholder="https://…/xxx.apk" />
+            <label>上传 APK</label>
+            <input type="file" name="pkg" accept=".apk,application/vnd.android.package-archive" />
+            <label>更新说明（官网日志）</label>
+            <textarea name="changelog" placeholder="本版本更新内容…"></textarea>
+            <button class="btn" type="submit">保存 Android 安装包</button>
+          </form>
+        </div>
+        <div class="card">
+          <h2>iOS · IPA</h2>
+          <form method="post" enctype="multipart/form-data" id="formIos">
+            <input type="hidden" name="key" />
+            <input type="hidden" name="action" value="update_save" />
+            <input type="hidden" name="platform" value="ios" />
+            <label>应用名称</label>
+            <input type="text" name="app_name" value="哇TV" />
+            <div class="row">
+              <div>
+                <label>版本名</label>
+                <input type="text" name="version" value="1.0.0" required />
+              </div>
+              <div>
+                <label>versionCode</label>
+                <input type="number" name="version_code" value="2" min="1" required />
+              </div>
+            </div>
+            <label>签名后 Bundle ID</label>
+            <input type="text" name="bundle_id" value="com.Vl00uI.YLMHWx" />
+            <label>下载地址（可选，上传后自动填）</label>
+            <input type="text" name="download_url" placeholder="https://…/xxx.ipa" />
+            <label>上传 IPA</label>
+            <input type="file" name="pkg" accept=".ipa,application/octet-stream" />
+            <label>更新说明（官网日志）</label>
+            <textarea name="changelog" placeholder="本版本更新内容…"></textarea>
+            <button class="btn" type="submit">保存 iOS 安装包</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    const gate = document.getElementById("gate");
+    const panel = document.getElementById("panel");
+    const keyInput = document.getElementById("panelKey");
+    const urlInput = document.getElementById("panelUrl");
+    const panelLink = document.getElementById("panelLink");
+    const forms = [document.getElementById("formAndroid"), document.getElementById("formIos")];
+
+    function applyKey(key, url) {
+      forms.forEach((f) => {
+        f.action = url;
+        f.querySelector('input[name="key"]').value = key;
+      });
+      panelLink.href = url + "?key=" + encodeURIComponent(key) + "&tab=update";
+    }
+
+    document.getElementById("unlockBtn").addEventListener("click", () => {
+      const key = keyInput.value.trim();
+      const url = urlInput.value.trim().replace(/\/$/, "");
+      if (!key || !url) {
+        alert("请填写面板密钥和地址");
+        return;
+      }
+      sessionStorage.setItem("watv_panel_key", key);
+      sessionStorage.setItem("watv_panel_url", url);
+      applyKey(key, url);
+      gate.classList.remove("on");
+      panel.classList.add("on");
+    });
+
+    document.getElementById("logoutBtn").addEventListener("click", () => {
+      sessionStorage.removeItem("watv_panel_key");
+      sessionStorage.removeItem("watv_panel_url");
+      panel.classList.remove("on");
+      gate.classList.add("on");
+    });
+
+    const savedKey = sessionStorage.getItem("watv_panel_key");
+    const savedUrl = sessionStorage.getItem("watv_panel_url");
+    if (savedKey && savedUrl) {
+      keyInput.value = savedKey;
+      urlInput.value = savedUrl;
+      applyKey(savedKey, savedUrl);
+      gate.classList.remove("on");
+      panel.classList.add("on");
+    }
+  </script>
+</body>
+</html>

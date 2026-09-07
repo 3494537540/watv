@@ -7,11 +7,13 @@ import 'package:http/http.dart' as http;
 
 import '../config/api_config.dart';
 import '../models/movie_models.dart';
+import '../state/cms_auth_controller.dart';
 import '../utils/qq_avatar.dart';
 import '../utils/relative_time.dart';
 import 'huihuo_http.dart';
 import 'huihuo_panel_api.dart';
 import 'local_my_comments_store.dart';
+import 'maccms_user_api.dart';
 
 /// 苹果 CMS V10 `provide/vod` 客户端
 class MacCmsApi {
@@ -1329,7 +1331,7 @@ class MacCmsApi {
   /// @Deprecated 保留兼容；首页已改为类型标签
   Future<List<MovieSection>> fetchHomeSections({
     String tab = '推荐',
-    int limit = 18,
+    int limit = 24,
   }) async {
     final tags = ApiConfig.macCmsGenreTagsFor(tab);
     final parts = <MovieSection>[];
@@ -1833,6 +1835,12 @@ class MacCmsApi {
       if (joined.contains('.mp4')) sc += 28;
       if (joined.contains('https://')) sc += 12;
       else if (joined.contains('http://')) sc += 6;
+      // 近期不稳定的采集 CDN：略降权，仍可选，失败会自动切走
+      if (joined.contains('uvjtih.cn') ||
+          joined.contains('tcav.top') ||
+          name.contains('mtyun')) {
+        sc -= 25;
+      }
       // 解析/套壳/云播源：测速常「假绿」，降权
       if (name.contains('解析') ||
           name.contains('parse') ||
@@ -1866,23 +1874,50 @@ class MacCmsApi {
       if (chunk.isEmpty) continue;
       final i = chunk.indexOf(r'$');
       if (i < 0) {
-        if (chunk.startsWith('http')) {
+        final only = _normalizePlayUrl(chunk);
+        if (only != null) {
           episodes.add(MoviePlayEpisode(
             name: '第${episodes.length + 1}集',
-            url: chunk,
+            url: only,
           ));
         }
         continue;
       }
       final name = chunk.substring(0, i).trim();
-      final epUrl = chunk.substring(i + 1).trim();
-      if (epUrl.isEmpty || !epUrl.startsWith('http')) continue;
+      final epUrl = _normalizePlayUrl(chunk.substring(i + 1).trim());
+      if (epUrl == null) continue;
       episodes.add(MoviePlayEpisode(
         name: name.isEmpty ? '第${episodes.length + 1}集' : name,
         url: epUrl,
       ));
     }
     return episodes;
+  }
+
+  /// 统一播放地址：补协议、接受 //host、纯域名 m3u8/mp4
+  static String? _normalizePlayUrl(String raw) {
+    var u = raw.trim();
+    if (u.isEmpty) return null;
+    // HTML 实体偶发
+    u = u
+        .replaceAll('&amp;', '&')
+        .replaceAll('&#47;', '/')
+        .replaceAll('&quot;', '');
+    if (u.startsWith('//')) u = 'https:$u';
+    if (!(u.startsWith('http://') || u.startsWith('https://'))) {
+      final low = u.toLowerCase();
+      if (low.contains('.m3u8') ||
+          low.contains('.mp4') ||
+          low.contains('.m4a') ||
+          low.startsWith('www.')) {
+        u = 'https://$u';
+      } else {
+        return null;
+      }
+    }
+    final uri = Uri.tryParse(u);
+    if (uri == null || uri.host.isEmpty) return null;
+    return u;
   }
 
   static String _stripHtml(String raw) {
@@ -2455,29 +2490,49 @@ class MacCmsApi {
     return url;
   }
 
-  /// 优先昵称，避免把登录账号/数字 ID 当成展示名
+  /// 优先昵称；绝不回落成「会员/访客」
   static String _commentDisplayName(Map<String, dynamic> m) {
     final candidates = <String>[
       '${m['display_name'] ?? ''}',
       '${m['user_nick_name'] ?? ''}',
       '${m['nick_name'] ?? ''}',
       '${m['nickname'] ?? ''}',
+      '${m['comment_name'] ?? ''}',
+      '${m['user_login'] ?? ''}',
       '${m['user_name'] ?? ''}',
       '${m['name'] ?? ''}',
-      '${m['comment_name'] ?? ''}',
     ];
     String? numericFallback;
     for (final raw in candidates) {
-      final name = raw.trim();
+      var name = raw.trim();
       if (name.isEmpty || name == 'null') continue;
+      name = _decodeHtmlEntities(name);
+      if (CmsUser.isJunkDisplayName(name)) continue;
       if (RegExp(r'^\d+$').hasMatch(name)) {
         numericFallback ??= name;
         continue;
       }
       return name;
     }
+    final uid = '${m['user_id'] ?? m['uid'] ?? m['comment_uid'] ?? ''}'.trim();
     if (numericFallback != null) return '用户$numericFallback';
-    return '访客';
+    if (RegExp(r'^\d+$').hasMatch(uid) && uid != '0') return '用户$uid';
+    // 没有可用名时留空，交给上层用本机身份库补
+    return '';
+  }
+
+  static String _decodeHtmlEntities(String raw) {
+    return raw
+        .replaceAll('&amp;', '&')
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&#39;', "'")
+        .replaceAllMapped(RegExp(r'&#(\d+);'), (m) {
+          final n = int.tryParse(m.group(1) ?? '');
+          if (n == null) return m.group(0)!;
+          return String.fromCharCode(n);
+        });
   }
 
   static int _toInt(dynamic raw, [int fallback = 0]) {
@@ -2503,17 +2558,21 @@ class MacCmsApi {
             m['user_portrait'] ?? m['avatar'] ?? m['portrait'] ?? '',
           ) ??
           QqAvatar.urlFromCandidates([
+            '${m['user_qq'] ?? m['qq'] ?? ''}',
             '${m['user_login'] ?? ''}',
             '${m['user_name'] ?? ''}',
             '${m['comment_name'] ?? ''}',
             name,
             '${m['user_id'] ?? ''}',
-            '${m['user_qq'] ?? m['qq'] ?? ''}',
           ]);
+      final uid = _toInt(m['user_id'] ?? m['uid'] ?? m['comment_uid']);
+      final safeName = name.isNotEmpty
+          ? name
+          : (uid > 0 ? '用户$uid' : '');
       out.add(
         MovieComment(
           id: id.isEmpty ? '${out.length}' : id,
-          userName: name,
+          userName: safeName,
           content: content,
           timeText: '$timeRaw',
           timeMs: timeMs,
@@ -2521,7 +2580,7 @@ class MacCmsApi {
           up: _toInt(m['comment_up'] ?? m['up']),
           down: _toInt(m['comment_down'] ?? m['down']),
           replyCount: _toInt(m['comment_reply'] ?? m['reply']),
-          userId: _toInt(m['user_id'] ?? m['uid'] ?? m['comment_uid']),
+          userId: uid,
           vodId: '${m['comment_rid'] ?? m['vod_id'] ?? m['rid'] ?? ''}'.trim(),
           vodName: '${m['vod_name'] ?? ''}'.trim(),
           vodPic: () {
@@ -2553,11 +2612,14 @@ class MacCmsApi {
     return res.bodyBytes;
   }
 
-  /// 发表评论：仅走官方 saveData，避免多地址轮询卡死
+  /// 发表评论：强制带齐会员 Cookie + comment_name，写入真实昵称
   Future<void> postComment({
     required String vodId,
     required String content,
     required String verify,
+    String commentName = '',
+    int userId = 0,
+    String userLogin = '',
   }) async {
     final id = vodId.trim();
     final text = content.trim();
@@ -2565,6 +2627,31 @@ class MacCmsApi {
     if (id.isEmpty) throw MacCmsException('无效影片');
     if (text.isEmpty) throw MacCmsException('请输入评论内容');
     if (code.isEmpty) throw MacCmsException('请输入验证码');
+
+    var safeName = commentName.trim();
+    if (safeName.isEmpty || CmsUser.isJunkDisplayName(safeName)) {
+      final login = userLogin.trim();
+      safeName = (login.isNotEmpty && !CmsUser.isJunkDisplayName(login))
+          ? login
+          : (userId > 0 ? '用户$userId' : '');
+    }
+    if (safeName.isEmpty) {
+      throw MacCmsException('请先登录后再评论');
+    }
+
+    // 验证码会话 + 会员 Cookie 合并（user_id 决定库里是否挂真实用户）
+    final authCookie = CmsAuthController.instance.api.sessionCookie;
+    if (authCookie != null && authCookie.isNotEmpty) {
+      adoptCmsSessionCookie(authCookie);
+    }
+    if (userId > 0) {
+      adoptCmsSessionCookie('user_id=$userId');
+    }
+    if (userLogin.trim().isNotEmpty) {
+      adoptCmsSessionCookie(
+        'user_name=${Uri.encodeComponent(userLogin.trim())}',
+      );
+    }
 
     late http.Response res;
     try {
@@ -2579,6 +2666,7 @@ class MacCmsApi {
             body: {
               'comment_pid': '0',
               'comment_content': text,
+              'comment_name': safeName,
               'verify': code,
               'comment_mid': '1',
               'comment_rid': id,
@@ -2818,7 +2906,18 @@ class MacCmsApi {
             '',
       ).trim();
       final name = () {
-        if (nameRaw.isEmpty) return '访客';
+        if (nameRaw.isEmpty || CmsUser.isJunkDisplayName(nameRaw)) {
+          final uid = int.tryParse(
+                _matchGroup(block, [
+                      r'''data-user[_-]?id=["'](\d+)["']''',
+                      r'''user[_-]?id=["'](\d+)["']''',
+                      r'''/user/index/id/(\d+)''',
+                    ]) ??
+                    '0',
+              ) ??
+              0;
+          return uid > 0 ? '用户$uid' : '用户';
+        }
         if (RegExp(r'^\d+$').hasMatch(nameRaw)) return '用户$nameRaw';
         return nameRaw;
       }();
@@ -2970,12 +3069,21 @@ class MacCmsApi {
           '';
       name = _stripHtml(name).trim();
       if (name.isEmpty ||
+          CmsUser.isJunkDisplayName(name) ||
           name.contains('验证') ||
           name == '发表' ||
           name == '发布' ||
           name == '赞成' ||
           name == '反对') {
-        name = '访客';
+        final uid = int.tryParse(
+              _matchGroup(block, [
+                    r'''data-user[_-]?id=["'](\d+)["']''',
+                    r'''/user/index/id/(\d+)''',
+                  ]) ??
+                  '0',
+            ) ??
+            0;
+        name = uid > 0 ? '用户$uid' : '用户';
       }
 
       final time = _matchGroup(

@@ -127,7 +127,7 @@ class _SportsPageState extends State<SportsPage> {
             _api.fetchByType(
               typeId: t.typeId,
               page: 1,
-              limit: 12,
+              limit: 16,
               applyBannerExclude: false,
             ),
         ]);

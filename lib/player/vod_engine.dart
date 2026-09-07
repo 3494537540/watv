@@ -146,32 +146,28 @@ class VideoPlayerVodEngine extends VodEngine {
       duration: v.duration,
       size: v.size,
       buffered: [
-        for (final r in v.buffered) VodBufferedRange(r.start, r.end),
+        for (final r in v.buffered)
+          VodBufferedRange(r.start, r.end),
       ],
     );
-    final errEdge = notifyOnError && next.hasError && !_value.hasError;
+    final changed = next.isInitialized != _value.isInitialized ||
+        next.isPlaying != _value.isPlaying ||
+        next.isBuffering != _value.isBuffering ||
+        next.hasError != _value.hasError ||
+        next.position != _value.position ||
+        next.duration != _value.duration ||
+        next.size != _value.size;
     _value = next;
-    if (errEdge) notifyListeners();
+    if (changed || (notifyOnError && next.hasError)) {
+      notifyListeners();
+    }
   }
 
   void _ensurePoll() {
     _poll?.cancel();
-    // 最多 5Hz 刷新进度缓存，禁止每次 get value 都 new 对象（会 OOM/卡顿）
-    _poll = Timer.periodic(const Duration(milliseconds: 200), (_) {
-      if (_c == null) return;
+    _poll = Timer.periodic(const Duration(milliseconds: 250), (_) {
       _refreshValue();
     });
-  }
-
-  @override
-  VideoPlayerController? get rawVideoPlayer => _c;
-
-  @override
-  int? get nativePlayerId {
-    final c = _c;
-    if (c == null || !c.value.isInitialized) return null;
-    // ignore: invalid_use_of_visible_for_testing_member
-    return c.playerId;
   }
 
   @override
@@ -183,28 +179,35 @@ class VideoPlayerVodEngine extends VodEngine {
   }) async {
     await _disposeInner();
     final opts = VideoPlayerOptions(
-      mixWithOthers: false,
-      // 对齐 git：90s
-      backBufferDurationMs: 90000,
-      allowBackgroundPlayback: true,
+      mixWithOthers: true,
+      allowBackgroundPlayback: false,
     );
-    final viewType = (preferPlatformView ||
-            (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS))
+    // 必须尊重 preferPlatformView：iOS 上 PlatformView 盖 Flutter 弹幕层会整屏发灰白。
+    // 弹幕开启时应传 false → TextureView。
+    final viewType = preferPlatformView
         ? VideoViewType.platformView
         : VideoViewType.textureView;
     final lower = url.toLowerCase();
     final isHls = lower.contains('.m3u8') || lower.contains('m3u8?');
-    final VideoPlayerController c;
-    if (VodPlayback.isLocalMediaPath(url)) {
+    final loopback = VodPlayback.isLoopbackCacheUrl(url);
+    final localFile = VodPlayback.isLocalMediaPath(url) && !loopback;
+
+    late final VideoPlayerController c;
+    if (loopback) {
+      // iOS 缓存：本机 HTTP，空 headers，纯离线
+      c = VideoPlayerController.networkUrl(
+        Uri.parse(url),
+        formatHint: isHls ? VideoFormat.hls : null,
+        videoPlayerOptions: opts,
+        viewType: viewType,
+      );
+    } else if (localFile) {
       var path = url;
       if (path.startsWith('file:')) {
         path = Uri.parse(path).toFilePath();
       }
-      // Android：file() 无 formatHint，本地 m3u8 需 networkUrl+hls
-      // iOS：file() + prepareLocalMediaPath 把分片改成绝对 file://
-      if (isHls &&
-          !kIsWeb &&
-          defaultTargetPlatform == TargetPlatform.android) {
+      if (isHls) {
+        // Android 本地 m3u8
         c = VideoPlayerController.networkUrl(
           Uri.file(path),
           formatHint: VideoFormat.hls,
@@ -232,7 +235,22 @@ class VideoPlayerVodEngine extends VodEngine {
       if (!c.value.hasError) return;
       _refreshValue(notifyOnError: true);
     });
-    await c.initialize();
+    final timeoutSec = (loopback || localFile) ? 20 : 25;
+    await c.initialize().timeout(Duration(seconds: timeoutSec));
+    // 本地 HLS：等时长就绪；直播清单会一直为 0
+    if (loopback || localFile) {
+      for (var i = 0; i < 20; i++) {
+        _refreshValue();
+        final ms = _c?.value.duration.inMilliseconds ?? 0;
+        if (ms > 0) break;
+        if (_c?.value.hasError ?? false) break;
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+      final durMs = _c?.value.duration.inMilliseconds ?? 0;
+      if (durMs <= 0 && !(_c?.value.hasError ?? false)) {
+        throw StateError('缓存媒体时长无效，请重新下载该集');
+      }
+    }
     _refreshValue();
     _ensurePoll();
     notifyListeners();
@@ -266,6 +284,15 @@ class VideoPlayerVodEngine extends VodEngine {
     }
     return VideoPlayer(c, key: key);
   }
+
+  @override
+  int? get nativePlayerId {
+    // video_player 未稳定暴露；PiP 走 controller 扩展
+    return null;
+  }
+
+  @override
+  VideoPlayerController? get rawVideoPlayer => _c;
 
   Future<void> _disposeInner() async {
     _poll?.cancel();

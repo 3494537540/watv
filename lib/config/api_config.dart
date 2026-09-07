@@ -13,7 +13,7 @@ class ApiConfig {
   static const String _envSite = String.fromEnvironment('SITE_ROOT');
 
   /// 线上 MacCMS 根（APK / IPA / 正式 H5）—— 启动后会被微云分享解析结果覆盖
-  static const String productionMacCms = 'https://154.12.29.28';
+  static const String productionMacCms = 'https://156.225.26.29';
 
   /// QQ/微云分享页解析出的 CMS（低于设置页自定义，高于编译默认）
   static String? _shareResolvedMacCms;
