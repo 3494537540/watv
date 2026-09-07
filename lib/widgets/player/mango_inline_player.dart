@@ -1672,12 +1672,17 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                       key: _videoShotKey,
                       child: _StableVideoSurface(
                         controller: c,
-                        aspect: _playerSettings.aspect,
+                        // 缓存离线：固定「适应」留边（与上图一致），不被裁剪铺满吃掉
+                        aspect: _isLocalMedia
+                            ? PlayerAspectMode.fit
+                            : _playerSettings.aspect,
                         immersiveTop: widget.immersiveTop,
                         mirrorX: _playerSettings.mirrorX,
                         mirrorY: _playerSettings.mirrorY,
                         enhanceLevel: _playerSettings.enhanceLevel,
                         allowColorMatrix: !_openedWithPlatformView,
+                        letterboxLikeCache: _isLocalMedia ||
+                            _playerSettings.aspect == PlayerAspectMode.fit,
                       ),
                     ),
                   )
@@ -1803,9 +1808,12 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                             _danmakuPrefs.enabled &&
                             widget.vodId?.trim().isNotEmpty == true,
                         prefs: _danmakuPrefs,
-                        fitCover: widget.immersiveTop ||
-                            _playerSettings.aspect == PlayerAspectMode.cover ||
-                            _playerSettings.aspect == PlayerAspectMode.fill,
+                        fitCover: !_isLocalMedia &&
+                            (widget.immersiveTop ||
+                                _playerSettings.aspect ==
+                                    PlayerAspectMode.cover ||
+                                _playerSettings.aspect ==
+                                    PlayerAspectMode.fill),
                       ),
                     ),
                   ),
@@ -1917,7 +1925,9 @@ class MangoInlinePlayerState extends State<MangoInlinePlayer> {
                                   MediaQuery.sizeOf(context).height)
                           ? (anchor) => unawaited(_pickQuality(anchor))
                           : null,
-                      aspectLabel: _playerSettings.aspect.label,
+                      aspectLabel: _isLocalMedia
+                          ? PlayerAspectMode.fit.label
+                          : _playerSettings.aspect.label,
                       speedLabel: VodPlayback.rateLabel(_playbackRate),
                       qualityLabel: _currentVariant?.shortLabel ??
                           _qualityPrefer.label,
@@ -2235,6 +2245,7 @@ class _StableVideoSurface extends StatelessWidget {
     required this.mirrorY,
     this.enhanceLevel = PlayerEnhanceLevel.off,
     this.allowColorMatrix = true,
+    this.letterboxLikeCache = false,
   });
 
   final VodEngine controller;
@@ -2244,17 +2255,21 @@ class _StableVideoSurface extends StatelessWidget {
   final bool mirrorY;
   final PlayerEnhanceLevel enhanceLevel;
   final bool allowColorMatrix;
+  /// 缓存播放器同款：contain 留边，横屏左右黑边 / 竖屏上下黑边
+  final bool letterboxLikeCache;
 
   @override
   Widget build(BuildContext context) {
     if (!controller.value.isInitialized) return const SizedBox.shrink();
-    final effectiveAspect = aspect;
+    // 缓存同款留边：强制 fit/contain，不被 cover 放大吃黑边
+    final effectiveAspect =
+        letterboxLikeCache ? PlayerAspectMode.fit : aspect;
     final rawRatio =
         controller.value.aspectRatio == 0 ? 16 / 9 : controller.value.aspectRatio;
     final forcedRatio = switch (effectiveAspect) {
       PlayerAspectMode.ratio16x9 => 16 / 9,
       PlayerAspectMode.ratio4x3 => 4 / 3,
-      _ => rawRatio,
+      _ => rawRatio <= 0 ? 16 / 9 : rawRatio,
     };
     final boxFit = switch (effectiveAspect) {
       PlayerAspectMode.cover => BoxFit.cover,
@@ -2307,7 +2322,7 @@ class _StableVideoSurface extends StatelessWidget {
           final videoRatio = forcedRatio <= 0 ? (16 / 9) : forcedRatio;
           final screenRatio = maxW / maxH;
 
-          // 「适应」基准尺寸（contain）
+          // contain：横屏左右黑边 / 竖屏上下黑边（上图缓存播放器同款）
           late final double baseW;
           late final double baseH;
           if (screenRatio > videoRatio) {
@@ -2335,8 +2350,6 @@ class _StableVideoSurface extends StatelessWidget {
                 ),
               );
             case PlayerAspectMode.cover:
-              // 先按 contain 排好，再 scale 放大到真正铺满（吃掉上下/左右黑边）
-              // VideoPlayer 自身按 contain 画纹理，不能只靠外层 SizedBox。
               final scale = math.max(maxW / baseW, maxH / baseH) * 1.03;
               final alignY =
                   screenRatio < videoRatio * 0.98 ? 0.18 : 0.10;
@@ -2360,25 +2373,13 @@ class _StableVideoSurface extends StatelessWidget {
             case PlayerAspectMode.fit:
             case PlayerAspectMode.ratio16x9:
             case PlayerAspectMode.ratio4x3:
-              if (!immersiveTop &&
-                  effectiveAspect == PlayerAspectMode.fit) {
-                return Center(
-                  child: AspectRatio(
-                    aspectRatio: videoRatio,
+              return ColoredBox(
+                color: Colors.black,
+                child: Center(
+                  child: SizedBox(
+                    width: baseW,
+                    height: baseH,
                     child: player,
-                  ),
-                );
-              }
-              return ClipRect(
-                child: SizedBox(
-                  width: maxW,
-                  height: maxH,
-                  child: Center(
-                    child: SizedBox(
-                      width: baseW,
-                      height: baseH,
-                      child: player,
-                    ),
                   ),
                 ),
               );
